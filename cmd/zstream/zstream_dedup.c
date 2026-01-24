@@ -38,7 +38,7 @@
 #include "zfs_fletcher.h"
 #include "zstream.h"
 
-#define	DEFAULT_DEDUP_PHYSMEM_PERCENT		20
+#define	DEFAULT_DEDUP_PHYSMEM_PERCENT	20
 #define	SMALLEST_POSSIBLE_DEDUP_MB		128
 #define	DISK_CACHE_PHYSMEM_PERCENT		5
 #define	STATUS_UPDATE_INTERVAL			(5 * 1000000000ULL)
@@ -56,39 +56,50 @@ typedef struct disk_entry {
 	uint64_t		compressed_size;
 } disk_entry_t;
 
+typedef struct write_block_header { /* TODO: Check sizes and aligments and update pad */
+	uint64_t 		drr_toguid;
+	uint64_t 		drr_object;
+	uint64_t 		drr_offset;
+	dmu_object_type_t drr_type; 
+	uint64_t 		drr_logical_size;
+	uint8_t 		drr_checksumtype;
+	uint8_t 		drr_compressiontype;
+	uint8_t 		drr_flags;
+	uint64_t 		drr_compressed_size;
+	uint8_t 		drr_pad2[5];
+	ddt_key_t 		drr_key;
+} write_block_header_t;
+
 typedef struct dedup_entry {
-	struct dedup_entry	*next;
-	uint8_t			hash[BLAKE3_OUT_LEN];
-	uint64_t		guid;
-	uint64_t		object;
-	uint64_t		offset;
-	uint64_t		length;
-	uint8_t			checksumtype;
-	uint8_t			flags;
-	uint8_t			compressiontype;
-	uint64_t		compressed_size;
+	struct dedup_entry		*next;
+	write_block_header_t	block_data
+	uint8_t					hash[BLAKE3_OUT_LEN];
+	uint64_t				payload_length;
 } dedup_entry_t;
 
 typedef struct dedup_table {
-	dedup_entry_t		**hash_array;
-	umem_cache_t		*entry_cache;
+	dedup_entry_t	**hash_array;
+	umem_cache_t	*entry_cache;
 	uint64_t		num_entries;
-	int			num_hash_bits;
+	int				num_hash_bits;
 	uint64_t		max_memory;
+	cache_dir		*cache_dir;
+/*
 	boolean_t		using_disk;
-	int			disk_fd;
+	int				disk_fd;
 	char			*disk_path;
 	uint64_t		disk_offset;
 	boolean_t		disk_only;
+*/
 } dedup_table_t;
 
 typedef struct dedup_stats {
-	uint64_t		total_records;
-	uint64_t		write_records;
-	uint64_t		dedup_records;
-	uint64_t		bytes_read;
-	uint64_t		bytes_saved;
-	hrtime_t		last_status_time;
+	uint64_t	total_records;
+	uint64_t	write_records;
+	uint64_t	dedup_records;
+	uint64_t	bytes_read;
+	uint64_t	bytes_saved;
+	hrtime_t	last_status_time;
 } dedup_stats_t;
 
 /*
@@ -116,18 +127,20 @@ blake3_equal(const uint8_t *hash1, const uint8_t *hash2)
  */
 static void
 dedup_table_init(dedup_table_t *ddt, uint64_t max_memory,
-    const char *cache_file)
+    const char *cache_dir)
 {
 	uint64_t num_buckets;
 
 	memset(ddt, 0, sizeof (*ddt));
 	ddt->max_memory = max_memory;
+/*
 	ddt->using_disk = B_FALSE;
 	ddt->disk_only = B_FALSE;
 	ddt->disk_fd = -1;
+*/
 
 	if (cache_file != NULL) {
-		ddt->disk_path = strdup(cache_file);
+		ddt->cache_dir = strdup(cache_file);
 	} else {
 		ddt->disk_path = strdup("/tmp/zstream_dedup_cache.XXXXXX");
 	}
@@ -153,6 +166,7 @@ dedup_table_init(dedup_table_t *ddt, uint64_t max_memory,
  * Returns B_TRUE if found, B_FALSE otherwise.
  * If found, populates the provided result structure.
  */
+/*
 static boolean_t
 disk_cache_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash,
     dedup_entry_t *result)
@@ -165,18 +179,12 @@ disk_cache_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash,
 	if (ddt->disk_fd < 0)
 		return (B_FALSE);
 
-	/* Use first 64 bits as the hash key */
 	memcpy(&hash_key, blake3_hash, sizeof (hash_key));
 
-	/*
-	 * In a full implementation, we would have an index structure.
-	 * For now, we do a simple linear search through the file.
-	 */
 	offset = 0;
 	while ((bytes_read = pread(ddt->disk_fd, &disk_entry,
 	    sizeof (disk_entry), offset)) == sizeof (disk_entry)) {
 		if (blake3_equal(disk_entry.hash, blake3_hash)) {
-			/* Found it, convert to in-memory format */
 			memcpy(result->hash, disk_entry.hash, BLAKE3_OUT_LEN);
 			result->guid = disk_entry.guid;
 			result->object = disk_entry.object;
@@ -194,6 +202,7 @@ disk_cache_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash,
 
 	return (B_FALSE);
 }
+*/
 
 /*
  * Look up an entry in the deduplication table by Blake3 hash.
@@ -206,12 +215,14 @@ dedup_table_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash)
 	dedup_entry_t *entry;
 	static dedup_entry_t disk_result;
 
+	/*
 	if (ddt->disk_only) {
 		if (disk_cache_lookup(ddt, blake3_hash, &disk_result)) {
 			return (&disk_result);
 		}
 		return (NULL);
 	}
+	*/
 
 	hashcode = hash_blake3_to_64bit(blake3_hash, ddt->num_hash_bits);
 
@@ -223,11 +234,13 @@ dedup_table_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash)
 	}
 
 	/* If using disk cache, check there too */
+	/*
 	if (ddt->using_disk) {
 		if (disk_cache_lookup(ddt, blake3_hash, &disk_result)) {
 			return (&disk_result);
 		}
 	}
+	*/
 
 	return (NULL);
 }
@@ -235,6 +248,7 @@ dedup_table_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash)
 /*
  * Write an entry to the disk cache.
  */
+/*
 static void
 disk_cache_insert(dedup_table_t *ddt, const uint8_t *blake3_hash,
     uint64_t guid, uint64_t object, uint64_t offset, uint64_t length,
@@ -268,19 +282,35 @@ disk_cache_insert(dedup_table_t *ddt, const uint8_t *blake3_hash,
 
 	ddt->disk_offset += sizeof (disk_entry);
 }
+*/
+
+static void
+drr_write_to_write_block_header(const drr_write *drrw, 
+	write_block_header_t *wb)
+{
+	wb->drr_toguid = drrw->drr_toguid;
+	wb->drr_object = drrw->drr_object;
+	wb->drr_offset = drrw->drr_offset;
+	wb->drr_type = drrw->drr_type;
+	wb->drr_logical_size = drrw->drr_logical_size;
+	wb->drr_checksumtype = drrw->drr_checksumtype;
+	wb->drr_compressiontype = drrw->drr_compressiontype;
+	wb->drr_flags = drrw->drr_flags;
+	wb->drr_compressed_size = drrw->ddr_compressed_size;
+	wb->ddt_key = drrw->ddt_key;
+}
 
 /*
  * Insert an entry into the deduplication table.
  */
 static void
 dedup_table_insert(dedup_table_t *ddt, const uint8_t *blake3_hash,
-    uint64_t guid, uint64_t object, uint64_t offset, uint64_t length,
-    uint8_t checksumtype, uint8_t flags, uint8_t compressiontype,
-    uint64_t compressed_size)
+	ddr_write *drrw, uint64_t payload_length)
 {
 	uint64_t hashcode;
 	dedup_entry_t *entry;
 
+	/*
 	if (ddt->disk_only) {
 		disk_cache_insert(ddt, blake3_hash, guid, object, offset,
 		    length, checksumtype, flags, compressiontype,
@@ -288,34 +318,31 @@ dedup_table_insert(dedup_table_t *ddt, const uint8_t *blake3_hash,
 		ddt->num_entries++;
 		return;
 	}
+	*/
 
 	hashcode = hash_blake3_to_64bit(blake3_hash, ddt->num_hash_bits);
 
 	entry = umem_cache_alloc(ddt->entry_cache, UMEM_NOFAIL);
 	memcpy(entry->hash, blake3_hash, BLAKE3_OUT_LEN);
-	entry->guid = guid;
-	entry->object = object;
-	entry->offset = offset;
-	entry->length = length;
-	entry->checksumtype = checksumtype;
-	entry->flags = flags;
-	entry->compressiontype = compressiontype;
-	entry->compressed_size = compressed_size;
-	entry->next = ddt->hash_array[hashcode];
+	entry->payload_length = payload_length;
+	drr_write_to_write_block_header(drrw, &entry->block_data);
 	ddt->hash_array[hashcode] = entry;
 	ddt->num_entries++;
 
 	/* If using disk cache, also write to disk */
+	/*
 	if (ddt->using_disk) {
 		disk_cache_insert(ddt, blake3_hash, guid, object, offset,
 		    length, checksumtype, flags, compressiontype,
 		    compressed_size);
 	}
+	*/
 }
 
 /*
  * Check if we should extend the cache to disk.
  */
+/*
 static boolean_t
 should_extend_to_disk(dedup_table_t *ddt)
 {
@@ -327,10 +354,12 @@ should_extend_to_disk(dedup_table_t *ddt)
 	current_memory = ddt->num_entries * sizeof (dedup_entry_t);
 	return (current_memory >= ddt->max_memory);
 }
+*/
 
 /*
  * Check if we should convert to disk-only cache.
  */
+/*
 static boolean_t
 should_convert_to_disk_only(dedup_table_t *ddt)
 {
@@ -351,17 +380,18 @@ should_convert_to_disk_only(dedup_table_t *ddt)
 	return (current_memory >= disk_threshold);
 #endif
 }
+*/
 
 /*
  * Extend the cache to disk.
  */
+/*
 static void
 extend_to_disk(dedup_table_t *ddt)
 {
 	if (ddt->using_disk)
 		return;
 
-	/* Create the cache file */
 	if (strstr(ddt->disk_path, "XXXXXX") != NULL) {
 		ddt->disk_fd = mkstemp(ddt->disk_path);
 	} else {
@@ -380,10 +410,12 @@ extend_to_disk(dedup_table_t *ddt)
 
 	fprintf(stderr, "Extending block cache to disk...\n");
 }
+*/
 
 /*
  * Convert to disk-only cache.
  */
+/*
 static void
 convert_to_disk_only(dedup_table_t *ddt)
 {
@@ -395,11 +427,12 @@ convert_to_disk_only(dedup_table_t *ddt)
 		return;
 
 	fprintf(stderr, "Converting to disk-only cache...\n");
-
+*/
 	/*
 	 * All entries should already be in the disk cache if we're using disk.
 	 * We just need to free the in-memory structures.
 	 */
+/*
 	num_buckets = 1ULL << ddt->num_hash_bits;
 	for (i = 0; i < num_buckets; i++) {
 		entry = ddt->hash_array[i];
@@ -413,6 +446,7 @@ convert_to_disk_only(dedup_table_t *ddt)
 
 	ddt->disk_only = B_TRUE;
 }
+*/
 
 /*
  * Print status update to stderr.
@@ -453,7 +487,7 @@ print_status(dedup_stats_t *stats, boolean_t force)
  * Write a record to the output stream.
  */
 static int
-write_record(dmu_replay_record_t *drr, void *payload, int payload_len,
+write_record(dmu_replay_record_t *drr, void *payload, uint32_t payload_length,
     zio_cksum_t *zc, int outfd)
 {
 	assert(offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum)
@@ -461,93 +495,113 @@ write_record(dmu_replay_record_t *drr, void *payload, int payload_len,
 	fletcher_4_incremental_native(drr,
 	    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), zc);
 	if (drr->drr_type != DRR_BEGIN) {
-		assert(ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.
-		    drr_checksum.drr_checksum));
+		assert(ZIO_CHECKSUM_IS_ZERO(
+			&drr->drr_u.drr_checksum.drr_checksum));
 		drr->drr_u.drr_checksum.drr_checksum = *zc;
 	}
 	fletcher_4_incremental_native(&drr->drr_u.drr_checksum.drr_checksum,
 	    sizeof (zio_cksum_t), zc);
 	if (write(outfd, drr, sizeof (*drr)) == -1)
 		return (errno);
-	if (payload_len != 0) {
+	if (payload_length != 0) {
 		fletcher_4_incremental_native(payload, payload_len, zc);
-		if (write(outfd, payload, payload_len) == -1)
+		if (write(outfd, payload, payload_length) == -1)
 			return (errno);
 	}
 	return (0);
+}
+
+static boolean_t
+writes_compatible(const drr_write *drrw, const write_block_header_t *wbh) {
+	return (
+		drrw->drr_type == wbh->drr_type &&
+		drrw->drr_compressiontype == wbh->drr_compressiontype &&
+		drrw->drr_checksumtype == wbh->drr_compressiontype &&
+		drrw->drr_flags = wbh->drr_flags
+	);
+}
+
+static void
+assemble_write_byref(dmu_replay_record_t *byref_drr, drr_write *write_drr,
+	write_block_header_t *wbh)
+{
+	memset(byref_drr, 0, sizeof (*byref_drr));
+
+	byref_drr.drr_type = DRR_WRITE_BYREF;
+	byref_drr.drr_payloadlen = 0;
+
+	drr_write_byref *drrwbr = &byref_drr->drr_u.drr_write_byref;
+
+	drrwbr->drr_object = drrw->drr_object;
+	drrwbr->drr_offset = drrw->drr_offset;
+	drrwbr->drr_length = drrw->drr_logical_size; /* TODO: Correct? */
+	drrwbr->drr_toguid = drrw->drr_toguid;
+	drrwbr->drr_checksumtype = drrw->drr_checksumtype;
+	drrwbr->drr_flags = drrw->drr_flags;
+	drrwbr->drr_key = drrw->drr_key;
+
+	drrwbr->drr_refguid = wbh->drr_toguid;
+	drrwbr->drr_refobject = wbh->drr_object;
+	drrwbr->drr_refoffset = wbh->drr_offset;
 }
 
 /*
  * Process a DDR_WRITE record and possibly convert it to DDR_WRITE_BYREF.
  */
 static int
-process_write_record(dmu_replay_record_t *drr, void *payload,
+process_write_record(const dmu_replay_record_t *drr, const void *payload,
     dedup_table_t *ddt, dedup_stats_t *stats, zio_cksum_t *stream_cksum,
-    int outfd)
+    const int outfd)
 {
-	struct drr_write *drrw = &drr->drr_u.drr_write;
-	uint64_t payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
+	const drr_write *drrw = &drr->drr_u.drr_write;
+	uint64_t payload_length = DRR_WRITE_PAYLOAD_SIZE(drrw);
 	uint8_t blake3_hash[BLAKE3_OUT_LEN];
 	BLAKE3_CTX blake3_ctx;
 	dedup_entry_t *existing;
-	int ret;
 
 	stats->write_records++;
-	stats->bytes_read += payload_size;
+	stats->bytes_read += payload_length;
 
 	/* Compute Blake3 hash of the payload */
 	Blake3_Init(&blake3_ctx);
-	Blake3_Update(&blake3_ctx, payload, payload_size);
+	Blake3_Update(&blake3_ctx, payload, payload_length);
 	Blake3_Final(&blake3_ctx, blake3_hash);
 
 	/* Check if we've seen this block before */
 	existing = dedup_table_lookup(ddt, blake3_hash);
 
 	if (existing != NULL) {
+		write_block_header_t *wbh = &existing->block_data;
+
+		if (!writes_compatible(drrw, wbh)) {
+			return write_record(drr, payload, payload_length, 
+				stream_cksum, outfd);
+		}
+
 		/* Convert to DDR_WRITE_BYREF */
 		dmu_replay_record_t byref_drr;
 		struct drr_write_byref *drrwbr;
 
-		memset(&byref_drr, 0, sizeof (byref_drr));
-		byref_drr.drr_type = DRR_WRITE_BYREF;
-		byref_drr.drr_payloadlen = 0;
-
-		drrwbr = &byref_drr.drr_u.drr_write_byref;
-		drrwbr->drr_object = drrw->drr_object;
-		drrwbr->drr_offset = drrw->drr_offset;
-		drrwbr->drr_length = drrw->drr_logical_size;
-		drrwbr->drr_toguid = drrw->drr_toguid;
-		drrwbr->drr_refguid = existing->guid;
-		drrwbr->drr_refobject = existing->object;
-		drrwbr->drr_refoffset = existing->offset;
-		drrwbr->drr_checksumtype = existing->checksumtype;
-		drrwbr->drr_flags = existing->flags;
-		memcpy(&drrwbr->drr_key, &drrw->drr_key, sizeof (ddt_key_t));
+		assemble_write_byref(&byref_drr, drrw, wbh);
 
 		stats->dedup_records++;
-		stats->bytes_saved += payload_size;
+		stats->bytes_saved += payload_length;
 
-		ret = write_record(&byref_drr, NULL, 0, stream_cksum, outfd);
+		return write_record(&byref_drr, NULL, 0, stream_cksum, outfd);
 	} else {
 		/* First occurrence, insert into table and write as-is */
-		dedup_table_insert(ddt, blake3_hash, drrw->drr_toguid,
-		    drrw->drr_object, drrw->drr_offset,
-		    drrw->drr_logical_size, drrw->drr_checksumtype,
-		    drrw->drr_flags, drrw->drr_compressiontype,
-		    drrw->drr_compressed_size);
+		dedup_table_insert(ddt, blake3_hash, drrw);
 
-		/* Check if we need to extend to disk or convert to disk-only */
+		/* Check if we need to extend to disk or convert to disk-only 
 		if (should_extend_to_disk(ddt)) {
 			extend_to_disk(ddt);
 		} else if (should_convert_to_disk_only(ddt)) {
 			convert_to_disk_only(ddt);
 		}
+		*/
 
-		ret = write_record(drr, payload, payload_size,
-		    stream_cksum, outfd);
+		return write_record(drr, payload, payload_size, stream_cksum, outfd);
 	}
-
-	return (ret);
 }
 
 /*
@@ -673,7 +727,7 @@ zfs_dedup_stream(FILE *input, int outfd, dedup_table_t *ddt, boolean_t verbose)
 			payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
 			(void) sfread(buf, payload_size, input);
 
-			if (process_write_record(drr, buf, ddt, &stats,
+			if (process_write_record(&drr->drr_u.drr_write, buf, ddt, &stats,
 			    &stream_cksum, outfd) != 0)
 				goto error;
 
@@ -790,7 +844,7 @@ zstream_do_dedup(int argc, char *argv[])
 	boolean_t verbose = B_FALSE;
 	int mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
 	char *cache_file = NULL;
-	FILE *input = stdin;
+	int in_fd = 0;
 	int c;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
@@ -837,11 +891,11 @@ zstream_do_dedup(int argc, char *argv[])
 	/* If a filename is provided, open it; otherwise use stdin */
 	if (argc == 1) {
 		const char *filename = argv[0];
-		input = fopen(filename, "r");
-		if (input == NULL) {
+		in_fd = open(filename, "r");
+		if (input == -1) {
 			(void) fprintf(stderr,
 			    "Error while opening file '%s': %s\n",
-			    filename, strerror(errno));
+			    filename, perror(errno));
 			return (1);
 		}
 	}
