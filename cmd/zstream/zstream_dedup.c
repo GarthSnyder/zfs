@@ -43,38 +43,26 @@
 #define	DISK_CACHE_PHYSMEM_PERCENT		5
 #define	STATUS_UPDATE_INTERVAL			(5 * 1000000000ULL)
 
-typedef struct disk_entry {
-	uint8_t			hash[BLAKE3_OUT_LEN];
-	uint64_t		guid;
-	uint64_t		object;
-	uint64_t		offset;
-	uint64_t		length;
-	uint8_t			checksumtype;
-	uint8_t			flags;
-	uint8_t			compressiontype;
-	uint8_t			pad;
-	uint64_t		compressed_size;
-} disk_entry_t;
-
-typedef struct write_block_header { /* TODO: Check sizes and aligments and update pad */
-	uint64_t 		drr_toguid;
-	uint64_t 		drr_object;
-	uint64_t 		drr_offset;
-	dmu_object_type_t drr_type; 
-	uint64_t 		drr_logical_size;
-	uint8_t 		drr_checksumtype;
-	uint8_t 		drr_compressiontype;
-	uint8_t 		drr_flags;
-	uint64_t 		drr_compressed_size;
-	uint8_t 		drr_pad2[5];
-	ddt_key_t 		drr_key;
-} write_block_header_t;
+typedef struct drr_write_subset { /* TODO: Check sizes and aligments and update pad */
+	uint64_t 	drr_object;
+	uint64_t 	drr_offset;
+	uint64_t 	drr_toguid;
+	uint64_t 	drr_logical_size;
+	uint8_t 	drr_compressiontype;
+	uint64_t 	drr_compressed_size;
+	uint8_t 	drr_checksumtype;
+	uint8_t 	drr_flags;
+	ddt_key_t	drr_key;
+	uint8_t 	drr_salt[ZIO_DATA_SALT_LEN];
+	uint8_t 	drr_iv[ZIO_DATA_IV_LEN];
+	uint8_t 	drr_mac[ZIO_DATA_MAC_LEN];
+} drr_write_subset_t;
 
 typedef struct dedup_entry {
-	struct dedup_entry		*next;
-	write_block_header_t	block_data
-	uint8_t					hash[BLAKE3_OUT_LEN];
-	uint64_t				payload_length;
+	struct dedup_entry	*next;
+	drr_write_subset_t	block_data
+	uint8_t				hash[BLAKE3_OUT_LEN];
+	uint64_t			payload_length;
 } dedup_entry_t;
 
 typedef struct dedup_table {
@@ -84,13 +72,6 @@ typedef struct dedup_table {
 	int				num_hash_bits;
 	uint64_t		max_memory;
 	cache_dir		*cache_dir;
-/*
-	boolean_t		using_disk;
-	int				disk_fd;
-	char			*disk_path;
-	uint64_t		disk_offset;
-	boolean_t		disk_only;
-*/
 } dedup_table_t;
 
 typedef struct dedup_stats {
@@ -99,18 +80,18 @@ typedef struct dedup_stats {
 	uint64_t	dedup_records;
 	uint64_t	bytes_read;
 	uint64_t	bytes_saved;
+	uint64_t	disqualified_records;
 	hrtime_t	last_status_time;
 } dedup_stats_t;
 
 /*
- * Hash a 256-bit Blake3 hash to get a 64-bit value for the hash table.
+ * Reduce a 256-bit Blake3 hash to a 64-bit hash key.
  */
 static uint64_t
-hash_blake3_to_64bit(const uint8_t *blake3_hash, int num_bits)
+blake3_to_hash_key(const uint8_t *blake3_hash)
 {
 	uint64_t result;
 	memcpy(&result, blake3_hash, sizeof (result));
-	return (result & ((1ULL << num_bits) - 1));
 }
 
 /*
@@ -133,17 +114,6 @@ dedup_table_init(dedup_table_t *ddt, uint64_t max_memory,
 
 	memset(ddt, 0, sizeof (*ddt));
 	ddt->max_memory = max_memory;
-/*
-	ddt->using_disk = B_FALSE;
-	ddt->disk_only = B_FALSE;
-	ddt->disk_fd = -1;
-*/
-
-	if (cache_file != NULL) {
-		ddt->cache_dir = strdup(cache_file);
-	} else {
-		ddt->disk_path = strdup("/tmp/zstream_dedup_cache.XXXXXX");
-	}
 
 	num_buckets = max_memory / sizeof (dedup_entry_t);
 
@@ -224,7 +194,7 @@ dedup_table_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash)
 	}
 	*/
 
-	hashcode = hash_blake3_to_64bit(blake3_hash, ddt->num_hash_bits);
+	hashcode = blake3_to_hash_key(blake3_hash, ddt->num_hash_bits);
 
 	for (entry = ddt->hash_array[hashcode]; entry != NULL;
 	    entry = entry->next) {
@@ -285,8 +255,8 @@ disk_cache_insert(dedup_table_t *ddt, const uint8_t *blake3_hash,
 */
 
 static void
-drr_write_to_write_block_header(const drr_write *drrw, 
-	write_block_header_t *wb)
+drr_write_to_drr_write_subset(const drr_write *drrw, 
+	drr_write_subset_t *wb)
 {
 	wb->drr_toguid = drrw->drr_toguid;
 	wb->drr_object = drrw->drr_object;
@@ -320,12 +290,12 @@ dedup_table_insert(dedup_table_t *ddt, const uint8_t *blake3_hash,
 	}
 	*/
 
-	hashcode = hash_blake3_to_64bit(blake3_hash, ddt->num_hash_bits);
+	hashcode = blake3_to_hash_key(blake3_hash, ddt->num_hash_bits);
 
 	entry = umem_cache_alloc(ddt->entry_cache, UMEM_NOFAIL);
 	memcpy(entry->hash, blake3_hash, BLAKE3_OUT_LEN);
 	entry->payload_length = payload_length;
-	drr_write_to_write_block_header(drrw, &entry->block_data);
+	drr_write_to_drr_write_subset(drrw, &entry->block_data);
 	ddt->hash_array[hashcode] = entry;
 	ddt->num_entries++;
 
@@ -512,7 +482,7 @@ write_record(dmu_replay_record_t *drr, void *payload, uint32_t payload_length,
 }
 
 static boolean_t
-writes_compatible(const drr_write *drrw, const write_block_header_t *wbh) {
+writes_compatible(const drr_write *drrw, const drr_write_subset_t *wbh) {
 	return (
 		drrw->drr_type == wbh->drr_type &&
 		drrw->drr_compressiontype == wbh->drr_compressiontype &&
@@ -523,7 +493,7 @@ writes_compatible(const drr_write *drrw, const write_block_header_t *wbh) {
 
 static void
 assemble_write_byref(dmu_replay_record_t *byref_drr, drr_write *write_drr,
-	write_block_header_t *wbh)
+	drr_write_subset_t *wbh)
 {
 	memset(byref_drr, 0, sizeof (*byref_drr));
 
@@ -571,7 +541,7 @@ process_write_record(const dmu_replay_record_t *drr, const void *payload,
 	existing = dedup_table_lookup(ddt, blake3_hash);
 
 	if (existing != NULL) {
-		write_block_header_t *wbh = &existing->block_data;
+		drr_write_subset_t *wbh = &existing->block_data;
 
 		if (!writes_compatible(drrw, wbh)) {
 			return write_record(drr, payload, payload_length, 
