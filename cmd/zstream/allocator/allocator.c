@@ -77,7 +77,7 @@ write_zeros(FILE *fp, size_t count)
 
 int
 allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory) {
-    if (record_size == 0 || max_memory == 0) {
+    if (record_size == 0) {
         return (-1);
     }
 

@@ -17,6 +17,7 @@
 
 typedef struct linear_hash linear_hash_t;
 typedef struct lh_iterator lh_iterator_t;
+typedef uint64_t lh_hash_t;
 
 /*
  * Initialize a linear hash table.
