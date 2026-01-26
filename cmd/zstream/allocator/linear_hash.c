@@ -45,11 +45,11 @@ struct linear_hash {
     size_t buckets_capacity;
 };
 
-typedef struct located_bucket {
+typedef struct traced_bucket {
     bucket_t bucket;
     record_ix record;
     allocator_t *alloc;
-} located_bucket_t;
+} traced_bucket_t;
 
 /* Calculate bucket index for a hash value */
 static uint64_t hash_to_bucket(linear_hash_t* lh, uint64_t hash) {
@@ -252,6 +252,31 @@ new_bucket() {
     memset(&bucket, 0, sizeof (bucket));
     return bucket
 }
+
+static int
+retrieve_traced_bucket(allocator_t *alloc, record_ix record,
+    traced_bucket_t *tbucket)
+{
+    memset(tbucket, 0, sizeof(*tbucket));
+    if (ret = allocator_retrieve(alloc, record, &tbucket->bucket)) {
+        return ret;
+    }
+    tbucket->record = record;
+    tbucket->alloc = alloc;
+    return 0;
+}
+
+static int
+store_traced_bucket(traced_bucket_t *tbucket)
+{
+    memset(tbucket, 0, sizeof(*tbucket));
+    if (ret = allocator_retrieve(alloc, record, &tbucket->bucket)) {
+        return ret;
+    }
+    tbucket->record = record;
+    tbucket->alloc = alloc;
+    return 0;
+}
  
 int
 lh_init(linear_hash_t *lh, size_t record_size, size_t max_memory)
@@ -308,13 +333,37 @@ int lh_insert(linear_hash_t* lh, uint64_t hash, const void* data) {
     }
 
     record_ix bucket_ix = hash_to_bucket(lh, hash);
+    traced_bucket_t traced_bucket;
+    traced_bucket_t *this_bucket = &traced_bucket;
+    traced_bucket_t *prev_bucket = NULL;
 
-    bucket_t bucket;
-    if (allocator_retrieve(&lh->bucket_alloc, bucket_ix, &bucket) 
+    if (retrieve_traced_bucket(&lh->bucket_alloc, bucket_ix, this_bucket)
         != bucket_ix)
     {
         return (-3);
     }
+
+    int retcode = 0;
+
+    while (B_TRUE) {
+        if (attempt_add_to_bucket(&this_bucket->bucket, hash, record)) {
+            retcode = store_traced_bucket(this_bucket);
+            break;
+        } else if (!this_bucket->bucket.overflow) {
+            bucket_t new_overflow = new_bucket();
+            /* Can't fail here */
+            (void) attempt_add_to_bucket(&new_overflow, hash, record);
+            record_ix new_rec = allocator_append(alloc->overflow_alloc,
+                &new_overflow);
+            if (new_rec < 0) { return new_rec; }
+            this_bucket->bucket.overflow = new_rec;
+            return store_traced_bucket(this_bucket);
+        } else {
+            retrieve_traced_bucket(&lh->overflow_alloc, this_bucket,
+                this_bucket->bucket.overflow);
+        }
+    }
+
 
     /* Try to insert in main bucket */
     if (attempt_add_to_bucket(&bucket, hash, record) {
