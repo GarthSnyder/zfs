@@ -11,14 +11,14 @@
 #define INITIAL_NUMBER_OF_BUCKETS 2
 #define LOAD_FACTOR_THRESHOLD 0.75
 
-/* Hashes are 63 bits. The top bit is always set to 1. 0 == empty */
-#define VALID_HASH_BIT ((uint64_t)1 << 63)
-#define HASH_MASK (~END_OF_CHAIN_BIT)
+#define CHECKED(type, expr) \
+    type code = expr;
+    if (code < 0) { return code; }
 
 /* Entry in a bucket: hash value + locator to data */
 typedef struct {
-    uint64_t  hash;    /* 63-bit hash, high bit set */
-    record_ix record;  /* locator of actual data */
+    uint64_t  hash;
+    record_ix record;  /* index of actual data */
 } bucket_entry_t;
 
 /* Bucket structure: fixed array of entries + overflow pointer */
@@ -53,8 +53,6 @@ typedef struct traced_bucket {
 
 /* Calculate bucket index for a hash value */
 static uint64_t hash_to_bucket(linear_hash_t* lh, uint64_t hash) {
-    hash &= HASH_MASK;  /* clear high bit */
-
     uint64_t bucket_size = lh->initial_buckets << lh->level;
     uint64_t bucket = hash % bucket_size;
 
@@ -67,35 +65,11 @@ static uint64_t hash_to_bucket(linear_hash_t* lh, uint64_t hash) {
     return bucket;
 }
 
-/* Expand bucket array if needed */
-static int expand_buckets(linear_hash_t* lh) {
-    if (lh->num_buckets >= lh->buckets_capacity) {
-        size_t new_capacity = lh->buckets_capacity * 2;
-        bucket_t* new_buckets = (bucket_t*)realloc(lh->buckets,
-                                                    new_capacity * sizeof(bucket_t));
-        if (!new_buckets) {
-            return -1;
-        }
-
-        /* Initialize new buckets */
-        memset(new_buckets + lh->buckets_capacity, 0,
-               lh->buckets_capacity * sizeof(bucket_t));
-
-        lh->buckets = new_buckets;
-        lh->buckets_capacity = new_capacity;
-    }
-    return 0;
-}
-
 /* Split a bucket */
-static int split_bucket(linear_hash_t* lh) {
+static int 
+split_bucket(linear_hash_t* lh) {
     uint64_t old_bucket_idx = lh->split_pointer;
     uint64_t new_bucket_idx = lh->num_buckets;
-
-    /* Expand bucket array for new bucket */
-    if (expand_buckets(lh) != 0) {
-        return -1;
-    }
 
     lh->num_buckets++;
 
@@ -138,7 +112,7 @@ static int split_bucket(linear_hash_t* lh) {
 
     /* Redistribute all entries */
     for (int i = 0; i < entry_count; i++) {
-        uint64_t hash = all_entries[i].hash & HASH_MASK;
+        uint64_t hash = all_entries[i].hash;
 
         /* Calculate target bucket using new hash function level */
         uint64_t new_bucket_size = (lh->initial_buckets << lh->level) * 2;
@@ -234,16 +208,51 @@ check_split(linear_hash_t *lh) {
     return 0;
 }
 
+/* Considers only the specific bucket, not the chain */
 static boolean_t
 attempt_add_to_bucket(bucket_t *bucket, lh_hash_t hash, record_ix record) {
     for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
-        if (bucket->entries[i].hash == 0) {
-            bucket->entries[i].hash = hash | VALID_HASH_BIT;
+        if (bucket->entries[i].record == 0) {
+            bucket->entries[i].hash = hash;
             bucket->entries[i].record = record;
             return (B_TRUE);
         }
     }
     return (B_FALSE);
+}
+
+/* Stores somewhere in bucket chain, extending if needed */
+static int
+store_in_bucket_chain(linear_hash_t *lh, record_ix chain_head,
+    bucket_entry_t entry)
+{
+    traced_bucket_t this_bucket;
+    this_bucket.alloc = lh->bucket_alloc;
+    this_bucket.record = chain_head;
+
+    CHECKED(int, retrieve_traced_bucket(&this_bucket));
+
+    while (true) {
+        if (attempt_add_to_bucket(&this_bucket.bucket, hash, record)) {
+            CHECKED(record_ix, store_traced_bucket(&this_bucket));
+            break;
+        } else if (this_bucket.bucket.overflow) {
+            this_bucket.record = this_bucket.bucket.overflow;
+            this_bucket.alloc = lh->overflow_alloc;
+            CHECKED(int, retrieve_traced_bucket(&this_bucket));
+        } else {
+            bucket_t new_overflow = new_bucket();
+            (void) attempt_add_to_bucket(&new_overflow, hash, record);
+            record_ix new_rec = allocator_append(lh->overflow_alloc,
+                &new_overflow);
+            if (new_rec < 0) { return new_rec; }
+            this_bucket.bucket.overflow = new_rec;
+            CHECKED(int, store_traced_bucket(&this_bucket));
+            break;
+        }
+    }
+
+
 }
 
 static bucket_t
@@ -296,13 +305,14 @@ lh_init(linear_hash_t *lh, size_t record_size, size_t max_memory)
     if (allocator_init_memory(&lh->data_alloc, record_size, max_memory)) {
         return (-2);
     }
-    /* Bucket allocator: estimate based on expected table growth */
+    /* Bucket allocator */
     if (allocator_init_memory(&lh->bucket_alloc, sizeof (bucket_t), 
         max_memory))
     {
         allocator_destroy(&lh->data_alloc);
         return (-3);
     }
+    /* Bucket overflow storage */
     if (allocator_init_memory(&lh->overflow_alloc, sizeof (bucket_t), 
         max_memory))
     {
@@ -310,11 +320,14 @@ lh_init(linear_hash_t *lh, size_t record_size, size_t max_memory)
         allocator_destroy(&lh->bucket_alloc);
         return (-4);
     }
-    /* Skip first overflow bucket to allow 0 = end of chain */
-    bucket_t dummy;
-    memset(&dummy, 0, sizeof(bucket_t));
-    if (allocator_append(&lh->overflow_alloc, &dummy)) {
-        return (-5);
+    /* 
+     * Skip first overflow and data buckets to allow 0 
+     * to indicate empty or end-of-chain
+     */
+    if ((allocator_skip(&lh->data_alloc) < 0) ||
+        (allocator_skip(&lh->overflow_alloc) < 0))
+    {
+        return (-1);
     }
     return 0;
 }
@@ -324,168 +337,16 @@ int lh_insert(linear_hash_t* lh, uint64_t hash, const void* data) {
         return (-1);
     }
 
-    hash |= VALID_HASH_BIT;  /* ensure high bit is set */
-
-    /* Store data */
+    /* Store actual data record */
     record_ix record = allocator_append(&lh->data_alloc, data);
-    if (record < 0) {
-        return (-2);
-    }
+    if record < 0 { return record; }
 
+    bucket_entry_t entry = {hash, record};
     record_ix bucket_ix = hash_to_bucket(lh, hash);
-    traced_bucket_t traced_bucket;
-    traced_bucket_t *this_bucket = &traced_bucket;
-    traced_bucket_t *prev_bucket = NULL;
+    CHECKED(int, store_in_bucket_chain(lh, bucket_ix, entry));
 
-    if (retrieve_traced_bucket(&lh->bucket_alloc, bucket_ix, this_bucket)
-        != bucket_ix)
-    {
-        return (-3);
-    }
-
-    int retcode = 0;
-
-    while (B_TRUE) {
-        if (attempt_add_to_bucket(&this_bucket->bucket, hash, record)) {
-            retcode = store_traced_bucket(this_bucket);
-            break;
-        } else if (!this_bucket->bucket.overflow) {
-            bucket_t new_overflow = new_bucket();
-            /* Can't fail here */
-            (void) attempt_add_to_bucket(&new_overflow, hash, record);
-            record_ix new_rec = allocator_append(alloc->overflow_alloc,
-                &new_overflow);
-            if (new_rec < 0) { return new_rec; }
-            this_bucket->bucket.overflow = new_rec;
-            return store_traced_bucket(this_bucket);
-        } else {
-            retrieve_traced_bucket(&lh->overflow_alloc, this_bucket,
-                this_bucket->bucket.overflow);
-        }
-    }
-
-
-    /* Try to insert in main bucket */
-    if (attempt_add_to_bucket(&bucket, hash, record) {
-        if (allocator_store(&lh->bucket_alloc, &bucket, bucket_ix) < 0) {
-            return (-4);
-        }
-    } else if (!bucket.overflow) {
-        /* New overflow bucket, and it's the first */
-        bucket_t overflow_bucket = new_bucket();
-        (void) attempt_add_to_bucket(&overflow_bucket, hash, record);
-        record_ix overflow_bucket_ix = allocator_append(&lh->overflow_alloc, 
-            &overflow_bucket);
-        if (overflow_bucket_ix < 0) {
-            return (-5);
-        }
-        bucket.overflow = overflow_bucket_ix;
-        if (allocator_store(&lh->bucket_alloc, &bucket, record) < 0) {
-            return (-6);
-        }
-    } else {
-        struct bucket_with_index {
-            bucket_t bucket;
-            record_ix index;
-        }
-        /* Store in overflow, chaining back to another overflow */
-        bucket_t this_bucket = new_bucket();
-        record_ix this_bucket_ix = bucket.overflow;
-        record_ix previous_bucket_ix = -1;
-        bucket_t prev_bucket = new_bucket();
-        while (B_TRUE) {
-            if (allocator_retrieve(&lh->overflow_alloc, &this_bucket,
-                this_bucket_ix) < 0) {
-                return (-7);
-            }
-            if (attempt_add_to_bucket(&this_bucket, hash, record)) {
-                if (allocator_store(&lh->overflow_alloc, &this_bucket,
-                    this_bucket_ix) < 0) 
-                {
-                    return (-8)
-                } else if (this_bucket.overflow) {
-                    prev_bucket = this_bucket;
-                    prev_bucket_ix = this_bucket_ix;
-                    this_bucket_ix = this_bucket.overflow;
-                    continue;
-                } else {
-                    record_ix = allocator_append(&lh->overflow_alloc, 
-                        &overflow_bucket);
-                    if (record_ix < 0) {
-                        return (-8);
-                    }
-                    prev_bucket.overflow = record_ix;
-                    if (allocator_store(&lh->overflow_alloc, &prev_bucket,
-                        prev_bucket_ix) < 0) 
-                    {
-                        return (-9);
-                    }
-                    prev_bucket = this_bucket;
-                    prev_bucket_ix = this_bucket_ix;
-                    this_bucket_ix = this_bucket.overflow;
-                }
-            }
-        }
-        new_overflow_bucket.entries[0].hash = hash;
-        new_overflow_bucket.entries[0].record = record;
-        record_ix new_record = allocator_append(&lh->overflow_alloc, 
-            &overflow_bucket)
-        if record_ix < 0 {
-            return (-7);
-        }
-        bucket.overflow = new_record;
-
-        /* Search overflow chain for empty slot */
-        record_ix previous = bucket_ix;
-        record_ix overflow;
-        boolean_t already_has_overflow = B_FALSE;
-        while (B_TRUE) {
-            overflow = bucket.overflow;
-            if (overflow) {
-                already_has_overflow = B_TRUE;
-                if (allocator_retrieve(&lh->overflow_alloc, &bucket, 
-                    overflow))
-                {
-                    return (-5);
-                }
-                if (attempt_add_to_bucket(&bucket, hash)) {
-                    if (allocator_store(&lh->overflow_alloc, &bucket, 
-                        bucket_ix) < 0) 
-                    {
-                        return (-6);
-                    }
-                    break;         
-                }
-                previous = overflow;
-        }
-        if (!overflow) {
-            /* Need a new overflow bucket */
-            bucket_t new_overflow_bucket;
-            memset(&new_overflow_bucket, 0, sizeof (bucket_t));
-            (void) attempt_add_to_bucket(&new_overflow_bucket, hash, record);
-            record_ix new_overflow_ix = 
-            new_overflow_bucket.entries[0].hash = hash;
-            new_overflow_bucket.entries[0].record = record;
-            record_ix new_record = allocator_append(&lh->overflow_alloc, 
-                &overflow_bucket)
-            if record_ix < 0 {
-                return (-7);
-            }
-            bucket.overflow = new_record;
-            /* link chain */
-            allocator_t *domain = already_has_overflow ? &lh->overflow_alloc : 
-                &lh->bucket_alloc;
-            if (allocator_store(domain, &bucket, previous) < 0) {
-                return (-8);
-            }
-        }
-    }
-
-    if (check_split(lh) < 0) {
-        return (-5);
-    }
     lh->total_entries++;
-    return 0;
+    return (check_split(lh) < 0) ? -5 : 0;
 }
 
 int lh_retrieve_start(linear_hash_t* lh, uint64_t hash,

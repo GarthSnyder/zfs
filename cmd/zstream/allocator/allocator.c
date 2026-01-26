@@ -197,6 +197,15 @@ allocator_append(allocator_t* alloc, const void* data) {
 }
 
 record_ix
+allocator_skip(allocator_t* alloc) {
+    char *buffer = calloc(1, alloc->record_size);
+    if (!buffer) {
+        return (-1);
+    }
+    return allocator_append(alloc, buffer);
+}
+
+record_ix
 allocator_store(allocator_t *alloc, const void *data, record_ix record) {
     if (!alloc || !data) {
         return (-1);
