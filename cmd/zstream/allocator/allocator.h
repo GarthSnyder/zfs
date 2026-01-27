@@ -15,54 +15,75 @@ typedef int64_t record_ix;
 /*
  * Initialize a memory-backed allocator.
  *
+ * @param alloc Allocator instance to initialize
  * @param record_size Size of each data record in bytes
  * @param max_memory Maximum memory consumption in bytes
- * @return Pointer to allocator, or NULL on failure
+ * @return 0 on success, negative on failure
  */
-int 
+int
 allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory);
 
 /*
  * Initialize a disk-backed allocator.
  *
+ * @param alloc Allocator instance to initialize
  * @param record_size Size of each data record in bytes
  * @param filepath Path to file (must not exist)
- * @return Pointer to allocator, or NULL on failure
+ * @return 0 on success, negative on failure
  */
 int
 allocator_init_disk(allocator_t *alloc, size_t record_size, const char* filepath);
+
+/*
+ * Convert a memory-backed allocator to disk-backed.
+ *
+ * @param alloc Allocator instance
+ * @param filepath Path to file (must not exist)
+ * @return 0 on success, negative on failure
+ */
+int
+allocator_convert_to_disk(allocator_t *alloc, const char* filepath);
 
 /*
  * Append a new data record.
  *
  * @param alloc Allocator instance
  * @param data Buffer containing record data
- * @return Opaque locator for the record, or 0 on error
+ * @return Record index on success, negative on error
  */
 record_ix
 allocator_append(allocator_t* alloc, const void* data);
 
 /*
+ * Skip a record (allocate space but leave it zero-filled).
+ *
+ * @param alloc Allocator instance
+ * @return Record index on success, negative on error
+ */
+record_ix
+allocator_skip(allocator_t* alloc);
+
+/*
+ * Store data at a specific record index (can skip records).
+ *
+ * @param alloc Allocator instance
+ * @param data Buffer containing record data
+ * @param record Record index to store at
+ * @return Record index on success, negative on error
+ */
+record_ix
+allocator_store(allocator_t *alloc, const void *data, record_ix record);
+
+/*
  * Retrieve a data record.
  *
  * @param alloc Allocator instance
- * @param loc Opaque locator returned by allocator_append
+ * @param record Record index to retrieve
  * @param buffer Buffer to receive record data (must be >= record_size)
- * @return 0 on success, -1 on error
+ * @return Record index on success, negative on error
  */
-int 
+record_ix
 allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer);
-
-/*
- * Overwrite a data record.
- *
- * @param alloc Allocator instance
- * @param loc Opaque locator returned by allocator_append
- * @param data Buffer containing new record data
- * @return 0 on success, -1 on error
- */
-int
-allocator_overwrite(allocator_t* alloc, record_ix record, const void* data);
 
 /*
  * Destroy allocator and free all resources.

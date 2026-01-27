@@ -115,7 +115,7 @@ allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory)
 }
 
 int
-allocator_init_disk(size_t record_size, const char* filepath) {
+allocator_init_disk(allocator_t *alloc, size_t record_size, const char* filepath) {
     if (record_size == 0 || !filepath) {
         return (-1);
     }
@@ -193,7 +193,7 @@ allocator_convert_to_disk(allocator_t *alloc, const char* filepath) {
 
 record_ix
 allocator_append(allocator_t* alloc, const void* data) {
-    return allocator_store(alloc, data, alloc->count)
+    return allocator_store(alloc, data, alloc->count);
 }
 
 record_ix
@@ -244,7 +244,7 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
 #endif
         /* On POSIX systems, pages are committed automatically on write */
         if (gap_bytes > 0) {
-            memset(alloc->base_addr + offset, 0, gap_bytes);
+            memset(alloc->base_addr + allocated_size, 0, gap_bytes);
         }
         void* dest = (char*)alloc->base_addr + offset;
         memcpy(dest, data, alloc->record_size);
@@ -260,12 +260,12 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
         }
         /* Write data record */
         size_t written = fwrite(data, alloc->record_size, 1, alloc->file);
-        if (written != alloc->record_size) {
+        if (written != 1) {
             return (-6);  /* disk full or I/O error */
         }
     }
 
-    alloc->count = max(alloc->count, record) + 1;
+    alloc->count = (alloc->count > record ? alloc->count : record) + 1;
 
     /* Return record number */
     return record;
@@ -282,7 +282,7 @@ allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer) {
 
     if (record >= alloc->count) {
         memset(buffer, 0, alloc->record_size);
-        return record
+        return record;
     }
 
     if (alloc->type == ALLOCATOR_MEMORY) {
