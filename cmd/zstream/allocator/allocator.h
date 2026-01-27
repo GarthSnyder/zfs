@@ -8,9 +8,30 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 
-typedef struct allocator allocator_t;
 typedef int64_t record_ix;
+
+typedef enum {
+    ALLOCATOR_MEMORY,
+    ALLOCATOR_DISK
+} allocator_type_t;
+
+typedef struct allocator {
+    allocator_type_t type;
+    size_t record_size;
+    uint64_t count;  /* number of records allocated */
+
+    /* Memory allocator fields */
+    char* base_addr;
+    size_t max_memory;
+    size_t page_size;
+    size_t committed_bytes;  /* tracks committed memory on Windows */
+
+    /* Disk allocator fields */
+    FILE* file;
+    char* filepath;
+} allocator_t;
 
 /*
  * Initialize a memory-backed allocator.

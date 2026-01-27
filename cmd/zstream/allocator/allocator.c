@@ -19,27 +19,6 @@
     #include <sys/stat.h>
 #endif
 
-typedef enum {
-    ALLOCATOR_MEMORY,
-    ALLOCATOR_DISK
-} allocator_type_t;
-
-typedef struct allocator {
-    allocator_type_t type;
-    size_t record_size;
-    uint64_t count;  /* number of records allocated */
-
-    /* Memory allocator fields */
-    char* base_addr;
-    size_t max_memory;
-    size_t page_size;
-    size_t committed_bytes;  /* tracks committed memory on Windows */
-
-    /* Disk allocator fields */
-    FILE* file;
-    char* filepath;
-} allocator_t;
-
 /* Get system page size */
 static size_t 
 get_page_size(void) {
@@ -213,7 +192,12 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
 
     uint64_t offset = record * alloc->record_size;
     uint64_t allocated_size = alloc->count * alloc->record_size;
-    size_t gap_bytes = offset - allocated_size;
+    size_t gap_bytes = 0;
+
+    /* Only compute gap if we're writing beyond current allocation */
+    if (offset > allocated_size) {
+        gap_bytes = offset - allocated_size;
+    }
 
     if (alloc->type == ALLOCATOR_MEMORY) {
         /* Check if we have space */
@@ -292,8 +276,8 @@ allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer) {
         if (fseeko(alloc->file, (off_t)offset, SEEK_SET) != 0) {
             return (-2);
         }
-        size_t read_bytes = fread(buffer, alloc->record_size, 1, alloc->file);
-        if (read_bytes != alloc->record_size) {
+        size_t items_read = fread(buffer, alloc->record_size, 1, alloc->file);
+        if (items_read != 1) {
             return (-3);
         }
     }

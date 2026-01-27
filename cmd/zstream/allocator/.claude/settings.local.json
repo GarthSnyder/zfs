@@ -4,7 +4,8 @@
       "Bash(make clean:*)",
       "Bash(make:*)",
       "Bash(./test_allocator)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(./test_linear_hash:*)"
     ]
   }
 }
