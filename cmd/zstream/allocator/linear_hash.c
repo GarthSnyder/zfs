@@ -11,10 +11,8 @@
 #define ITER_COMPLETE 1
 
 #define CHECKED(type, expr) \
-	do { \
-		type code = expr; \
-		if (code < 0) { return code; } \
-	} while(0)
+	type ret = expr; \
+	if (ret < 0) { return ret; } 
 
 /* Forward declarations */
 static int split_bucket(linear_hash_t* lh);
@@ -53,9 +51,10 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 			&iter->bucket));
 		iter->entry_ix = 0;
 		iter->dirty = false;
+		return 0;
 	} else if (iter->entry_ix == ENTRIES_PER_BUCKET - 1) {
 		if (iter->dirty) {
-			CHECKED(record_ix, allocator_store(iter->alloc, &iter->bucket, 
+			CHECKED(record_ix, allocator_store(iter->alloc, &iter->bucket,
 				iter->bucket_ix));
 			iter->dirty = false;
 		}
@@ -90,7 +89,7 @@ split_bucket(linear_hash_t* lh) {
 	/* Partition */
 	while(true) {
 		CHECKED(int, entry_iterator_get_next(lh, &iter));
-		if (code == ITER_COMPLETE) { break; }
+		if (ret == ITER_COMPLETE) { break; }
 		bucket_entry_t entry = iter.bucket.entries[iter.entry_ix];
 		/* Skip empty entries */
 		if (entry.record == 0) continue;
@@ -112,17 +111,17 @@ split_bucket(linear_hash_t* lh) {
 	CHECKED(int, entry_iterator_get_next(lh, &tail));
 	while (true) {
 		CHECKED(int, entry_iterator_get_next(lh, &head));
-		if (code == ITER_COMPLETE) { break; }
+		if (ret == ITER_COMPLETE) { break; }
 		bucket_entry_t head_entry = head.bucket.entries[head.entry_ix];
 		if (head_entry.record != 0) {
 			bucket_entry_t tail_entry = tail.bucket.entries[tail.entry_ix];
-			if (tail_entry.hash != head_entry.hash || 
+			if (tail_entry.hash != head_entry.hash ||
 				tail_entry.record != head_entry.record)
 			{
 				tail.bucket.entries[tail.entry_ix] = head_entry;
 				tail.dirty = true;
 			}
-			/* Can't get ITER_COMPLETE before head */
+			/* Tail can't get ITER_COMPLETE before head does */
 			CHECKED(int, entry_iterator_get_next(lh, &tail));
 		}
 	}
@@ -132,10 +131,10 @@ split_bucket(linear_hash_t* lh) {
 		tail.bucket.entries[tail.entry_ix] = empty_entry;
 		tail.dirty = true;
 		CHECKED(int, entry_iterator_get_next(lh, &tail));
-		if (code == ITER_COMPLETE) { break; }
+		if (ret == ITER_COMPLETE) { break; }
 	}
 
-	/* Check if we've completed this level. Split pointer was 
+	/* Check if we've completed this level. Split pointer was
 	already incremented. */
 	uint64_t buckets_this_cycle = (1ULL << lh->hash_suffix_length) - 1;
 	if (lh->split_pointer >= buckets_this_cycle) {
@@ -291,11 +290,12 @@ lh_retrieve_next(lh_iterator_t *iter, void *buffer) {
 	entry_iterator_t *entry_iterator = &iter->entry_iterator;
 	while (true) {
 		CHECKED(int, entry_iterator_get_next(iter->lh, entry_iterator));
-		if (code == ITER_COMPLETE) {
+		if (ret == ITER_COMPLETE) {
 			return ITER_COMPLETE;
 		}
 		bucket_entry_t entry = entry_iterator->bucket.entries[entry_iterator->entry_ix];
-		if (entry.hash == iter->hash) {
+		/* Skip empty entries (record == 0 means empty) */
+		if (entry.record != 0 && entry.hash == iter->hash) {
 			CHECKED(record_ix, allocator_retrieve(&iter->lh->data_alloc, entry.record,
 				buffer));
 			return 0;
