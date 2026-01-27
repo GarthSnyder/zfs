@@ -32,37 +32,6 @@ get_page_size(void) {
 #endif
 }
 
-/* Generate a random temporary filename */
-static char*
-generate_temp_filename() {
-#ifdef PLATFORM_WINDOWS
-    char temp_path[MAX_PATH];
-    char temp_file[MAX_PATH];
-
-    /* Get Windows temp directory */
-    DWORD ret = GetTempPathA(MAX_PATH, temp_path);
-    if (ret == 0 || ret > MAX_PATH) {
-        return NULL;
-    }
-
-    /* Generate unique temp filename */
-    if (GetTempFileNameA(temp_path, "alloc", 0, temp_file) == 0) {
-        return NULL;
-    }
-
-    return strdup(temp_file);
-#else
-    /* Use mkstemp for secure temp file creation on POSIX */
-    char template[] = "/tmp/allocator_XXXXXXXX";
-    int fd = mkstemp(template);
-    if (fd < 0) {
-        return NULL;
-    }
-    close(fd);
-    return strdup(template);
-#endif
-}
-
 #ifdef PLATFORM_WINDOWS
 /* Round up to next multiple of page_size */
 static size_t round_up_to_page(size_t size, size_t page_size) {
@@ -87,88 +56,93 @@ write_zeros(FILE *fp, size_t count)
 
 int
 allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory) {
-    if (record_size == 0) {
+    return common_init(alloc, ALLOCATOR_MEMORY, record_size, max_memory, NULL);
+}
+
+int
+allocator_init_disk(allocator_t *alloc, size_t record_size, FILE *file) {
+    if (!file) { return -1; }
+    return common_init(alloc, ALLOCATOR_DISK, record_size, 0, file);
+}
+
+int
+allocator_init_convertible(allocator_t *alloc, size_t record_size, 
+    size_t max_memory, FILE *file)
+{
+    return common_init(alloc, ALLOCATOR_CONVERTIBLE, record_size, max_memory, file);
+}
+
+int
+common_init(allocator_t *alloc, allocator_type_t type, size_t record_size, 
+    size_t max_memory, FILE *file) 
+{
+    if ((record_size == 0) 
+        || (type != ALLOCATOR_MEMORY && !file)
+        || (type != ALLOCATOR_DISK && !max_memory))
+    {
         return (-1);
     }
 
     memset(alloc, 0, sizeof(allocator_t));
-    alloc->type = ALLOCATOR_MEMORY;
+    alloc->type = type;
+    alloc->using_disk = type == ALLOCATOR_DISK;
     alloc->record_size = record_size;
     alloc->max_memory = max_memory;
     alloc->page_size = get_page_size();
+    alloc->file = file;
 
+    if (type != ALLOCATOR_DISK) {
 #ifdef PLATFORM_WINDOWS
-    /* Reserve address space without committing physical memory */
-    alloc->base_addr = VirtualAlloc(NULL, max_memory,
-                                    MEM_RESERVE, PAGE_READWRITE);
-    if (!alloc->base_addr) {
-        return (-1);
-    }
-    alloc->committed_bytes = 0;
+        /* Reserve address space without committing physical memory */
+        alloc->base_addr = VirtualAlloc(NULL, max_memory,
+                                        MEM_RESERVE, PAGE_READWRITE);
+        if (!alloc->base_addr) {
+            return (-1);
+        }
+        alloc->committed_bytes = 0;
 #else
-    /* Use mmap to reserve address space
-     * MAP_NORESERVE on Linux prevents swap space reservation
-     * Pages will be allocated on first write (demand paging)
-     */
-    int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        /* Use mmap to reserve address space
+         * MAP_NORESERVE on Linux prevents swap space reservation
+         * Pages will be allocated on first write (demand paging)
+         */
+        int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #ifdef MAP_NORESERVE
-    flags |= MAP_NORESERVE;
+        flags |= MAP_NORESERVE;
 #endif
-
-    alloc->base_addr = mmap(NULL, max_memory, PROT_READ | PROT_WRITE,
-                            flags, -1, 0);
-    if (alloc->base_addr == MAP_FAILED) {
-        return -1;
-    }
+        alloc->base_addr = mmap(NULL, max_memory, PROT_READ | PROT_WRITE,
+                                flags, -1, 0);
+        if (alloc->base_addr == MAP_FAILED) {
+            return -1;
+        }
 #endif
-    return (0);
-}
-
-int
-allocator_init_disk(allocator_t *alloc, size_t record_size, const char* filepath) {
-
-    if (record_size == 0) {
-        return (-1);
-    }
-
-    memset(alloc, 0, sizeof(allocator_t));
-    alloc->type = ALLOCATOR_DISK;
-    alloc->record_size = record_size;
-
-    alloc->filepath = strdup(filepath ? filepath : generate_temp_filename(filepath));
-    /* Open file for reading and writing, binary mode */
-    alloc->file = fopen(alloc->filepath, "w+xb");
-    if (!alloc->file) {
-        free(temp_filepath);
-        return (-3);
     }
     return (0);
 }
 
 int
-allocator_convert_to_disk(allocator_t *alloc, const char* filepath) {
+allocator_convert_to_disk(allocator_t *alloc) {
 
-    if (alloc->type == ALLOCATOR_DISK) {
+    if (alloc->using_disk) {
         return (0);
     }
-
-    alloc->filepath = strdup(filepath ? filepath : generate_temp_filename(filepath));
-    /* Open file for reading and writing, binary mode */
-    alloc->file = fopen(alloc->filepath, "w+xb");
-    if (!alloc->file) {
-        free(alloc->filepath);
-        return (-3);
+    if (!file) {
+        return -1;
     }
 
     if (alloc->count > 0) {
         size_t num_bytes = alloc->count * alloc->record_size;
         if (fwrite(alloc->base_addr, 1, num_bytes, alloc->file) != num_bytes) {
             fclose(alloc->file);
-            remove(actual_filepath);
-            free(temp_filepath);
-            return (-3);
+            return -3;
         }
     }
+    free_memory(alloc);
+    alloc->using_disk = true;
+    return (0);
+}
+
+void
+free_memory(allocator_t *alloc) {
 #ifdef PLATFORM_WINDOWS
     if (alloc->base_addr) {
         VirtualFree(alloc->base_addr, 0, MEM_RELEASE);
@@ -179,17 +153,6 @@ allocator_convert_to_disk(allocator_t *alloc, const char* filepath) {
     }
 #endif
     alloc->base_addr = NULL;
-    alloc->type = ALLOCATOR_DISK;
-
-    /* Save filepath for cleanup */
-    alloc->filepath = strdup(actual_filepath);
-    free(temp_filepath);
-    if (!alloc->filepath) {
-        fclose(alloc->file);
-        remove(actual_filepath);
-        return (-4);
-    }
-    return (0);
 }
 
 record_ix
@@ -203,7 +166,9 @@ allocator_skip(allocator_t* alloc) {
     if (!buffer) {
         return (-1);
     }
-    return allocator_append(alloc, buffer);
+    record_ix ret = allocator_append(alloc, buffer);
+    free(buffer);
+    return ret;
 }
 
 record_ix
@@ -221,7 +186,22 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
         gap_bytes = offset - allocated_size;
     }
 
-    if (alloc->type == ALLOCATOR_MEMORY) {
+    if (alloc->using_disk) {
+        if (gap_bytes > 0) {
+            if (fseeko(alloc->file, (off_t)allocated_size, SEEK_SET) != 0) {
+                return (-4);
+            }
+            write_zeros(alloc->file, gap_bytes);
+        }
+        if (fseeko(alloc->file, offset, SEEK_SET) != 0) {
+            return (-5);
+        }
+        /* Write data record */
+        size_t written = fwrite(data, alloc->record_size, 1, alloc->file);
+        if (written != 1) {
+            return (-6);  /* disk full or I/O error */
+        }
+    } else {
         /* Check if we have space */
         if (offset + alloc->record_size > alloc->max_memory) {
             return (-2);  /* out of space */
@@ -244,7 +224,6 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
                              MEM_COMMIT, PAGE_READWRITE)) {
                 return (-3);
             }
-
             alloc->committed_bytes = new_committed;
         }
 #endif
@@ -254,21 +233,6 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
         }
         void* dest = (char*)alloc->base_addr + offset;
         memcpy(dest, data, alloc->record_size);
-    } else {  /* ALLOCATOR_DISK */
-        if (gap_bytes > 0) {
-            if (fseeko(alloc->file, (off_t)allocated_size, SEEK_SET) != 0) {
-                return (-4);
-            }
-            write_zeros(alloc->file, gap_bytes);
-        }
-        if (fseeko(alloc->file, offset, SEEK_SET) != 0) {
-            return (-5);
-        }
-        /* Write data record */
-        size_t written = fwrite(data, alloc->record_size, 1, alloc->file);
-        if (written != 1) {
-            return (-6);  /* disk full or I/O error */
-        }
     }
 
     alloc->count = ((record_ix)alloc->count > record ? alloc->count : record) + 1;
@@ -277,7 +241,6 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
     return record;
 }
 
-/* Nonexistent records are returned zero-filled */
 record_ix 
 allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer) {
     if (!alloc || !buffer || record < 0) {
@@ -286,15 +249,13 @@ allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer) {
 
     uint64_t offset = record * alloc->record_size;
 
+    /* Nonexistent records are returned zero-filled */
     if (record >= (record_ix)alloc->count) {
         memset(buffer, 0, alloc->record_size);
         return record;
     }
 
-    if (alloc->type == ALLOCATOR_MEMORY) {
-        void* src = (char*)alloc->base_addr + offset;
-        memcpy(buffer, src, alloc->record_size);
-    } else {  /* ALLOCATOR_DISK */
+    if (alloc->using_disk) {
         if (fseeko(alloc->file, (off_t)offset, SEEK_SET) != 0) {
             return (-2);
         }
@@ -302,6 +263,9 @@ allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer) {
         if (items_read != 1) {
             return (-3);
         }
+    } else { 
+        void* src = (char*)alloc->base_addr + offset;
+        memcpy(buffer, src, alloc->record_size);
     }
 
     return record;
@@ -312,7 +276,7 @@ void allocator_destroy(allocator_t* alloc) {
         return;
     }
 
-    if (alloc->type == ALLOCATOR_MEMORY) {
+    if (!alloc->using_disk) {
 #ifdef PLATFORM_WINDOWS
         if (alloc->base_addr) {
             VirtualFree(alloc->base_addr, 0, MEM_RELEASE);
@@ -325,10 +289,6 @@ void allocator_destroy(allocator_t* alloc) {
     } else {  /* ALLOCATOR_DISK */
         if (alloc->file) {
             fclose(alloc->file);
-        }
-        if (alloc->filepath) {
-            remove(alloc->filepath);
-            free(alloc->filepath);
         }
     }
 }

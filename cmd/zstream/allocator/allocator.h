@@ -12,14 +12,9 @@
 
 typedef int64_t record_ix;
 
-typedef enum {
-    ALLOCATOR_MEMORY,
-    ALLOCATOR_DISK
-} allocator_type_t;
-
 typedef struct allocator {
 
-    allocator_type_t type;
+    boolean using_disk;
     size_t record_size;
     uint64_t count;  /* number of records allocated */
 
@@ -31,7 +26,6 @@ typedef struct allocator {
 
     /* Disk allocator fields */
     FILE* file;
-    char* filepath;
     
 } allocator_t;
 
