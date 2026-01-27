@@ -54,7 +54,12 @@ generate_temp_filename() {
 #else
     /* Use mkstemp for secure temp file creation on POSIX */
     char template[] = "/tmp/allocator_XXXXXXXX";
-    return strdup(mktemp(template));
+    int fd = mkstemp(template);
+    if (fd < 0) {
+        return NULL;
+    }
+    close(fd);
+    return strdup(template);
 #endif
 }
 
