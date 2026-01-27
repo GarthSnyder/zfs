@@ -8,13 +8,14 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 typedef int64_t record_ix;
 
 typedef struct allocator {
 
-    boolean using_disk;
+    bool using_disk;
     size_t record_size;
     uint64_t count;  /* number of records allocated */
 
@@ -26,7 +27,7 @@ typedef struct allocator {
 
     /* Disk allocator fields */
     FILE* file;
-    
+
 } allocator_t;
 
 /*
@@ -45,21 +46,34 @@ allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory)
  *
  * @param alloc Allocator instance to initialize
  * @param record_size Size of each data record in bytes
- * @param filepath Path to file (must not exist), or NULL to use random temp file
+ * @param file Open file handle for disk storage
  * @return 0 on success, negative on failure
  */
 int
-allocator_init_disk(allocator_t *alloc, size_t record_size, const char* filepath);
+allocator_init_disk(allocator_t *alloc, size_t record_size, FILE *file);
+
+/*
+ * Initialize a convertible allocator (starts as memory, can convert to disk).
+ *
+ * @param alloc Allocator instance to initialize
+ * @param record_size Size of each data record in bytes
+ * @param max_memory Maximum memory consumption in bytes before conversion
+ * @param file Open file handle for disk storage (used when converted)
+ * @return 0 on success, negative on failure
+ */
+int
+allocator_init_convertible(allocator_t *alloc, size_t record_size,
+    size_t max_memory, FILE *file);
 
 /*
  * Convert a memory-backed allocator to disk-backed.
+ * The file handle must have been provided during initialization.
  *
  * @param alloc Allocator instance
- * @param filepath Path to file (must not exist), or NULL to use random temp file
  * @return 0 on success, negative on failure
  */
 int
-allocator_convert_to_disk(allocator_t *alloc, const char* filepath);
+allocator_convert_to_disk(allocator_t *alloc);
 
 /*
  * Append a new data record.
@@ -109,6 +123,7 @@ allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer);
  *
  * @param alloc Allocator instance (may be NULL)
  */
-void allocator_destroy(allocator_t* alloc);
+void
+allocator_destroy(allocator_t* alloc);
 
 #endif /* ALLOCATOR_H */

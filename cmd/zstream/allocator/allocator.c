@@ -125,7 +125,7 @@ allocator_convert_to_disk(allocator_t *alloc) {
     if (alloc->using_disk) {
         return (0);
     }
-    if (!file) {
+    if (!alloc->file) {
         return -1;
     }
 
