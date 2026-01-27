@@ -37,42 +37,17 @@
 #include <sys/zfs_ioctl.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
+#include "linear_hash.h"
 
-#define	DEFAULT_DEDUP_PHYSMEM_PERCENT	20
-#define	SMALLEST_POSSIBLE_DEDUP_MB		128
-#define	DISK_CACHE_PHYSMEM_PERCENT		5
+#define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
+#define SMALLEST_REASONABLE_DEDUP_MB	128
 #define	STATUS_UPDATE_INTERVAL			(5 * 1000000000ULL)
 
-typedef struct drr_write_subset { /* TODO: Check sizes and aligments and update pad */
-	uint64_t 	drr_object;
-	uint64_t 	drr_offset;
-	uint64_t 	drr_toguid;
-	uint64_t 	drr_logical_size;
-	uint8_t 	drr_compressiontype;
-	uint64_t 	drr_compressed_size;
-	uint8_t 	drr_checksumtype;
-	uint8_t 	drr_flags;
-	ddt_key_t	drr_key;
-	uint8_t 	drr_salt[ZIO_DATA_SALT_LEN];
-	uint8_t 	drr_iv[ZIO_DATA_IV_LEN];
-	uint8_t 	drr_mac[ZIO_DATA_MAC_LEN];
-} drr_write_subset_t;
-
 typedef struct dedup_entry {
-	struct dedup_entry	*next;
-	drr_write_subset_t	block_data
-	uint8_t				hash[BLAKE3_OUT_LEN];
-	uint64_t			payload_length;
+	ddr_write	block_data
+	uint8_t		hash[BLAKE3_OUT_LEN];
+	uint64_t	payload_length;
 } dedup_entry_t;
-
-typedef struct dedup_table {
-	dedup_entry_t	**hash_array;
-	umem_cache_t	*entry_cache;
-	uint64_t		num_entries;
-	int				num_hash_bits;
-	uint64_t		max_memory;
-	cache_dir		*cache_dir;
-} dedup_table_t;
 
 typedef struct dedup_stats {
 	uint64_t	total_records;
@@ -103,76 +78,6 @@ blake3_equal(const uint8_t *hash1, const uint8_t *hash2)
 	return (memcmp(hash1, hash2, BLAKE3_OUT_LEN) == 0);
 }
 
-/*
- * Initialize the deduplication table.
- */
-static void
-dedup_table_init(dedup_table_t *ddt, uint64_t max_memory,
-    const char *cache_dir)
-{
-	uint64_t num_buckets;
-
-	memset(ddt, 0, sizeof (*ddt));
-	ddt->max_memory = max_memory;
-
-	num_buckets = max_memory / sizeof (dedup_entry_t);
-
-	/*
-	 * num_buckets must be a power of 2.  Increase number to
-	 * a power of 2 if necessary.
-	 */
-	if (!ISP2(num_buckets))
-		num_buckets = 1ULL << highbit64(num_buckets);
-
-	ddt->hash_array = safe_calloc(num_buckets * sizeof (dedup_entry_t *));
-	ddt->entry_cache = umem_cache_create("dedup_entry",
-	    sizeof (dedup_entry_t), 0, NULL, NULL, NULL, NULL, NULL, 0);
-	ddt->num_hash_bits = highbit64(num_buckets) - 1;
-	ddt->num_entries = 0;
-}
-
-/*
- * Look up an entry in the disk cache.
- * Returns B_TRUE if found, B_FALSE otherwise.
- * If found, populates the provided result structure.
- */
-/*
-static boolean_t
-disk_cache_lookup(dedup_table_t *ddt, const uint8_t *blake3_hash,
-    dedup_entry_t *result)
-{
-	uint64_t hash_key;
-	disk_entry_t disk_entry;
-	off_t offset;
-	ssize_t bytes_read;
-
-	if (ddt->disk_fd < 0)
-		return (B_FALSE);
-
-	memcpy(&hash_key, blake3_hash, sizeof (hash_key));
-
-	offset = 0;
-	while ((bytes_read = pread(ddt->disk_fd, &disk_entry,
-	    sizeof (disk_entry), offset)) == sizeof (disk_entry)) {
-		if (blake3_equal(disk_entry.hash, blake3_hash)) {
-			memcpy(result->hash, disk_entry.hash, BLAKE3_OUT_LEN);
-			result->guid = disk_entry.guid;
-			result->object = disk_entry.object;
-			result->offset = disk_entry.offset;
-			result->length = disk_entry.length;
-			result->checksumtype = disk_entry.checksumtype;
-			result->flags = disk_entry.flags;
-			result->compressiontype = disk_entry.compressiontype;
-			result->compressed_size = disk_entry.compressed_size;
-			result->next = NULL;
-			return (B_TRUE);
-		}
-		offset += sizeof (disk_entry);
-	}
-
-	return (B_FALSE);
-}
-*/
 
 /*
  * Look up an entry in the deduplication table by Blake3 hash.
@@ -578,7 +483,7 @@ process_write_record(const dmu_replay_record_t *drr, const void *payload,
  * Deduplicate a ZFS stream.
  */
 static void
-zfs_dedup_stream(FILE *input, int outfd, dedup_table_t *ddt, boolean_t verbose)
+zfs_dedup_stream(FILE *input, FILE *output, linear_hash_t *ddt, boolean_t verbose)
 {
 	int bufsz = SPA_MAXBLOCKSIZE;
 	dmu_replay_record_t thedrr;
@@ -619,6 +524,11 @@ zfs_dedup_stream(FILE *input, int outfd, dedup_table_t *ddt, boolean_t verbose)
 
 			/* set the DEDUP feature flag for this stream */
 			fflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
+			if (fflags & DMU_BACKUP_FEATURE_DEDUP) {
+				fprintf(stderr, "Input stream is already deduplicated.\n"
+					"To re-deduplicate, pipe through zstream redup first.\n");
+				return (1);
+			}
 			fflags |= DMU_BACKUP_FEATURE_DEDUP;
 			/* cppcheck-suppress syntaxError */
 			DMU_SET_FEATUREFLAGS(drrb->drr_versioninfo, fflags);
@@ -785,36 +695,13 @@ error:
 	exit(1);
 }
 
-/*
- * Clean up the deduplication table.
- */
-static void
-dedup_table_fini(dedup_table_t *ddt)
-{
-	if (ddt->disk_fd >= 0) {
-		close(ddt->disk_fd);
-		if (strstr(ddt->disk_path, "/tmp/") != NULL) {
-			unlink(ddt->disk_path);
-		}
-	}
-	if (ddt->disk_path != NULL) {
-		free(ddt->disk_path);
-	}
-	if (ddt->entry_cache != NULL) {
-		umem_cache_destroy(ddt->entry_cache);
-	}
-	if (ddt->hash_array != NULL) {
-		free(ddt->hash_array);
-	}
-}
-
 int
 zstream_do_dedup(int argc, char *argv[])
 {
 	boolean_t verbose = B_FALSE;
 	int mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
-	char *cache_file = NULL;
-	int in_fd = 0;
+	char *cache_dir = NULL;
+	FILE *input;
 	int c;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
@@ -832,7 +719,7 @@ zstream_do_dedup(int argc, char *argv[])
 			}
 			break;
 		case 'c':
-			cache_file = optarg;
+			cache_dir = optarg;
 			break;
 		case '?':
 			(void) fprintf(stderr, "invalid option '%c'\n",
@@ -861,13 +748,20 @@ zstream_do_dedup(int argc, char *argv[])
 	/* If a filename is provided, open it; otherwise use stdin */
 	if (argc == 1) {
 		const char *filename = argv[0];
-		in_fd = open(filename, "r");
-		if (input == -1) {
+		input = fopen(filename, "r");
+		if (input == NULL) {
 			(void) fprintf(stderr,
 			    "Error while opening file '%s': %s\n",
 			    filename, perror(errno));
 			return (1);
 		}
+	} else if (isatty(STDIN_FILENO)) {
+		(void) fprintf(stderr,
+		    "Error: Stream can not be read from a terminal.\n"
+		    "You must name a file or accept input from a pipe.\n");
+		return (1);
+	} else {
+		input = stdin;
 	}
 
 	/* Calculate maximum memory for dedup table */
@@ -877,18 +771,22 @@ zstream_do_dedup(int argc, char *argv[])
 #else
 	uint64_t physbytes = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
 	max_memory = MAX((physbytes * mem_percent) / 100,
-	    SMALLEST_POSSIBLE_DEDUP_MB << 20);
+	    SMALLEST_REASONABLE_DEDUP_MB << 20);
 #endif
 
+/*
+ * Initialize the deduplication table.
+ */
 	/* Initialize dedup table */
-	dedup_table_t ddt;
-	dedup_table_init(&ddt, max_memory, cache_file);
+	linear_hash_t ddt;
+	lh_init_memory(&ddt, sizeof dedup_entry_t, size_t max_memory);
+	lh_set_disk_dir(&ddt, cache_dir ? cache_dir : "/tmp");
 
 	fletcher_4_init();
-	zfs_dedup_stream(input, STDOUT_FILENO, &ddt, verbose);
+	zfs_dedup_stream(input, stdout, &ddt, verbose);
 	fletcher_4_fini();
 
-	dedup_table_fini(&ddt);
+	lh_destroy(&ddt);
 
 	if (input != stdin) {
 		fclose(input);
