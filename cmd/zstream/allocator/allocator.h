@@ -18,6 +18,7 @@ typedef enum {
 } allocator_type_t;
 
 typedef struct allocator {
+
     allocator_type_t type;
     size_t record_size;
     uint64_t count;  /* number of records allocated */
@@ -31,6 +32,7 @@ typedef struct allocator {
     /* Disk allocator fields */
     FILE* file;
     char* filepath;
+    
 } allocator_t;
 
 /*
@@ -49,7 +51,7 @@ allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory)
  *
  * @param alloc Allocator instance to initialize
  * @param record_size Size of each data record in bytes
- * @param filepath Path to file (must not exist)
+ * @param filepath Path to file (must not exist), or NULL to use random temp file
  * @return 0 on success, negative on failure
  */
 int
@@ -59,7 +61,7 @@ allocator_init_disk(allocator_t *alloc, size_t record_size, const char* filepath
  * Convert a memory-backed allocator to disk-backed.
  *
  * @param alloc Allocator instance
- * @param filepath Path to file (must not exist)
+ * @param filepath Path to file (must not exist), or NULL to use random temp file
  * @return 0 on success, negative on failure
  */
 int

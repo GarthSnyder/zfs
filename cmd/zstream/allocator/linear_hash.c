@@ -82,7 +82,7 @@ if there are unused entries. */
 static int
 split_bucket(linear_hash_t* lh) {
 
-	record_ix bucket_being_split = lh->split_pointer;
+	record_ix bucket_being_split = (record_ix)lh->split_pointer;
 	entry_iterator_t iter = {&lh->bucket_alloc, bucket_being_split, -1, {0}, false};
 	bucket_entry_t empty_entry = {0, 0};
 

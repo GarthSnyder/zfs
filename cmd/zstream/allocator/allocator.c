@@ -20,7 +20,7 @@
 #endif
 
 /* Get system page size */
-static size_t 
+static size_t
 get_page_size(void) {
 #ifdef PLATFORM_WINDOWS
     SYSTEM_INFO si;
@@ -29,6 +29,32 @@ get_page_size(void) {
 #else
     long page_size = sysconf(_SC_PAGESIZE);
     return (page_size > 0) ? (size_t)page_size : 4096;
+#endif
+}
+
+/* Generate a random temporary filename */
+static char*
+generate_temp_filename() {
+#ifdef PLATFORM_WINDOWS
+    char temp_path[MAX_PATH];
+    char temp_file[MAX_PATH];
+
+    /* Get Windows temp directory */
+    DWORD ret = GetTempPathA(MAX_PATH, temp_path);
+    if (ret == 0 || ret > MAX_PATH) {
+        return NULL;
+    }
+
+    /* Generate unique temp filename */
+    if (GetTempFileNameA(temp_path, "alloc", 0, temp_file) == 0) {
+        return NULL;
+    }
+
+    return strdup(temp_file);
+#else
+    /* Use mkstemp for secure temp file creation on POSIX */
+    char template[] = "/tmp/allocator_XXXXXXXX";
+    return strdup(mktemp(template));
 #endif
 }
 
@@ -95,56 +121,46 @@ allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory)
 
 int
 allocator_init_disk(allocator_t *alloc, size_t record_size, const char* filepath) {
-    if (record_size == 0 || !filepath) {
-        return (-1);
-    }
 
-    /* Check if file already exists */
-    FILE* test = fopen(filepath, "rb");
-    if (test) {
-        fclose(test);
-        return (-2);  /* file exists - error condition */
+    if (record_size == 0) {
+        return (-1);
     }
 
     memset(alloc, 0, sizeof(allocator_t));
     alloc->type = ALLOCATOR_DISK;
     alloc->record_size = record_size;
 
+    alloc->filepath = strdup(filepath ? filepath : generate_temp_filename(filepath));
     /* Open file for reading and writing, binary mode */
-    alloc->file = fopen(filepath, "w+b");
+    alloc->file = fopen(alloc->filepath, "w+xb");
     if (!alloc->file) {
+        free(temp_filepath);
         return (-3);
     }
-
-    /* Save filepath for cleanup */
-    alloc->filepath = strdup(filepath);
-    if (!alloc->filepath) {
-        fclose(alloc->file);
-        remove(filepath);
-        return (-1);
-    }
-
     return (0);
 }
 
 int
 allocator_convert_to_disk(allocator_t *alloc, const char* filepath) {
+
     if (alloc->type == ALLOCATOR_DISK) {
         return (0);
     }
-    if (!filepath) {
-        return (-1);
-    }
+
+    alloc->filepath = strdup(filepath ? filepath : generate_temp_filename(filepath));
     /* Open file for reading and writing, binary mode */
-    alloc->file = fopen(filepath, "w+xb");
+    alloc->file = fopen(alloc->filepath, "w+xb");
     if (!alloc->file) {
-        return (-2); /* already exists */
+        free(alloc->filepath);
+        return (-3);
     }
+
     if (alloc->count > 0) {
         size_t num_bytes = alloc->count * alloc->record_size;
         if (fwrite(alloc->base_addr, 1, num_bytes, alloc->file) != num_bytes) {
             fclose(alloc->file);
-            remove(filepath);
+            remove(actual_filepath);
+            free(temp_filepath);
             return (-3);
         }
     }
@@ -161,10 +177,11 @@ allocator_convert_to_disk(allocator_t *alloc, const char* filepath) {
     alloc->type = ALLOCATOR_DISK;
 
     /* Save filepath for cleanup */
-    alloc->filepath = strdup(filepath);
+    alloc->filepath = strdup(actual_filepath);
+    free(temp_filepath);
     if (!alloc->filepath) {
         fclose(alloc->file);
-        remove(filepath);
+        remove(actual_filepath);
         return (-4);
     }
     return (0);
@@ -249,7 +266,7 @@ allocator_store(allocator_t *alloc, const void *data, record_ix record) {
         }
     }
 
-    alloc->count = (alloc->count > record ? alloc->count : record) + 1;
+    alloc->count = ((record_ix)alloc->count > record ? alloc->count : record) + 1;
 
     /* Return record number */
     return record;
@@ -264,7 +281,7 @@ allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer) {
 
     uint64_t offset = record * alloc->record_size;
 
-    if (record >= alloc->count) {
+    if (record >= (record_ix)alloc->count) {
         memset(buffer, 0, alloc->record_size);
         return record;
     }
