@@ -75,7 +75,10 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 suffix length. Since only one bit is added, existing entries either
 stay where they are or go to one alternate bucket. We'll do this partition
 in two passes for clarity and reliability: one to eject relocated entries
-and one to consolidate entries now that some may have been removed. */
+and one to consolidate entries now that some may have been removed. 
+
+It is an invariant that bucket entries must be filled linearly, even
+if there are unused entries. */
 static int
 split_bucket(linear_hash_t* lh) {
 
@@ -136,7 +139,7 @@ split_bucket(linear_hash_t* lh) {
 
 	/* Check if we've completed this level. Split pointer was
 	already incremented. */
-	uint64_t buckets_this_cycle = (1ULL << lh->hash_suffix_length) - 1;
+	uint64_t buckets_this_cycle = (1ULL << (lh->hash_suffix_length - 1));
 	if (lh->split_pointer >= buckets_this_cycle) {
 		lh->hash_suffix_length++;
 		lh->split_pointer = 0;
@@ -294,8 +297,10 @@ lh_retrieve_next(lh_iterator_t *iter, void *buffer) {
 			return ITER_COMPLETE;
 		}
 		bucket_entry_t entry = entry_iterator->bucket.entries[entry_iterator->entry_ix];
-		/* Skip empty entries (record == 0 means empty) */
-		if (entry.record != 0 && entry.hash == iter->hash) {
+		if (entry.record == 0) {
+			return ITER_COMPLETE;
+		} 
+		if (entry.hash == iter->hash) {
 			CHECKED(record_ix, allocator_retrieve(&iter->lh->data_alloc, entry.record,
 				buffer));
 			return 0;
