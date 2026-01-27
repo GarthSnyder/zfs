@@ -14,9 +14,54 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+#include "allocator.h"
 
+#define ENTRIES_PER_BUCKET 2
+
+/* Entry in a bucket: hash value + locator to data */
+typedef struct {
+	uint64_t  hash;
+	record_ix record;  /* index of actual data */
+} bucket_entry_t;
+
+/* Bucket structure: fixed array of entries + overflow pointer */
+typedef struct {
+	bucket_entry_t entries[ENTRIES_PER_BUCKET];
+	record_ix overflow;  /* 0 if no overflow */
+} bucket_t;
+
+/* Forward declaration for iterator */
 typedef struct linear_hash linear_hash_t;
-typedef struct lh_iterator lh_iterator_t;
+
+/* Internal iterator for bucket entries */
+typedef struct {
+	allocator_t *alloc;
+	record_ix bucket_ix;
+	int64_t entry_ix; /* -1 == bucket not yet retrieved */
+	bucket_t bucket;
+	bool dirty;
+} entry_iterator_t;
+
+/* Hash table structure */
+struct linear_hash {
+	size_t record_size;
+	uint8_t hash_suffix_length;/* current hashing granularity below split */
+	record_ix split_pointer;   /* next bucket to split */
+	uint64_t num_entries;      /* total entries in table */
+	uint64_t num_splits;       /* statistics */
+
+	allocator_t data_alloc;     /* data records */
+	allocator_t bucket_alloc;   /* main buckets */
+	allocator_t overflow_alloc; /* overflow buckets */
+};
+
+/* Iterator for retrieving records by hash */
+typedef struct {
+	linear_hash_t *lh;
+	uint64_t hash;
+	entry_iterator_t entry_iterator;
+} lh_iterator_t;
 
 /*
  * Initialize a linear hash table.

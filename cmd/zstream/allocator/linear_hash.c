@@ -3,12 +3,9 @@
  */
 
 #include "linear_hash.h"
-#include "allocator.h"
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 
-#define ENTRIES_PER_BUCKET 2
 #define MAX_OCCUPANCY 0.75
 #define INITIAL_HASH_SUFFIX_LENGTH 7
 #define ITER_COMPLETE 1
@@ -19,46 +16,13 @@
 		if (code < 0) { return code; } \
 	} while(0)
 
-/* Entry in a bucket: hash value + locator to data */
-typedef struct {
-	uint64_t  hash;
-	record_ix record;  /* index of actual data */
-} bucket_entry_t;
+/* Forward declarations */
+static int split_bucket(linear_hash_t* lh);
+static int store_in_bucket_chain(linear_hash_t *lh, record_ix chain_head, bucket_entry_t entry);
+static bucket_t new_bucket(void);
+static int entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter);
 
-/* Bucket structure: fixed array of entries + overflow pointer */
-typedef struct {
-	bucket_entry_t entries[ENTRIES_PER_BUCKET];
-	record_ix overflow;  /* 0 if no overflow */
-} bucket_t;
-
-struct linear_hash {
-	size_t record_size;
-	uint8_t hash_suffix_length;/* current hashing granularity below split */
-	record_ix split_pointer;   /* next bucket to split */
-	uint64_t num_entries;      /* total entries in table */
-	uint64_t num_splits;       /* statistics */
-
-	allocator_t data_alloc;     /* data records */
-	allocator_t bucket_alloc;   /* main buckets */
-	allocator_t overflow_alloc; /* overflow buckets */
-};
-
-typedef struct entry_iterator {
-	allocator_t *alloc;
-	record_ix bucket_ix;
-	int64_t entry_ix; /* -1 == bucket not yet retrieved */
-	bucket_t bucket;
-	bool dirty;
-} entry_iterator_t;
-
-typedef struct lh_iterator {
-	linear_hash_t *lh;
-	uint64_t hash;
-	entry_iterator_t entry_iterator;
-} lh_iterator_t;
-
-
-/* 
+/*
 Calculate bucket for a given hash value.
 
 Here, hashing level is defined as the hash suffix length 
@@ -113,24 +77,29 @@ suffix length. Since only one bit is added, existing entries either
 stay where they are or go to one alternate bucket. We'll do this partition
 in two passes for clarity and reliability: one to eject relocated entries
 and one to consolidate entries now that some may have been removed. */
-static int 
+static int
 split_bucket(linear_hash_t* lh) {
 
-	record_ix bucket_being_split = lh->split_pointer++;
+	record_ix bucket_being_split = lh->split_pointer;
 	entry_iterator_t iter = {&lh->bucket_alloc, bucket_being_split, -1, {0}, false};
 	bucket_entry_t empty_entry = {0, 0};
+
+	/* Increment split pointer now so bucket_for_hash uses new value */
+	lh->split_pointer++;
 
 	/* Partition */
 	while(true) {
 		CHECKED(int, entry_iterator_get_next(lh, &iter));
 		if (code == ITER_COMPLETE) { break; }
 		bucket_entry_t entry = iter.bucket.entries[iter.entry_ix];
+		/* Skip empty entries */
+		if (entry.record == 0) continue;
 		record_ix new_bucket_ix = bucket_for_hash(lh, entry.hash);
 		if (new_bucket_ix != bucket_being_split) {
 			iter.bucket.entries[iter.entry_ix] = empty_entry;
 			iter.dirty = true;
 			CHECKED(int, store_in_bucket_chain(lh, new_bucket_ix, entry));
-		}	
+		}
 	}
 
 	/* Consolidate. It doesn't matter that there are two iterators
