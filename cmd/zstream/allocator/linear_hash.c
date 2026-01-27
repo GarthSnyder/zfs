@@ -36,7 +36,7 @@ static uint64_t
 bucket_for_hash(linear_hash_t* lh, uint64_t hash) {
 	uint64_t mask = (1ULL << (lh->hash_suffix_length - 1)) - 1;
 	uint64_t bucket = hash & mask;
-	if (bucket < lh->split_pointer) {
+	if ((record_ix)bucket < lh->split_pointer) {
 		mask = (mask << 1) | 1;
 		bucket = hash & mask;
 	}
@@ -140,7 +140,7 @@ split_bucket(linear_hash_t* lh) {
 	/* Check if we've completed this level. Split pointer was
 	already incremented. */
 	uint64_t buckets_this_cycle = (1ULL << (lh->hash_suffix_length - 1));
-	if (lh->split_pointer >= buckets_this_cycle) {
+	if (lh->split_pointer >= (record_ix)buckets_this_cycle) {
 		lh->hash_suffix_length++;
 		lh->split_pointer = 0;
 	}

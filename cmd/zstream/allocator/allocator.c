@@ -55,43 +55,18 @@ write_zeros(FILE *fp, size_t count)
 }
 
 int
-allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory) {
-    return common_init(alloc, ALLOCATOR_MEMORY, record_size, max_memory, NULL);
-}
-
-int
-allocator_init_disk(allocator_t *alloc, size_t record_size, FILE *file) {
-    if (!file) { return -1; }
-    return common_init(alloc, ALLOCATOR_DISK, record_size, 0, file);
-}
-
-int
-allocator_init_convertible(allocator_t *alloc, size_t record_size, 
-    size_t max_memory, FILE *file)
+common_init(allocator_t *alloc, size_t record_size, size_t max_memory, FILE *file) 
 {
-    return common_init(alloc, ALLOCATOR_CONVERTIBLE, record_size, max_memory, file);
-}
-
-int
-common_init(allocator_t *alloc, allocator_type_t type, size_t record_size, 
-    size_t max_memory, FILE *file) 
-{
-    if ((record_size == 0) 
-        || (type != ALLOCATOR_MEMORY && !file)
-        || (type != ALLOCATOR_DISK && !max_memory))
-    {
-        return (-1);
-    }
+    if (record_size == 0) { return -1; }
 
     memset(alloc, 0, sizeof(allocator_t));
-    alloc->type = type;
-    alloc->using_disk = type == ALLOCATOR_DISK;
+    alloc->using_disk = (file && !max_memory);
     alloc->record_size = record_size;
     alloc->max_memory = max_memory;
     alloc->page_size = get_page_size();
     alloc->file = file;
 
-    if (type != ALLOCATOR_DISK) {
+    if (max_memory) {
 #ifdef PLATFORM_WINDOWS
         /* Reserve address space without committing physical memory */
         alloc->base_addr = VirtualAlloc(NULL, max_memory,
@@ -119,6 +94,39 @@ common_init(allocator_t *alloc, allocator_type_t type, size_t record_size,
     return (0);
 }
 
+
+int
+allocator_init_memory(allocator_t *alloc, size_t record_size, size_t max_memory) {
+    return common_init(alloc, record_size, max_memory, NULL);
+}
+
+int
+allocator_init_disk(allocator_t *alloc, size_t record_size, FILE *file) {
+    if (!file) { return -1; }
+    return common_init(alloc, record_size, 0, file);
+}
+
+int
+allocator_init_convertible(allocator_t *alloc, size_t record_size, 
+    size_t max_memory, FILE *file)
+{
+    return common_init(alloc, record_size, max_memory, file);
+}
+
+void
+free_memory(allocator_t *alloc) {
+#ifdef PLATFORM_WINDOWS
+    if (alloc->base_addr) {
+        VirtualFree(alloc->base_addr, 0, MEM_RELEASE);
+    }
+#else
+    if (alloc->base_addr && alloc->base_addr != MAP_FAILED) {
+        munmap(alloc->base_addr, alloc->max_memory);
+    }
+#endif
+    alloc->base_addr = NULL;
+}
+
 int
 allocator_convert_to_disk(allocator_t *alloc) {
 
@@ -139,20 +147,6 @@ allocator_convert_to_disk(allocator_t *alloc) {
     free_memory(alloc);
     alloc->using_disk = true;
     return (0);
-}
-
-void
-free_memory(allocator_t *alloc) {
-#ifdef PLATFORM_WINDOWS
-    if (alloc->base_addr) {
-        VirtualFree(alloc->base_addr, 0, MEM_RELEASE);
-    }
-#else
-    if (alloc->base_addr && alloc->base_addr != MAP_FAILED) {
-        munmap(alloc->base_addr, alloc->max_memory);
-    }
-#endif
-    alloc->base_addr = NULL;
 }
 
 record_ix
@@ -286,9 +280,8 @@ void allocator_destroy(allocator_t* alloc) {
             munmap(alloc->base_addr, alloc->max_memory);
         }
 #endif
-    } else {  /* ALLOCATOR_DISK */
-        if (alloc->file) {
-            fclose(alloc->file);
-        }
+    } 
+    if (alloc->file) {
+        fclose(alloc->file);
     }
 }
