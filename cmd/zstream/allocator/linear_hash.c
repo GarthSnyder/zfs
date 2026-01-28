@@ -7,8 +7,8 @@
 #include <string.h>
 
 #define MAX_OCCUPANCY 0.75
-#define INITIAL_HASH_SUFFIX_LENGTH 8
-#define DEBUG_SPLITS true
+#define INITIAL_HASH_SUFFIX_LENGTH 2
+#define DEBUG
 
 #define CHECKED(type, expr) \
 	type ret = expr; \
@@ -16,12 +16,6 @@
 
 #define ITER_BUCKET(lh, bucket) \
 	{&lh->bucket_alloc, bucket, -1, {0}, false, false}
-
-/* Forward declarations */
-static int split_bucket(linear_hash_t* lh);
-static int store_in_bucket_chain(linear_hash_t *lh, record_ix chain_head, bucket_entry_t entry);
-static bucket_t new_bucket(void);
-static int entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter);
 
 /*
 Calculate bucket for a given hash value.
@@ -44,6 +38,55 @@ bucket_for_hash(linear_hash_t* lh, uint64_t hash) {
 		bucket = hash & mask;
 	}
 	return bucket;
+}
+
+/* Considers only the specific bucket, not the chain.
+ * Bucket must already have been retrieved before calling, and
+ * the bucket must be resaved afterwards (if successful). */
+static bool
+attempt_add_to_bucket(bucket_t *bucket, bucket_entry_t entry) {
+	for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
+		if (bucket->entries[i].record == 0) {
+			bucket->entries[i] = entry;
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Stores somewhere in bucket chain, extending if needed */
+static int
+store_in_bucket_chain(linear_hash_t *lh, record_ix chain_head,
+	bucket_entry_t entry)
+{
+	bucket_t this_bucket;
+	allocator_t *this_allocator = &lh->bucket_alloc;
+	record_ix bucket_ix = chain_head;
+
+	CHECKED(record_ix, allocator_retrieve(this_allocator, bucket_ix, &this_bucket));
+
+	while (true) {
+		if (attempt_add_to_bucket(&this_bucket, entry)) {
+			CHECKED(record_ix, allocator_store(this_allocator, 
+				&this_bucket, bucket_ix)); 
+			return 0;
+		} else if (this_bucket.overflow) {
+			bucket_ix = this_bucket.overflow;
+			this_allocator = &lh->overflow_alloc;
+			CHECKED(record_ix, allocator_retrieve(this_allocator,
+				bucket_ix, &this_bucket));
+		} else {
+			bucket_t new_overflow = {0};
+			(void) attempt_add_to_bucket(&new_overflow, entry);
+			record_ix new_rec = allocator_append(&lh->overflow_alloc,
+				&new_overflow);
+			if (new_rec < 0) { return new_rec; }
+			this_bucket.overflow = new_rec;
+			CHECKED(record_ix, allocator_store(this_allocator,
+				&this_bucket, bucket_ix));
+			return 0;
+		}
+	}
 }
 
 /* Sets iteration_complete after trying to read off end of chain. */
@@ -75,14 +118,19 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 	}
 }
 
-#ifdef DEBUG_SPLITS
+#ifdef DEBUG
+#define MAX_CHAIN 1024
 int
-validate(linear_hash_t *lh) {
+validate(linear_hash_t *lh, bool print_stats) {
 	uint64_t total_entries = 0;
-	bool print_hash = false; // lh->num_entries >= 153;
+	uint64_t chain_lengths[MAX_CHAIN] = {0};
+	uint64_t chain_occupancies[MAX_CHAIN] = {0};
+	uint64_t max_occupancy[MAX_CHAIN] = {0};
+	uint64_t empties[MAX_CHAIN] = {0};
+	bool print_hash = false;
 	if (print_hash) {
-		fprintf(stderr, "Linear hash dump, split pointer at %d:\n",
-			(int)lh->split_pointer);
+		fprintf(stderr, "Linear hash dump, split pointer at %llu:\n",
+			lh->split_pointer);
 	}
 	for (uint64_t i = 0; i < lh->bucket_alloc.count; i++) {
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
@@ -94,10 +142,10 @@ validate(linear_hash_t *lh) {
 			bucket_entry_t entry = iter.bucket.entries[iter.entry_ix];
 			if (entry.record) {
 				if (saw_empty_entry) {
-					fprintf(stderr, "validate: bucket %d has "
-						"uncompacted entries.\nEntry %d is the "
-						"first after an empty entry.\n", (int)i, 
-						(int)iter.entry_ix);
+					fprintf(stderr, "validate: bucket %llu has "
+						"uncompacted entries.\nEntry %llu is the "
+						"first after an empty entry.\n", i, 
+						iter.entry_ix);
 				}
 				full_entries++;
 			} else {
@@ -107,17 +155,49 @@ validate(linear_hash_t *lh) {
 			CHECKED(int, entry_iterator_get_next(lh, &iter));
 			if (iter.iteration_complete) { break; }
 		}
+		uint64_t chain_length = (full_entries + empty_entries) / ENTRIES_PER_BUCKET;
+		chain_lengths[chain_length]++;
+		chain_occupancies[chain_length] += full_entries;
+		empties[chain_length] += full_entries ? 0 : 1;
+		max_occupancy[chain_length] = (full_entries > max_occupancy[chain_length])
+			? full_entries : max_occupancy[chain_length];
 		total_entries += full_entries;
 		if (print_hash) {
-			fprintf(stderr, "    Bucket %d: %d blocks, %d full, %d empty\n",
-				(int)i, (int)(full_entries + empty_entries) / ENTRIES_PER_BUCKET,
-				(int)full_entries, (int)empty_entries);
+			fprintf(stderr, "    Bucket %llu: %llu blocks, %llu full, %llu empty\n",
+				i, (full_entries + empty_entries) / ENTRIES_PER_BUCKET,
+				full_entries, empty_entries);
 		}
 	}
 	if (total_entries != lh->num_entries) {
-		fprintf(stderr, "validate: linear hash is supposed to have %d "
-			"entries, but actually has %d.\n", (int)lh->num_entries,
-			(int)total_entries);
+		fprintf(stderr, "validate: linear hash is supposed to have %llu "
+			"entries, but actually has %llu.\n", lh->num_entries,
+			total_entries);
+	}
+	if (print_stats) {
+		fprintf(stderr, "%llu entries in %llu buckets:\n", total_entries,
+			lh->bucket_alloc.count);
+		for (uint64_t i = 0; i < MAX_CHAIN; i++) {
+			if (chain_lengths[i]) {
+				uint64_t entries_per_chain = i * ENTRIES_PER_BUCKET;
+				double avg_full = (double)chain_occupancies[i] / 
+					(chain_lengths[i] - empties[i]);
+				double avg_occupancies = (double)avg_full / entries_per_chain;
+				double max_occ = (double)max_occupancy[i] / entries_per_chain;
+				fprintf(stderr, "    %llu bucket chains of length %llu, ",
+					chain_lengths[i], i);
+				if (empties[i] == chain_lengths[i]) {
+					fprintf(stderr, "all empty\n");
+				} else {
+					if (!empties[i]) {
+						fprintf(stderr, "none empty, ");
+					} else {
+						fprintf(stderr, "%llu empty, ", empties[i]);
+					}
+					fprintf(stderr, "nonempty occupancy avg %.0f%%, max %.0f%%\n", 
+						avg_occupancies * 100, max_occ * 100);
+				}
+			}
+		}
 	}
 	return 0;
 }
@@ -134,8 +214,8 @@ if there are unused entries. */
 static int
 split_bucket(linear_hash_t* lh) {
 
-#ifdef DEBUG_SPLITS
-	if (validate(lh) != 0) {
+#ifdef DEBUG
+	if (validate(lh, false) != 0) {
 		fprintf(stderr, "validation did not complete successfully\n");
 	}
 #endif
@@ -203,8 +283,8 @@ split_bucket(linear_hash_t* lh) {
 
 	lh->num_splits++;
 
-#ifdef DEBUG_SPLITS
-	if (validate(lh) != 0) {
+#ifdef DEBUG
+	if (validate(lh, false) != 0) {
 		fprintf(stderr, "validation did not complete successfully\n");
 	}
 #endif
@@ -221,62 +301,6 @@ check_split(linear_hash_t *lh) {
 		return (split_bucket(lh));
 	}
 	return 0;
-}
-
-/* Considers only the specific bucket, not the chain.
- * Bucket must already have been retrieved before calling, and
- * the bucket must be resaved afterwards (if successful). */
-static bool
-attempt_add_to_bucket(bucket_t *bucket, bucket_entry_t entry) {
-	for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
-		if (bucket->entries[i].record == 0) {
-			bucket->entries[i] = entry;
-			return true;
-		}
-	}
-	return false;
-}
-
-/* Stores somewhere in bucket chain, extending if needed */
-static int
-store_in_bucket_chain(linear_hash_t *lh, record_ix chain_head,
-	bucket_entry_t entry)
-{
-	bucket_t this_bucket;
-	allocator_t *this_allocator = &lh->bucket_alloc;
-	record_ix bucket_ix = chain_head;
-
-	CHECKED(record_ix, allocator_retrieve(this_allocator, bucket_ix, &this_bucket));
-
-	while (true) {
-		if (attempt_add_to_bucket(&this_bucket, entry)) {
-			CHECKED(record_ix, allocator_store(this_allocator, 
-				&this_bucket, bucket_ix)); 
-			return 0;
-		} else if (this_bucket.overflow) {
-			bucket_ix = this_bucket.overflow;
-			this_allocator = &lh->overflow_alloc;
-			CHECKED(record_ix, allocator_retrieve(this_allocator,
-				bucket_ix, &this_bucket));
-		} else {
-			bucket_t new_overflow = new_bucket();
-			(void) attempt_add_to_bucket(&new_overflow, entry);
-			record_ix new_rec = allocator_append(&lh->overflow_alloc,
-				&new_overflow);
-			if (new_rec < 0) { return new_rec; }
-			this_bucket.overflow = new_rec;
-			CHECKED(record_ix, allocator_store(this_allocator,
-				&this_bucket, bucket_ix));
-			return 0;
-		}
-	}
-}
-
-static bucket_t
-new_bucket() {
-	bucket_t bucket;
-	memset(&bucket, 0, sizeof (bucket));
-	return bucket;
 }
 
 int
@@ -374,6 +398,9 @@ lh_retrieve_next(lh_iterator_t *iter, void *buffer) {
 }
 
 void lh_destroy(linear_hash_t* lh) {
+#ifdef DEBUG
+	validate(lh, true);
+#endif
 	allocator_destroy(&lh->data_alloc);
 	allocator_destroy(&lh->bucket_alloc);
 	allocator_destroy(&lh->overflow_alloc);
