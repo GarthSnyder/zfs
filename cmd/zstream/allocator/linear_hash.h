@@ -41,6 +41,7 @@ typedef struct {
 	int64_t entry_ix; /* -1 == bucket not yet retrieved */
 	bucket_t bucket;
 	bool dirty;
+    bool iteration_complete;
 } entry_iterator_t;
 
 /* Hash table structure */
@@ -61,6 +62,7 @@ typedef struct {
 	linear_hash_t *lh;
 	uint64_t hash;
 	entry_iterator_t entry_iterator;
+    bool iteration_complete;
 } lh_iterator_t;
 
 /*

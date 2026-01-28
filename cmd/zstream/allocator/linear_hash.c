@@ -7,12 +7,15 @@
 #include <string.h>
 
 #define MAX_OCCUPANCY 0.75
-#define INITIAL_HASH_SUFFIX_LENGTH 7
-#define ITER_COMPLETE 1
+#define INITIAL_HASH_SUFFIX_LENGTH 8
+#define DEBUG_SPLITS true
 
 #define CHECKED(type, expr) \
 	type ret = expr; \
 	if (ret < 0) { return ret; } 
+
+#define ITER_BUCKET(lh, bucket) \
+	{&lh->bucket_alloc, bucket, -1, {0}, false, false}
 
 /* Forward declarations */
 static int split_bucket(linear_hash_t* lh);
@@ -43,7 +46,7 @@ bucket_for_hash(linear_hash_t* lh, uint64_t hash) {
 	return bucket;
 }
 
-/* ITER_COMPLETE for end of chain, negative for error, 0 == valid */
+/* Sets iteration_complete after trying to read off end of chain. */
 static int
 entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 	if (iter->entry_ix < 0) {
@@ -59,7 +62,8 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 			iter->dirty = false;
 		}
 		if (!iter->bucket.overflow) {
-			return ITER_COMPLETE;
+			iter->iteration_complete = true;
+			return 0;
 		}
 		iter->alloc = &lh->overflow_alloc;
 		iter->entry_ix = -1;
@@ -70,6 +74,54 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 		return 0;
 	}
 }
+
+#ifdef DEBUG_SPLITS
+int
+validate(linear_hash_t *lh) {
+	uint64_t total_entries = 0;
+	bool print_hash = false; // lh->num_entries >= 153;
+	if (print_hash) {
+		fprintf(stderr, "Linear hash dump, split pointer at %d:\n",
+			(int)lh->split_pointer);
+	}
+	for (uint64_t i = 0; i < lh->bucket_alloc.count; i++) {
+		entry_iterator_t iter = ITER_BUCKET(lh, i);
+		bool saw_empty_entry = false;
+		uint64_t full_entries = 0;
+		uint64_t empty_entries = 0;
+		CHECKED(int, entry_iterator_get_next(lh, &iter));
+		while (true) {
+			bucket_entry_t entry = iter.bucket.entries[iter.entry_ix];
+			if (entry.record) {
+				if (saw_empty_entry) {
+					fprintf(stderr, "validate: bucket %d has "
+						"uncompacted entries.\nEntry %d is the "
+						"first after an empty entry.\n", (int)i, 
+						(int)iter.entry_ix);
+				}
+				full_entries++;
+			} else {
+				empty_entries++;
+				saw_empty_entry = true;
+			}
+			CHECKED(int, entry_iterator_get_next(lh, &iter));
+			if (iter.iteration_complete) { break; }
+		}
+		total_entries += full_entries;
+		if (print_hash) {
+			fprintf(stderr, "    Bucket %d: %d blocks, %d full, %d empty\n",
+				(int)i, (int)(full_entries + empty_entries) / ENTRIES_PER_BUCKET,
+				(int)full_entries, (int)empty_entries);
+		}
+	}
+	if (total_entries != lh->num_entries) {
+		fprintf(stderr, "validate: linear hash is supposed to have %d "
+			"entries, but actually has %d.\n", (int)lh->num_entries,
+			(int)total_entries);
+	}
+	return 0;
+}
+#endif
 
 /* Split a bucket, rehashing all entries according to the current
 suffix length. Since only one bit is added, existing entries either
@@ -82,8 +134,14 @@ if there are unused entries. */
 static int
 split_bucket(linear_hash_t* lh) {
 
+#ifdef DEBUG_SPLITS
+	if (validate(lh) != 0) {
+		fprintf(stderr, "validation did not complete successfully\n");
+	}
+#endif
+
 	record_ix bucket_being_split = (record_ix)lh->split_pointer;
-	entry_iterator_t iter = {&lh->bucket_alloc, bucket_being_split, -1, {0}, false};
+	entry_iterator_t iter = ITER_BUCKET(lh, bucket_being_split);
 	bucket_entry_t empty_entry = {0, 0};
 
 	/* Increment split pointer now so bucket_for_hash uses new value */
@@ -92,7 +150,7 @@ split_bucket(linear_hash_t* lh) {
 	/* Partition */
 	while(true) {
 		CHECKED(int, entry_iterator_get_next(lh, &iter));
-		if (ret == ITER_COMPLETE) { break; }
+		if (iter.iteration_complete) { break; }
 		bucket_entry_t entry = iter.bucket.entries[iter.entry_ix];
 		/* Skip empty entries */
 		if (entry.record == 0) continue;
@@ -108,13 +166,13 @@ split_bucket(linear_hash_t* lh) {
 	running simultaneously because the head will never write and will
 	never be behind the tail. */
 
-	entry_iterator_t head = {&lh->bucket_alloc, bucket_being_split, -1, {0}, false};
+	entry_iterator_t head = ITER_BUCKET(lh, bucket_being_split);
 	entry_iterator_t tail = head;
 
 	CHECKED(int, entry_iterator_get_next(lh, &tail));
 	while (true) {
 		CHECKED(int, entry_iterator_get_next(lh, &head));
-		if (ret == ITER_COMPLETE) { break; }
+		if (head.iteration_complete) { break; }
 		bucket_entry_t head_entry = head.bucket.entries[head.entry_ix];
 		if (head_entry.record != 0) {
 			bucket_entry_t tail_entry = tail.bucket.entries[tail.entry_ix];
@@ -124,17 +182,15 @@ split_bucket(linear_hash_t* lh) {
 				tail.bucket.entries[tail.entry_ix] = head_entry;
 				tail.dirty = true;
 			}
-			/* Tail can't get ITER_COMPLETE before head does */
 			CHECKED(int, entry_iterator_get_next(lh, &tail));
 		}
 	}
 
 	/* Zero out the remaining entries */
-	while (true) {
+	while (!tail.iteration_complete) {
 		tail.bucket.entries[tail.entry_ix] = empty_entry;
 		tail.dirty = true;
 		CHECKED(int, entry_iterator_get_next(lh, &tail));
-		if (ret == ITER_COMPLETE) { break; }
 	}
 
 	/* Check if we've completed this level. Split pointer was
@@ -146,6 +202,13 @@ split_bucket(linear_hash_t* lh) {
 	}
 
 	lh->num_splits++;
+
+#ifdef DEBUG_SPLITS
+	if (validate(lh) != 0) {
+		fprintf(stderr, "validation did not complete successfully\n");
+	}
+#endif
+
 	return 0;
 }
 
@@ -293,12 +356,14 @@ lh_retrieve_next(lh_iterator_t *iter, void *buffer) {
 	entry_iterator_t *entry_iterator = &iter->entry_iterator;
 	while (true) {
 		CHECKED(int, entry_iterator_get_next(iter->lh, entry_iterator));
-		if (ret == ITER_COMPLETE) {
-			return ITER_COMPLETE;
+		if (entry_iterator->iteration_complete) {
+			iter->iteration_complete = true;
+			return 0;
 		}
 		bucket_entry_t entry = entry_iterator->bucket.entries[entry_iterator->entry_ix];
 		if (entry.record == 0) {
-			return ITER_COMPLETE;
+			iter->iteration_complete = true;
+			return 0;
 		} 
 		if (entry.hash == iter->hash) {
 			CHECKED(record_ix, allocator_retrieve(&iter->lh->data_alloc, entry.record,
