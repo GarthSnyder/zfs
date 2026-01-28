@@ -1,6 +1,6 @@
 *.o
-example*
-example_hash*
-test_allocator*
+example
+example_hash
+test_allocator
 test_linear_hash*
 
