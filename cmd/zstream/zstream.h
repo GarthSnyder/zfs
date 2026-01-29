@@ -19,6 +19,7 @@
  */
 
 #include <stdio.h>
+#include <stddef.h>
 #include <sys/zio_checksum.h>
 #include <sys/zfs_ioctl.h>
 
