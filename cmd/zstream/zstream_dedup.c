@@ -105,7 +105,7 @@ emit_record(dmu_replay_record_t *drr, void *payload, int payload_len,
 {
 	stats->bytes_read += sizeof(dmu_replay_record_t);
 	stats->bytes_read += payload_len;
-	return dump_record(drr, payload, payload_len, zc, outfd)
+	return dump_record(drr, payload, payload_len, zc, outfd);
 }
 
 static bool
@@ -113,10 +113,10 @@ writes_compatible(const drr_write *this, const drr_write *prev) {
 	if (this->drr_type != prev->drr_type
 		|| this->drr_logical_size != prev->drr_logical_size
 		|| this->drr_compressiontype != prev->drr_compressiontype
-		|| this->ddr_compressed_size != prev->drr_compressed_size
-		|| memcmp(this->drr_salt, prev->drr_salt, sizeof(*this->drr_salt))
-		|| memcmp(this->drr_iv, prev->drr_iv, sizeof(*this->drr_iv))
-		|| memcmp(this->drr_mac, prev->drr_mac, sizeof(*this->drr_mac))
+		|| this->drr_compressed_size != prev->drr_compressed_size
+		|| memcmp(this->drr_salt, prev->drr_salt, sizeof(this->drr_salt))
+		|| memcmp(this->drr_iv, prev->drr_iv, sizeof(this->drr_iv))
+		|| memcmp(this->drr_mac, prev->drr_mac, sizeof(this->drr_mac))
 	) {
 		return false;
 	}
@@ -129,15 +129,15 @@ assemble_write_byref(dmu_replay_record_t *byref_drr,
 {
 	memset(byref_drr, 0, sizeof(*byref_drr));
 
-	byref_drr.drr_type = DRR_WRITE_BYREF;
-	byref_drr.drr_payloadlen = 0;
+	byref_drr->drr_type = DRR_WRITE_BYREF;
+	byref_drr->drr_payloadlen = 0;
 
 	drr_write_byref *drrwbr = &byref_drr->drr_u.drr_write_byref;
 	drr_write *thisw = &being_deduped->drr_u.drr_write;
 
-	drrwbr->drr_refguid = prev->drr_write.drr_toguid;
-	drrwbr->drr_refobject = prev->drr_write.drr_object;
-	drrwbr->drr_refoffset = prev->drr_write.drr_offset;
+	drrwbr->drr_refguid = prev->write_block.drr_toguid;
+	drrwbr->drr_refobject = prev->write_block.drr_object;
+	drrwbr->drr_refoffset = prev->write_block.drr_offset;
 
 	drrwbr->drr_object = thisw->drr_object;
 	drrwbr->drr_offset = thisw->drr_offset;
@@ -148,7 +148,7 @@ assemble_write_byref(dmu_replay_record_t *byref_drr,
 	drrwbr->drr_flags = thisw->drr_flags;
 	drrwbr->drr_key = thisw->drr_key;
 
-	memcpy(&drrwbr->drr_checksum, &being_deduped->drr_checkum,
+	memcpy(&drrwbr->drr_checksum, &being_deduped->drr_checksum,
 		sizeof(drrwbr->drr_checksum));
 	memcpy(&drrwbr->drr_key, &thisw->drr_key, sizeof(thisw->drr_key));
 }
@@ -158,7 +158,7 @@ dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
 {
 	lh_iterator_t iter;
 
-	int ret = lh_retrieve_setup(&ddt->linear_hash, BLAKE3_64_BIT(hash), &iter)
+	int ret = lh_retrieve_setup(&ddt->linear_hash, BLAKE3_64_BIT(hash), &iter);
 	if (ret < 0) {
 		fprintf(stderr, "Unable to initiate read from dedup table, aborting...\n");
 		exit(1);
@@ -184,14 +184,6 @@ dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
 	return false;
 }
 
-typedef struct dedup_entry {
-	ddr_write		write_block;
-	zio_cksum_t		checksum;  
-	blake3_hash_t	hash;
-	uint64_t		payload_length;
-} dedup_entry_t;
-
-
 void
 dedup_table_insert(linear_hash_t *ddt, blake3_hash_t hash, 
 	dmu_replay_record_t *drr)
@@ -205,7 +197,7 @@ dedup_table_insert(linear_hash_t *ddt, blake3_hash_t hash,
 		sizeof(dedup.checksum));
 	dedup.payload_length = drr->drr_payloadlen;
 
-	if (lh_insert(ddt->lh, BLAKE3_64_BIT(hash), &dedup) < 0) {
+	if (lh_insert(ddt, BLAKE3_64_BIT(hash), &dedup) < 0) {
 		fprintf(stderr, "Error writing to dedup hash table, aborting...\n");
 		exit(1);
 	}
@@ -243,7 +235,7 @@ process_write_record(const dmu_replay_record_t *drr, const void *payload,
 		}
 
 		dmu_replay_record_t byref_drr;
-		assemble_write_byref(&byref_drr, drrw, &existing);
+		assemble_write_byref(&byref_drr, drr, &existing);
 
 		stats->dedup_records++;
 		stats->bytes_saved += payload_length;
@@ -253,7 +245,7 @@ process_write_record(const dmu_replay_record_t *drr, const void *payload,
 	} else {
 		/* First occurrence, insert into table and write as-is */
 		dedup_table_insert(ddt, blake3_hash, drr);
-		return emit_record(drr, payload, payload_size, stream_cksum, outfd, stats);
+		return emit_record(drr, payload, payload_length, stream_cksum, outfd, stats);
 	}
 }
 
@@ -261,7 +253,7 @@ process_write_record(const dmu_replay_record_t *drr, const void *payload,
  * Deduplicate a ZFS stream.
  */
 static void
-zfs_dedup_stream(int infd, int output, linear_hash_t *ddt, bool verbose)
+zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 {
 	int bufsz = SPA_MAXBLOCKSIZE;
 	dmu_replay_record_t thedrr;
@@ -278,7 +270,7 @@ zfs_dedup_stream(int infd, int output, linear_hash_t *ddt, bool verbose)
 	char *buf = safe_calloc(bufsz);
 	FILE *input = fdopen(infd, "r");
 	if (input == NULL) {
-		fprintf("Unable to open input file, aborting...\n");
+		fprintf(stderr, "Unable to open input file, aborting...\n");
 		exit(1);
 	}
 
@@ -310,7 +302,7 @@ zfs_dedup_stream(int infd, int output, linear_hash_t *ddt, bool verbose)
 			if (fflags & DMU_BACKUP_FEATURE_DEDUP) {
 				fprintf(stderr, "Input stream is already deduplicated.\n"
 					"To re-deduplicate, pipe through zstream redup first.\n");
-				return (1);
+				exit(1);
 			}
 			fflags |= DMU_BACKUP_FEATURE_DEDUP;
 			/* cppcheck-suppress syntaxError */
@@ -381,7 +373,7 @@ zfs_dedup_stream(int infd, int output, linear_hash_t *ddt, bool verbose)
 			VERIFY3S(begin, ==, 1);
 			payload_size = DRR_SPILL_PAYLOAD_SIZE(drrs);
 			(void) sfread(buf, payload_size, input);
-			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd) != 0) {
+			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd, &stats) != 0) {
 				goto error;
 			}
 			break;
@@ -394,7 +386,7 @@ zfs_dedup_stream(int infd, int output, linear_hash_t *ddt, bool verbose)
 			payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
 			(void) sfread(buf, payload_size, input);
 
-			if (process_write_record(&drr->drr_u.drr_write, buf, ddt, &stats,
+			if (process_write_record(drr, buf, ddt, &stats,
 			    &stream_cksum, outfd) != 0)
 				goto error;
 			break;
@@ -407,7 +399,7 @@ zfs_dedup_stream(int infd, int output, linear_hash_t *ddt, bool verbose)
 			VERIFY3S(begin, ==, 1);
 			payload_size = P2ROUNDUP((uint64_t)drrwe->drr_psize, 8);
 			(void) sfread(buf, payload_size, input);
-			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd) != 0) {
+			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd, &stats) != 0) {
 				goto error;
 			}
 			break;
@@ -529,10 +521,10 @@ zstream_do_dedup(int argc, char *argv[])
 	/* If a filename is provided, open it; otherwise use stdin */
 	if (argc == 1) {
 		const char *filename = argv[0];
-		input = open(filename, "r");
+		input = open(filename, O_RDONLY);
 		if (input < 0) {
 			(void) fprintf(stderr, "Error while opening file '%s': %s\n",
-			    filename, perror(errno));
+			    filename, strerror(errno));
 			exit(1);
 		}
 	} else if (isatty(STDIN_FILENO)) {
@@ -541,13 +533,13 @@ zstream_do_dedup(int argc, char *argv[])
 		    "You must name a file or accept input from a pipe.\n");
 		exit(1);
 	} else {
-		input = stdin;
+		input = STDIN_FILENO;
 	}
 
 	/* Calculate maximum memory for dedup table */
 	uint64_t max_memory;
 #ifdef _ILP32
-	max_memory = SMALLEST_POSSIBLE_DEDUP_MB << 20;
+	max_memory = SMALLEST_REASONABLE_DEDUP_MB << 20;
 #else
 	uint64_t physbytes = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
 	max_memory = MAX((physbytes * mem_percent) / 100,
@@ -555,7 +547,7 @@ zstream_do_dedup(int argc, char *argv[])
 #endif
 
 	linear_hash_t dedup_table;
-	if (lh_init(&dedup_table, sizeof(dedup_entry), max_memory) < 0) {
+	if (lh_init(&dedup_table, sizeof(dedup_entry_t), max_memory) < 0) {
 		fprintf(stderr, "Unable to initialize dedup hash table, aborting...\n");
 		exit(1);
 	}
