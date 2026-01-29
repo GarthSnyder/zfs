@@ -38,6 +38,7 @@
 #include <sys/zio_checksum.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
+#include "zstream_shared.h"
 
 void *
 safe_malloc(size_t size)
