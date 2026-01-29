@@ -104,7 +104,7 @@ spread(int fd, void *buf, size_t count, off_t offset)
 	}
 }
 
-static int
+int
 dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
     zio_cksum_t *zc, int outfd)
 {
