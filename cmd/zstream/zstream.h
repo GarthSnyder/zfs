@@ -18,11 +18,6 @@
  * Copyright (c) 2020 by Delphix. All rights reserved.
  */
 
-#include <stdio.h>
-#include <stddef.h>
-#include <sys/zio_checksum.h>
-#include <sys/zfs_ioctl.h>
-
 #ifndef	_ZSTREAM_H
 #define	_ZSTREAM_H
 
@@ -30,9 +25,6 @@
 extern "C" {
 #endif
 
-extern void *safe_calloc(size_t n);
-extern int sfread(void *buf, size_t size, FILE *fp);
-extern void *safe_malloc(size_t size);
 extern int zstream_do_redup(int, char *[]);
 extern int zstream_do_dedup(int, char *[]);
 extern int zstream_do_dump(int, char *[]);
@@ -40,11 +32,6 @@ extern int zstream_do_decompress(int argc, char *argv[]);
 extern int zstream_do_recompress(int argc, char *argv[]);
 extern int zstream_do_token(int, char *[]);
 extern void zstream_usage(void);
-
-extern void *safe_calloc(size_t n);
-extern int sfread(void *buf, size_t size, FILE *fp);
-extern int dump_record(dmu_replay_record_t *drr, void *payload, 
-  int payload_len, zio_cksum_t *zc, int outfd);
 
 #ifdef	__cplusplus
 }

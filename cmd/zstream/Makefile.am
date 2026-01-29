@@ -13,8 +13,12 @@ zstream_SOURCES = \
 	%D%/zstream_recompress.c \
 	%D%/zstream_redup.c \
 	%D%/zstream_token.c \
+	%D%/zstream_shared.c \
+	%D%/zstream_shared.h \
 	%D%/allocator.c \
-	%D%/linear_hash.c
+	%D%/allocator.h \
+	%D%/linear_hash.c \
+	%D%/linear_hash.h
 
 zstream_LDADD = \
 	libzfs.la \
