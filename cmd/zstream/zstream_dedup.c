@@ -45,7 +45,7 @@
 
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
-typealias uint8_t blake3_hash_t[BLAKE3_OUT_LEN];
+typedef uint8_t blake3_hash_t[BLAKE3_OUT_LEN];
 
 typedef struct dedup_entry {
 	ddr_write		write_block;
