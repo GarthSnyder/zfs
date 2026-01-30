@@ -54,7 +54,7 @@ write_zeros(FILE *fp, size_t count)
     return (count);
 }
 
-int
+static int
 common_init(allocator_t *alloc, size_t record_size, size_t max_memory, FILE *file) 
 {
     if (record_size == 0) { return -1; }
@@ -113,7 +113,7 @@ allocator_init_convertible(allocator_t *alloc, size_t record_size,
     return common_init(alloc, record_size, max_memory, file);
 }
 
-void
+static void
 free_memory(allocator_t *alloc) {
 #ifdef PLATFORM_WINDOWS
     if (alloc->base_addr) {
