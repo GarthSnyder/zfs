@@ -8,14 +8,13 @@
 
 #define MAX_OCCUPANCY 0.75
 #define INITIAL_HASH_SUFFIX_LENGTH 2
-#define DEBUG
 
 #define CHECKED(type, expr) \
 	type ret = expr; \
 	if (ret < 0) { return ret; } 
 
 #define ITER_BUCKET(lh, bucket) \
-	{&lh->bucket_alloc, bucket, -1, {0}, false, false}
+	{&lh->bucket_alloc, bucket, -1, {{{0}}}, false, false}
 
 /*
 Calculate bucket for a given hash value.
@@ -120,7 +119,7 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 
 #ifdef DEBUG
 #define MAX_CHAIN 1024
-int
+static int
 validate(linear_hash_t *lh, bool print_stats) {
 	uint64_t total_entries = 0;
 	uint64_t chain_lengths[MAX_CHAIN] = {0};
@@ -129,8 +128,8 @@ validate(linear_hash_t *lh, bool print_stats) {
 	uint64_t empties[MAX_CHAIN] = {0};
 	bool print_hash = false;
 	if (print_hash) {
-		fprintf(stderr, "Linear hash dump, split pointer at %llu:\n",
-			lh->split_pointer);
+		fprintf(stderr, "Linear hash dump, split pointer at %lu:\n",
+			(uint64_t)lh->split_pointer);
 	}
 	for (uint64_t i = 0; i < lh->bucket_alloc.count; i++) {
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
@@ -142,8 +141,8 @@ validate(linear_hash_t *lh, bool print_stats) {
 			bucket_entry_t entry = iter.bucket.entries[iter.entry_ix];
 			if (entry.record) {
 				if (saw_empty_entry) {
-					fprintf(stderr, "validate: bucket %llu has "
-						"uncompacted entries.\nEntry %llu is the "
+					fprintf(stderr, "validate: bucket %lu has "
+						"uncompacted entries.\nEntry %lu is the "
 						"first after an empty entry.\n", i, 
 						iter.entry_ix);
 				}
@@ -163,18 +162,18 @@ validate(linear_hash_t *lh, bool print_stats) {
 			? full_entries : max_occupancy[chain_length];
 		total_entries += full_entries;
 		if (print_hash) {
-			fprintf(stderr, "    Bucket %llu: %llu blocks, %llu full, %llu empty\n",
+			fprintf(stderr, "    Bucket %lu: %lu blocks, %lu full, %lu empty\n",
 				i, (full_entries + empty_entries) / ENTRIES_PER_BUCKET,
 				full_entries, empty_entries);
 		}
 	}
 	if (total_entries != lh->num_entries) {
-		fprintf(stderr, "validate: linear hash is supposed to have %llu "
-			"entries, but actually has %llu.\n", lh->num_entries,
+		fprintf(stderr, "validate: linear hash is supposed to have %lu "
+			"entries, but actually has %lu.\n", lh->num_entries,
 			total_entries);
 	}
 	if (print_stats) {
-		fprintf(stderr, "%llu entries in %llu buckets:\n", total_entries,
+		fprintf(stderr, "%lu entries in %lu buckets:\n", total_entries,
 			lh->bucket_alloc.count);
 		for (uint64_t i = 0; i < MAX_CHAIN; i++) {
 			if (chain_lengths[i]) {
@@ -183,7 +182,7 @@ validate(linear_hash_t *lh, bool print_stats) {
 					(chain_lengths[i] - empties[i]);
 				double avg_occupancies = (double)avg_full / entries_per_chain;
 				double max_occ = (double)max_occupancy[i] / entries_per_chain;
-				fprintf(stderr, "    %llu bucket chains of length %llu, ",
+				fprintf(stderr, "    %lu bucket chains of length %lu, ",
 					chain_lengths[i], i);
 				if (empties[i] == chain_lengths[i]) {
 					fprintf(stderr, "all empty\n");
@@ -191,7 +190,7 @@ validate(linear_hash_t *lh, bool print_stats) {
 					if (!empties[i]) {
 						fprintf(stderr, "none empty, ");
 					} else {
-						fprintf(stderr, "%llu empty, ", empties[i]);
+						fprintf(stderr, "%lu empty, ", empties[i]);
 					}
 					fprintf(stderr, "nonempty occupancy avg %.0f%%, max %.0f%%\n", 
 						avg_occupancies * 100, max_occ * 100);
