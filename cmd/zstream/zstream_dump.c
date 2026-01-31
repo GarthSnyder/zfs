@@ -225,6 +225,10 @@ zstream_do_dump(int argc, char *argv[])
 	boolean_t verbose = B_FALSE;
 	boolean_t very_verbose = B_FALSE;
 	boolean_t first = B_TRUE;
+	boolean_t show_offsets = B_FALSE;
+	uint64_t stream_offset = 0;
+	char offset_str[256];
+
 	/*
 	 * dump flag controls whether the contents of any modified data blocks
 	 * are printed to the console during processing of the stream. Warning:
@@ -234,8 +238,9 @@ zstream_do_dump(int argc, char *argv[])
 	int err;
 	zio_cksum_t zc = { { 0 } };
 	zio_cksum_t pcksum = { { 0 } };
+	offset_str[0] = 0;
 
-	while ((c = getopt(argc, argv, ":vCd")) != -1) {
+	while ((c = getopt(argc, argv, ":ovCd")) != -1) {
 		switch (c) {
 		case 'C':
 			do_cksum = B_FALSE;
@@ -249,6 +254,9 @@ zstream_do_dump(int argc, char *argv[])
 			dump = B_TRUE;
 			verbose = B_TRUE;
 			very_verbose = B_TRUE;
+			break;
+		case 'o':
+			show_offsets = B_TRUE;
 			break;
 		case ':':
 			(void) fprintf(stderr,
@@ -337,6 +345,11 @@ zstream_do_dump(int argc, char *argv[])
 		total_overhead_size += sizeof (*drr);
 		total_records++;
 		payload_size = 0;
+		if (show_offsets) {
+			snprintf(offset_str, sizeof(offset_str), "(offset = %lu) ", 
+				stream_offset);
+		}
+
 
 		switch (drr->drr_type) {
 		case DRR_BEGIN:
@@ -353,7 +366,7 @@ zstream_do_dump(int argc, char *argv[])
 				    BSWAP_64(drrb->drr_fromguid);
 			}
 
-			(void) printf("BEGIN record\n");
+			(void) printf("BEGIN record%s\n", offset_str);
 			(void) printf("\thdrtype = %lld\n",
 			    DMU_GET_STREAM_HDRTYPE(drrb->drr_versioninfo));
 			(void) printf("\tfeatures = %llx\n",
@@ -412,8 +425,7 @@ zstream_do_dump(int argc, char *argv[])
 			 * value, because the stored checksum is of
 			 * everything before the DRR_END record.
 			 */
-			if (do_cksum && !ZIO_CHECKSUM_EQUAL(drre->drr_checksum,
-			    pcksum)) {
+			if (do_cksum && !ZIO_CHECKSUM_EQUAL(drre->drr_checksum, pcksum)) {
 				(void) printf("Expected checksum differs from "
 				    "checksum in stream.\n");
 				(void) printf("Expected checksum = "
@@ -423,7 +435,8 @@ zstream_do_dump(int argc, char *argv[])
 				    (long long unsigned int)pcksum.zc_word[2],
 				    (long long unsigned int)pcksum.zc_word[3]);
 			}
-			(void) printf("END checksum = %llx/%llx/%llx/%llx\n",
+			(void) printf("END %schecksum = %llx / %llx / %llx / %llx\n",
+				offset_str,
 			    (long long unsigned int)
 			    drre->drr_checksum.zc_word[0],
 			    (long long unsigned int)
@@ -431,7 +444,7 @@ zstream_do_dump(int argc, char *argv[])
 			    (long long unsigned int)
 			    drre->drr_checksum.zc_word[2],
 			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[3]);
+			    drre->drr_checksum.zc_word[3]);	
 			(void) printf("    toguid = %lx\n", drre->drr_toguid);
 
 			ZIO_SET_CHECKSUM(&zc, 0, 0, 0, 0);
@@ -457,7 +470,8 @@ zstream_do_dump(int argc, char *argv[])
 			    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 
 			if (featureflags & DMU_BACKUP_FEATURE_RAW &&
-			    drro->drr_bonuslen > drro->drr_raw_bonuslen) {
+			    drro->drr_bonuslen > drro->drr_raw_bonuslen) 
+			{
 				(void) fprintf(stderr,
 				    "Warning: Object %llu has bonuslen = "
 				    "%u > raw_bonuslen = %u\n\n",
@@ -468,12 +482,13 @@ zstream_do_dump(int argc, char *argv[])
 			payload_size = DRR_OBJECT_PAYLOAD_SIZE(drro);
 
 			if (verbose) {
-				(void) printf("OBJECT object = %llu type = %u "
+				(void) printf("OBJECT %sobject = %llu type = %u "
 				    "bonustype = %u blksz = %u bonuslen = %u "
 				    "dn_slots = %u raw_bonuslen = %u "
 				    "flags = %u maxblkid = %llu "
 				    "indblkshift = %u nlevels = %u "
 				    "nblkptr = %u\n",
+				    offset_str,
 				    (u_longlong_t)drro->drr_object,
 				    drro->drr_type,
 				    drro->drr_bonustype,
@@ -503,8 +518,8 @@ zstream_do_dump(int argc, char *argv[])
 				drrfo->drr_toguid = BSWAP_64(drrfo->drr_toguid);
 			}
 			if (verbose) {
-				(void) printf("FREEOBJECTS firstobj = %llu "
-				    "numobjs = %llu\n",
+				(void) printf("FREEOBJECTS %sfirstobj = %llu "
+				    "numobjs = %llu\n", offset_str,
 				    (u_longlong_t)drrfo->drr_firstobj,
 				    (u_longlong_t)drrfo->drr_numobjs);
 			}
@@ -538,13 +553,14 @@ zstream_do_dump(int argc, char *argv[])
 				sprintf_bytes(mac, drrw->drr_mac,
 				    ZIO_DATA_MAC_LEN);
 
-				(void) printf("WRITE object = %llu type = %u "
+				(void) printf("WRITE %sobject = %llu type = %u "
 				    "checksum type = %u compression type = %u "
 				    "flags = %u offset = %llu "
 				    "logical_size = %llu "
 				    "compressed_size = %llu "
 				    "payload_size = %llu props = %llx "
 				    "salt = %s iv = %s mac = %s\n",
+				    offset_str,
 				    (u_longlong_t)drrw->drr_object,
 				    drrw->drr_type,
 				    drrw->drr_checksumtype,
@@ -592,11 +608,12 @@ zstream_do_dump(int argc, char *argv[])
 				    BSWAP_64(drrwbr->drr_key.ddk_prop);
 			}
 			if (verbose) {
-				(void) printf("WRITE_BYREF object = %llu "
+				(void) printf("WRITE_BYREF %sobject = %llu "
 				    "checksum type = %u props = %llx "
 				    "offset = %llu length = %llu "
 				    "toguid = %llx refguid = %llx "
 				    "refobject = %llu refoffset = %llu\n",
+				    offset_str,
 				    (u_longlong_t)drrwbr->drr_object,
 				    drrwbr->drr_checksumtype,
 				    (u_longlong_t)drrwbr->drr_key.ddk_prop,
@@ -616,8 +633,9 @@ zstream_do_dump(int argc, char *argv[])
 				drrf->drr_length = BSWAP_64(drrf->drr_length);
 			}
 			if (verbose) {
-				(void) printf("FREE object = %llu "
+				(void) printf("FREE %sobject = %llu "
 				    "offset = %llu length = %lld\n",
+				    offset_str,
 				    (u_longlong_t)drrf->drr_object,
 				    (u_longlong_t)drrf->drr_offset,
 				    (longlong_t)drrf->drr_length);
@@ -642,12 +660,13 @@ zstream_do_dump(int argc, char *argv[])
 				sprintf_bytes(mac, drrs->drr_mac,
 				    ZIO_DATA_MAC_LEN);
 
-				(void) printf("SPILL block for object = %llu "
+				(void) printf("SPILL block %sfor object = %llu "
 				    "length = %llu flags = %u "
 				    "compression type = %u "
 				    "compressed_size = %llu "
 				    "payload_size = %llu "
 				    "salt = %s iv = %s mac = %s\n",
+				    offset_str,
 				    (u_longlong_t)drrs->drr_object,
 				    (u_longlong_t)drrs->drr_length,
 				    drrs->drr_flags,
@@ -679,10 +698,11 @@ zstream_do_dump(int argc, char *argv[])
 				    BSWAP_32(drrwe->drr_psize);
 			}
 			if (verbose) {
-				(void) printf("WRITE_EMBEDDED object = %llu "
+				(void) printf("WRITE_EMBEDDED %sobject = %llu "
 				    "offset = %llu length = %llu "
 				    "toguid = %llx comp = %u etype = %u "
 				    "lsize = %u psize = %u\n",
+				    offset_str,
 				    (u_longlong_t)drrwe->drr_object,
 				    (u_longlong_t)drrwe->drr_offset,
 				    (u_longlong_t)drrwe->drr_length,
@@ -692,11 +712,9 @@ zstream_do_dump(int argc, char *argv[])
 				    drrwe->drr_lsize,
 				    drrwe->drr_psize);
 			}
-			(void) ssread(buf,
-			    P2ROUNDUP(drrwe->drr_psize, 8), &zc);
+			(void) ssread(buf, P2ROUNDUP(drrwe->drr_psize, 8), &zc);
 			if (dump) {
-				print_block(buf,
-				    P2ROUNDUP(drrwe->drr_psize, 8));
+				print_block(buf, P2ROUNDUP(drrwe->drr_psize, 8));
 			}
 			payload_size = P2ROUNDUP(drrwe->drr_psize, 8);
 			break;
@@ -716,9 +734,10 @@ zstream_do_dump(int argc, char *argv[])
 				sprintf_bytes(mac, drror->drr_mac,
 				    ZIO_DATA_MAC_LEN);
 
-				(void) printf("OBJECT_RANGE firstobj = %llu "
+				(void) printf("OBJECT_RANGE %sfirstobj = %llu "
 				    "numslots = %llu flags = %u "
 				    "salt = %s iv = %s mac = %s\n",
+				    offset_str,
 				    (u_longlong_t)drror->drr_firstobj,
 				    (u_longlong_t)drror->drr_numslots,
 				    drror->drr_flags,
@@ -735,8 +754,9 @@ zstream_do_dump(int argc, char *argv[])
 				drrr->drr_toguid = BSWAP_64(drrr->drr_toguid);
 			}
 			if (verbose) {
-				(void) printf("REDACT object = %llu offset = "
+				(void) printf("REDACT %sobject = %llu offset = "
 				    "%llu length = %llu\n",
+				    offset_str,
 				    (u_longlong_t)drrr->drr_object,
 				    (u_longlong_t)drrr->drr_offset,
 				    (u_longlong_t)drrr->drr_length);
@@ -756,6 +776,7 @@ zstream_do_dump(int argc, char *argv[])
 		pcksum = zc;
 		drr_byte_count[drr->drr_type] += payload_size;
 		total_payload_size += payload_size;
+		stream_offset += sizeof(*drr) + payload_size;
 	}
 	free(buf);
 	fletcher_4_fini();
