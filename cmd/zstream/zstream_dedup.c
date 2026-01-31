@@ -42,7 +42,7 @@
 
 #define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
 #define SMALLEST_REASONABLE_DEDUP_MB	128
-#define	STATUS_UPDATE_INTERVAL			(5 * 1000000000ULL)
+#define	STATUS_UPDATE_INTERVAL			(5ULL * NANOSEC)
 
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
@@ -92,8 +92,9 @@ print_status(dedup_stats_t *stats, boolean_t force)
 		saved_pct = 0.0;
 	}
 
-	fprintf(stderr, "\rBlocks: %llu write, %llu dedup | "
-	    "Size: %sB read / %sB saved (%.1f%%)    \n",
+	fprintf(stderr, "\r%lu total blocks, %llu writes, %llu deduped | "
+	    "%sB read / %sB saved (%.1f%%)    \n",
+	    stats->total_records,
 	    (unsigned long long)stats->write_records,
 	    (unsigned long long)stats->dedup_records,
 	    bytes_read_str, bytes_saved_str, saved_pct);
@@ -449,6 +450,10 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 		fprintf(stderr,
 		    "Deduplicated %llu blocks, using %sB memory.\n",
 		    (unsigned long long)stats.dedup_records, mem_str);
+		if (stats.disqualified_records) {
+			fprintf(stderr, "%lu write records were exempt from deduplication\n",
+				stats.disqualified_records);
+		}
 	}
 
 	free(buf);
