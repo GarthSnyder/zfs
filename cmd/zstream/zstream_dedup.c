@@ -281,13 +281,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 	while (sfread(drr, sizeof (*drr), input) != 0) {
 		stats.total_records++;
 
-		/*
-		 * We need to regenerate the checksum.
-		 */
-		if (drr->drr_type != DRR_BEGIN) {
-			memset(&drr->drr_u.drr_checksum.drr_checksum, 0,
-			    sizeof (drr->drr_u.drr_checksum.drr_checksum));
-		}
+		ZIO_SET_CHECKSUM(&drr->drr_u.drr_checksum.drr_checksum, 0, 0, 0, 0);
 
 		uint64_t payload_size = 0;
 		switch (drr->drr_type) {
@@ -555,7 +549,9 @@ zstream_do_dedup(int argc, char *argv[])
 		fprintf(stderr, "Unable to initialize dedup hash table, aborting...\n");
 		exit(1);
 	}
+	fletcher_4_init();
 	zfs_dedup_stream(input, STDOUT_FILENO, &dedup_table, verbose);
+	fletcher_4_fini();
 	return 0;
 }
 
