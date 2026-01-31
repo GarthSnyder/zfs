@@ -102,15 +102,6 @@ print_status(dedup_stats_t *stats, boolean_t force)
 	stats->last_status_time = now;
 }
 
-static int
-emit_record(dmu_replay_record_t *drr, void *payload, int payload_len,
-    zio_cksum_t *zc, int outfd, dedup_stats_t *stats)
-{
-	stats->bytes_read += sizeof(dmu_replay_record_t);
-	stats->bytes_read += payload_len;
-	return dump_record(drr, payload, payload_len, zc, outfd);
-}
-
 static bool
 writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 	if (this->drr_type != prev->drr_type
@@ -221,8 +212,7 @@ process_write_record(dmu_replay_record_t *drr, void *payload,
 	BLAKE3_CTX blake3_ctx;
 	dedup_entry_t existing;
 
-	stats->write_records++;
-	stats->bytes_read += payload_length;
+	stats->write_records++; /* Payload is accounted for in main loop */
 
 	/* Compute Blake3 hash of the payload */
 	Blake3_Init(&blake3_ctx);
@@ -234,8 +224,8 @@ process_write_record(dmu_replay_record_t *drr, void *payload,
 
 		if (!writes_compatible(drrw, &existing.write_block)) {
 			stats->disqualified_records++;
-			return emit_record(drr, payload, payload_length, 
-				stream_cksum, outfd, stats);
+			return dump_record(drr, payload, payload_length, 
+				stream_cksum, outfd);
 		}
 
 		dmu_replay_record_t byref_drr;
@@ -244,12 +234,12 @@ process_write_record(dmu_replay_record_t *drr, void *payload,
 		stats->dedup_records++;
 		stats->bytes_saved += payload_length;
 
-		return emit_record(&byref_drr, NULL, 0, stream_cksum, outfd, stats);
+		return dump_record(&byref_drr, NULL, 0, stream_cksum, outfd);
 
 	} else {
 		/* First occurrence, insert into table and write as-is */
 		dedup_table_insert(ddt, blake3_hash, drr);
-		return emit_record(drr, payload, payload_length, stream_cksum, outfd, stats);
+		return dump_record(drr, payload, payload_length, stream_cksum, outfd);
 	}
 }
 
@@ -278,8 +268,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 		exit(1);
 	}
 
-	while (sfread(drr, sizeof (*drr), input) != 0) {
-		stats.total_records++;
+	while (sfread(drr, sizeof (*drr), input) == 1) {
 
 		ZIO_SET_CHECKSUM(&drr->drr_u.drr_checksum.drr_checksum, 0, 0, 0, 0);
 
@@ -319,9 +308,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 				(void) sfread(buf, sz, input);
 			}
 			payload_size = sz;
-			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd, 
-				&stats) != 0)
-			{
+			if (dump_record(drr, buf, payload_size, &stream_cksum, outfd) != 0) {
 				goto error;
 			}
 			break;
@@ -339,7 +326,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 			 */
 			if (!ZIO_CHECKSUM_IS_ZERO(&drre->drr_checksum))
 				drre->drr_checksum = stream_cksum;
-			if (emit_record(drr, NULL, 0, &stream_cksum, outfd, &stats) != 0) {
+			if (dump_record(drr, NULL, 0, &stream_cksum, outfd) != 0) {
 				goto error;
 			}
 			if (begin == 0) {
@@ -357,9 +344,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 				payload_size = DRR_OBJECT_PAYLOAD_SIZE(drro);
 				(void) sfread(buf, payload_size, input);
 			}
-			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd, 
-				&stats) != 0)
-			{
+			if (dump_record(drr, buf, payload_size, &stream_cksum, outfd) != 0) {
 				goto error;
 			}
 			break;
@@ -371,7 +356,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 			VERIFY3S(begin, ==, 1);
 			payload_size = DRR_SPILL_PAYLOAD_SIZE(drrs);
 			(void) sfread(buf, payload_size, input);
-			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd, &stats) != 0) {
+			if (dump_record(drr, buf, payload_size, &stream_cksum, outfd) != 0) {
 				goto error;
 			}
 			break;
@@ -397,7 +382,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 			VERIFY3S(begin, ==, 1);
 			payload_size = P2ROUNDUP((uint64_t)drrwe->drr_psize, 8);
 			(void) sfread(buf, payload_size, input);
-			if (emit_record(drr, buf, payload_size, &stream_cksum, outfd, &stats) != 0) {
+			if (dump_record(drr, buf, payload_size, &stream_cksum, outfd) != 0) {
 				goto error;
 			}
 			break;
@@ -410,7 +395,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 			 * reference.
 			 */
 			VERIFY3S(begin, ==, 1);
-			if (emit_record(drr, NULL, 0, &stream_cksum, outfd, &stats) != 0) {
+			if (dump_record(drr, NULL, 0, &stream_cksum, outfd) != 0) {
 				goto error;
 			}
 			break;
@@ -419,7 +404,7 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 		case DRR_FREE:
 		case DRR_OBJECT_RANGE:
 			VERIFY3S(begin, ==, 1);
-			if (emit_record(drr, NULL, 0, &stream_cksum, outfd, &stats) != 0) {
+			if (dump_record(drr, NULL, 0, &stream_cksum, outfd) != 0) {
 				goto error;
 			}
 			break;
@@ -439,6 +424,14 @@ zfs_dedup_stream(int infd, int outfd, linear_hash_t *ddt, bool verbose)
 			    strerror(errno));
 			exit(1);
 		}
+
+		if (verbose) {
+			print_status(&stats, false);
+		}
+
+		stats.bytes_read += sizeof(*drr);
+		stats.bytes_read += payload_size;
+		stats.total_records++;
 	}
 
 	if (verbose) {
