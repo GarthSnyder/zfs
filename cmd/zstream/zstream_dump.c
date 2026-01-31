@@ -432,6 +432,7 @@ zstream_do_dump(int argc, char *argv[])
 			    drre->drr_checksum.zc_word[2],
 			    (long long unsigned int)
 			    drre->drr_checksum.zc_word[3]);
+			(void) printf("    toguid = %lx\n", drre->drr_toguid);
 
 			ZIO_SET_CHECKSUM(&zc, 0, 0, 0, 0);
 			break;

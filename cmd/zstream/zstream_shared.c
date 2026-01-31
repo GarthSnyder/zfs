@@ -80,6 +80,38 @@ sfread(void *buf, size_t size, FILE *fp)
 	return (rv);
 }
 
+/*
+ * DRR_BEGIN records do not have record checksums, but DRR_END
+ * records generally do. However, there are two cases in which the
+ * record-level checksum is not filled out:
+ *
+ *   1) The END record that immediately follows a BEGIN record
+ *      with a header type of DMU_COMPOUNDSTREAM
+ *
+ *   2) The final END record of a stream, which immediately 
+ *      follows another END record.
+ *
+ * DRR_END records have two checksums that are distinct:
+ *
+ *   drr->drr_u.drr_end.drr_checksum
+ *   drr->drr_u.drr_checksum.drr_checksum
+ *
+ * The former is the in-record checksum of the stream, which is
+ * always filled out. The latter is the record checksum that is
+ * common to every record type.
+ *
+ * zfs receive does not validate the record checksum of an END
+ * record that fits into the two categories above, so it normally 
+ * doesn't matter whether the checksum is there or not. However,
+ * null zstream transformations should be idempotent. A zstream
+ * redup that does not redup anything or a zstream recompress
+ * that does not change actual compression should yield a stream
+ * that is bit-for-bit identical to the original stream.
+ *
+ * DRR_END records that don't need a checksum can be identified
+ * by their toguid of 0.
+ */
+
 int
 dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
     zio_cksum_t *zc, int outfd)
@@ -88,9 +120,10 @@ dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
 	    == sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
 	fletcher_4_incremental_native(drr,
 	    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), zc);
-	if (drr->drr_type != DRR_BEGIN) {
-		assert(ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.
-		    drr_checksum.drr_checksum));
+	assert(ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum));
+	boolean_t skip_checksum = (drr->drr_type == DRR_BEGIN) ||
+		((drr->drr_type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
+	if (!skip_checksum) {
 		drr->drr_u.drr_checksum.drr_checksum = *zc;
 	}
 	fletcher_4_incremental_native(&drr->drr_u.drr_checksum.drr_checksum,
