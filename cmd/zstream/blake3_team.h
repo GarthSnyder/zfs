@@ -63,7 +63,7 @@ typedef struct b3_uniqueue {
 	cnd_t			completed;
 	cnd_t			dequeued;
 	mtx_t			mutex;
-	uint64_t		bytes_outstanding;
+	uint64_t		bytes_pending;
 	boolean_t		terminate;
 } b3_uniqueue_t;
 

@@ -57,7 +57,7 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 
 	mtx_lock(&q->mutex);
 	while (true) {
-		uint64_t fair_share = q->bytes_outstanding / team->num_threads;
+		uint64_t fair_share = q->bytes_pending / team->num_threads;
 		if (fair_share > B3_TEAM_MIN_BATCH_SIZE) {
 			target_bytes = fair_share;
 		}
@@ -72,7 +72,7 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 			q->claim++;
 			if (units[count].needs_blake3) {
 				bytes_claimed += units[count].payload_size;
-				q->bytes_outstanding -= units[count].payload_size;
+				q->bytes_pending -= units[count].payload_size;
 			} else {
 				junk_load = B_TRUE;
 			}
