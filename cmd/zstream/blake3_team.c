@@ -33,6 +33,7 @@
 
 #define MIN_THREADS 6
 #define QUEUE_SIZE B3_TEAM_QUEUE_SIZE
+#define MAX_BATCH 16
 
 
 /*
@@ -53,7 +54,7 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 	uint64_t 		bytes_claimed = 0;
 	uint64_t 		count = 0;
 	uint64_t		target_bytes = B3_TEAM_MIN_BATCH_SIZE;
-	boolean_t		junk_load = B_FALSE;
+	boolean_t		junk_batch = B_FALSE;
 
 	mtx_lock(&q->mutex);
 	while (true) {
@@ -62,10 +63,10 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 			target_bytes = fair_share;
 		}
 		/* Take all the no-work entries */
-		while (q->claim < q->insert && count < max_units
-			&& bytes_claimed < target_bytes)
+		while (q->claim < q->insert && count < max_units &&
+			bytes_claimed < target_bytes)
 		{
-			if (junk_load && q->slots[q->claim % QUEUE_SIZE].needs_blake3) {
+			if (junk_batch && q->slots[q->claim % QUEUE_SIZE].needs_blake3) {
 				break;
 			}
 			units[count] = &q->slots[q->claim % QUEUE_SIZE];
@@ -74,7 +75,7 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 				bytes_claimed += units[count]->payload_size;
 				q->bytes_pending -= units[count]->payload_size;
 			} else {
-				junk_load = B_TRUE;
+				junk_batch = B_TRUE;
 			}
 			count++;
 		}
@@ -83,9 +84,10 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 			mtx_unlock(&q->mutex);
 			return count;
 		} else {
-		cnd_wait(&q->inserted);
-		if (q->terminate) {
-			thrd_exit(0);
+			cnd_wait(&q->inserted, &q->mutex);
+			if (q->terminate) {
+				thrd_exit(0);
+			}
 		}
 	}
 }
@@ -94,12 +96,12 @@ static int
 worker_thread(void *team_in)
 {
 	blake3_team_t 		*team = (blake3_team_t *)team_in;
-	b3_work_unit_t		*batch[QUEUE_SIZE];
+	b3_work_unit_t		*batch[MAX_BATCH];
 	b3_uniqueue_t		*q = &team->queue;
 	uint64_t			count = 0;
 
 	while (true) {
-		count = claim_batch(team, b3_work_unit_t **units, int max_units);
+		count = claim_batch(team, batch, MAX_BATCH);
 		/* Complete the whole batch before returning any items */
 		for (int i = 0; i < count; i++) {
 			b3_work_unit_t *unit = batch[i];
@@ -119,7 +121,9 @@ worker_thread(void *team_in)
 			q->complete++;
 			any_completed = B_TRUE;
 		}
-		cnd_signal(&q->completed);
+		if (any_completed) {
+			cnd_signal(&q->completed);
+		}
 		mtx_unlock(&q->mutex);
 	}
 	return 0;
@@ -178,10 +182,10 @@ blake3_team_enqueue(blake3_team_t *team, b3_work_unit_t *unit)
 	mtx_unlock(&q->mutex);
 }
 
-static void
-blake3_team_dequeue(blake3_team_t * team, drr_work_unit_t *unit) {
-	b3_uniqueue_t *q = &team->queue;
+void
+blake3_team_dequeue(blake3_team_t * team, b3_work_unit_t *unit) {
 	assert(team->initialized);
+	b3_uniqueue_t *q = &team->queue;
 	mtx_lock(&q->mutex);
 	while (true) {
 		if (q->dequeue < q->complete) {
