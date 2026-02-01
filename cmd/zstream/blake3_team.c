@@ -35,59 +35,6 @@
 #define QUEUE_SIZE B3_TEAM_QUEUE_SIZE
 
 
-void
-blake3_team_init(blake3_team_t *team)
-{
-	if (blake3_team.initialized)
-		return;
-
-	memset(team, 0, sizeof (blake3_team_t));
-
-	cnd_init(&team->queue.inserted);
-	cnd_init(&team->queue.claimed);
-	cnd_init(&team->queue.completed);
-	cnd_init(&team->queue.dequeued);
-
-	team->num_threads = sysconf(_SC_NPROCESSORS_ONLN);
-	if (team->num_threads < MIN_THREADS) {
-		team->num_threads = MIN_THREADS;
-	}
-
-	blake3_team.threads = safe_calloc(team->num_threads * sizeof(thrd_t));
-
-	for (int i = 0; i < team->num_threads; i++) {
-		if (thrd_create(&team->threads[i], worker_thread, team) 
-			!= thrd_success)
-		{
-			fprintf(stderr, "Error creating worker thread %d\n", i);
-			exit(1);
-		}
-	}
-
-	team->initialized = B_TRUE;
-}
-
-static void
-blake3_team_enqueue(blake3_team_t *team, struct drr_work_unit *unit)
-{
-	b3_uniqueue_t *q = &team->queue;
-
-	mtx_lock(&q->mutex);
-	while (q->insert - q.dequeue >= QUEUE_SIZE) {
-		cnd_wait(&q->dequeued);
-		if (q->terminate) {
-			thrd_exit(0);
-		}
-	}
-	q->slots[q->insert % QUEUE_SIZE] = *unit;
-	q->insert++;
-	if (unit->needs_blake3) {
-		q->bytes_pending += unit->payload_size;
-	}
-	cnd_signal(&q->dequeued);
-	mtx_unlock(&q->mutex);
-}
-
 /*
  * Claim up to max_units work items, trying to accumulate at least
  * min_bytes worth of payload data. Does not block waiting to reach
@@ -116,12 +63,12 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 		}
 		/* Take all the no-work entries */
 		while (q->claim < q->insert && count < max_units 
-			&& bytes_claimed < min_bytes) 
+			&& bytes_claimed < target_bytes) 
 		{
 			if (junk_load && q->slots[q->claim % QUEUE_SIZE].needs_blake3) {
 				break;
 			}
-			units[count] = q->slots[q->claim % QUEUE_SIZE];
+			units[count] = &q->slots[q->claim % QUEUE_SIZE];
 			q->claim++;
 			if (units[count].needs_blake3) {
 				bytes_claimed += units[count].payload_size;
@@ -176,6 +123,59 @@ worker_thread(void *team)
 		mtx_unlock(&q->mutex);
 	}
 	return 0;
+}
+
+void
+blake3_team_init(blake3_team_t *team)
+{
+	if (team->initialized)
+		return;
+
+	memset(team, 0, sizeof (blake3_team_t));
+
+	cnd_init(&team->queue.inserted);
+	cnd_init(&team->queue.claimed);
+	cnd_init(&team->queue.completed);
+	cnd_init(&team->queue.dequeued);
+
+	team->num_threads = sysconf(_SC_NPROCESSORS_ONLN);
+	if (team->num_threads < MIN_THREADS) {
+		team->num_threads = MIN_THREADS;
+	}
+
+	team->threads = safe_calloc(team->num_threads * sizeof(thrd_t));
+
+	for (int i = 0; i < team->num_threads; i++) {
+		if (thrd_create(&team->threads[i], worker_thread, team) 
+			!= thrd_success)
+		{
+			fprintf(stderr, "Error creating worker thread %d\n", i);
+			exit(1);
+		}
+	}
+
+	team->initialized = B_TRUE;
+}
+
+static void
+blake3_team_enqueue(blake3_team_t *team, struct drr_work_unit *unit)
+{
+	b3_uniqueue_t *q = &team->queue;
+
+	mtx_lock(&q->mutex);
+	while (q->insert - q.dequeue >= QUEUE_SIZE) {
+		cnd_wait(&q->dequeued);
+		if (q->terminate) {
+			thrd_exit(0);
+		}
+	}
+	q->slots[q->insert % QUEUE_SIZE] = *unit;
+	q->insert++;
+	if (unit->needs_blake3) {
+		q->bytes_pending += unit->payload_size;
+	}
+	cnd_signal(&q->dequeued);
+	mtx_unlock(&q->mutex);
 }
 
 static void

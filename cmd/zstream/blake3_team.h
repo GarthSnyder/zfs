@@ -39,7 +39,7 @@ typedef struct b3_work_unit {
 	dmu_replay_record_t	drr;
 	uint8_t				*payload;
 	uint64_t			payload_size;
-	zio_checksum_t		blake3_cksum;
+	zio_cksum_t			blake3_cksum;
 	uint64_t			sequence_num;
 	boolean_t			needs_blake3;
 	boolean_t			end_of_stream;
@@ -99,7 +99,7 @@ blake3_team_enqueue(blake3_team_t *team, b3_work_unit_t *unit);
  * with the blake3 field filled in. Blocks if the next expected
  * unit is not yet ready.
  */
-drr_work_unit_t
+b3_work_unit_t *
 blake3_team_dequeue(blake3_team_t *team);
 
 void
