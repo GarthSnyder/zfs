@@ -24,6 +24,9 @@
 #include <stdint.h>
 #include <sys/dmu.h>
 #include <sys/zio_checksum.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/fs/zfs.h>
+
 
 #ifdef	__cplusplus
 extern "C" {
@@ -31,49 +34,44 @@ extern "C" {
 
 #define	B3_TEAM_QUEUE_SIZE		64
 #define	B3_TEAM_MIN_BATCH_SIZE	(64 * 1024)
-#define B3_TEAM_MAX_THREADS		32
 
 typedef struct b3_work_unit {
 	dmu_replay_record_t	drr;
 	uint8_t				*payload;
 	uint64_t			payload_size;
-	zio_checksum_t		blake3;
+	zio_checksum_t		blake3_cksum;
 	uint64_t			sequence_num;
 	boolean_t			needs_blake3;
 	boolean_t			end_of_stream;
+	boolean_t			completed;
 } b3_work_unit_t;
 
-typedef struct b3_input_queue {
-	b3_work_unit_t	slots[QUEUE_SIZE];
-	int				head;
-	int				tail;
-	int				count;
-	uint64_t		total_to_hash;
+/* 
+ * The uniqueue is a circular buffer with four pointers: insert,
+ * claim, complete, and dequeue, in that order. No pointer can
+ * move beyond its preceding pointer. Every interval between pointers
+ * corresponds to a specific state that applies to the intervening
+ * work items: enqueued, claimed for work, completed.
+ * FIFO order is guaranteed everywhere.
+ */
+
+typedef struct b3_uniqueue {
+	b3_work_unit_t	slots[B3_TEAM_QUEUE_SIZE];
+	uint64_t		insert, claim, complete, dequeue;
+	cnd_t			inserted;
+	cnd_t			claimed;
+	cnd_t			completed;
+	cnd_t			dequeued;
 	mtx_t			mutex;
-	cnd_t			not_full;
-	cnd_t			not_empty;
-} b3_input_queue_t;
+	uint64_t		bytes_outstanding;
+	boolean_t		terminate;
+} b3_uniqueue_t;
 
-typedef struct b3_output_slot {
-	drr_work_unit_t	unit;
-	boolean_t		full;
-} b3_output_t;
-
-typedef struct b3_output_queue {
-	b3_output_t 	slots[QUEUE_SIZE];
-	int				head;
-	int				tail;
-	uint64_t		next_output_seq;
-	mtx_t			mutex;
-	cnd_t			output_ready;	
-} b3_output_queue_t;
-
-static struct blake3_team {
-	b3_input_queue_t	input_queue;
-	b3_output_queue_t	output_queue;
-	int					num_threads;
-	thrd_t				threads[B3_TEAM_MAX_THREADS];
-	boolean_t			initialized;
+typedef struct blake3_team {
+	b3_uniqueue_t	queue;
+	int				num_threads;
+	thrd_t			*threads;
+	boolean_t		initialized;
 } blake3_team_t;
 
 /*
@@ -84,20 +82,28 @@ void
 blake3_team_init(blake3_team_t *team);
 
 /*
- * Submit a work unit for Blake3 hashing.
- * The unit will be queued and processed by worker threads.
- * Blocks if the input queue is full.
+ * Submit a work unit for Blake3 hashing. The unit will be
+ * queued and processed by worker threads. The call blocks
+ * if the input queue is full.
+ *
+ * If a b3_work_unit with the end_of_stream flag is enqueued,
+ * the call blocks until both input and output queues are empty
+ * and then deconstructs the queue and kills the threads. 
  */
 void
-blake3_team_enqueue(drr_work_unit_t *unit);
+blake3_team_enqueue(blake3_team_t *team, b3_work_unit_t *unit);
 
 /*
- * Retrieve a completed work unit.
- * Work units are returned in the same order they were submitted
- * (by sequence_num), with the blake3 field filled in.
- * Blocks if the next expected unit is not yet ready.
+ * Retrieve a completed work unit. Work units are returned
+ * in the same order they were submitted (by sequence_num),
+ * with the blake3 field filled in. Blocks if the next expected
+ * unit is not yet ready.
  */
-struct drr_work_unit blake3_team_retrieve();
+drr_work_unit_t
+blake3_team_dequeue(blake3_team_t *team);
+
+void
+blake3_team_destroy(blake3_team_t *team);
 
 #ifdef	__cplusplus
 }
