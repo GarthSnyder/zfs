@@ -43,7 +43,7 @@
  *
  * If the first-available item does not require hashing, scrape up all
  * the leading items of this type and return. The worker will end up
- * doing no work and coming right back here, but it simplifies the 
+ * doing no work and coming right back here, but it simplifies the
  * code to handle this case through the normal process.
  */
 static int
@@ -62,17 +62,17 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 			target_bytes = fair_share;
 		}
 		/* Take all the no-work entries */
-		while (q->claim < q->insert && count < max_units 
-			&& bytes_claimed < target_bytes) 
+		while (q->claim < q->insert && count < max_units
+			&& bytes_claimed < target_bytes)
 		{
 			if (junk_load && q->slots[q->claim % QUEUE_SIZE].needs_blake3) {
 				break;
 			}
 			units[count] = &q->slots[q->claim % QUEUE_SIZE];
 			q->claim++;
-			if (units[count].needs_blake3) {
-				bytes_claimed += units[count].payload_size;
-				q->bytes_pending -= units[count].payload_size;
+			if (units[count]->needs_blake3) {
+				bytes_claimed += units[count]->payload_size;
+				q->bytes_pending -= units[count]->payload_size;
 			} else {
 				junk_load = B_TRUE;
 			}
@@ -91,18 +91,18 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 }
 
 static int
-worker_thread(void *team)
+worker_thread(void *team_in)
 {
 	blake3_team_t 		*team = (blake3_team_t *)team_in;
-	drr_work_unit_t		*batch[QUEUE_SIZE];
-	b3_uniqueue_t		*q = team->queue;
+	b3_work_unit_t		*batch[QUEUE_SIZE];
+	b3_uniqueue_t		*q = &team->queue;
 	uint64_t			count = 0;
 
 	while (true) {
 		count = claim_batch(team, b3_work_unit_t **units, int max_units);
 		/* Complete the whole batch before returning any items */
 		for (int i = 0; i < count; i++) {
-			drr_work_unit_t *unit = batch[i];
+			b3_work_unit_t *unit = batch[i];
 			if (unit->payload != NULL && unit->payload_size > 0
 				&& unit->needs_blake3)
 			{
@@ -146,7 +146,7 @@ blake3_team_init(blake3_team_t *team)
 	team->threads = safe_calloc(team->num_threads * sizeof(thrd_t));
 
 	for (int i = 0; i < team->num_threads; i++) {
-		if (thrd_create(&team->threads[i], worker_thread, team) 
+		if (thrd_create(&team->threads[i], worker_thread, team)
 			!= thrd_success)
 		{
 			fprintf(stderr, "Error creating worker thread %d\n", i);
@@ -157,14 +157,14 @@ blake3_team_init(blake3_team_t *team)
 	team->initialized = B_TRUE;
 }
 
-static void
-blake3_team_enqueue(blake3_team_t *team, struct drr_work_unit *unit)
+void
+blake3_team_enqueue(blake3_team_t *team, b3_work_unit_t *unit)
 {
 	b3_uniqueue_t *q = &team->queue;
 
 	mtx_lock(&q->mutex);
-	while (q->insert - q.dequeue >= QUEUE_SIZE) {
-		cnd_wait(&q->dequeued);
+	while (q->insert - q->dequeue >= QUEUE_SIZE) {
+		cnd_wait(&q->dequeued, &q->mutex);
 		if (q->terminate) {
 			thrd_exit(0);
 		}
@@ -191,7 +191,7 @@ blake3_team_dequeue(blake3_team_t * team, drr_work_unit_t *unit) {
 			mtx_unlock(&q->mutex);
 			return;
 		}
-		cnd_wait(&q->completed);
+		cnd_wait(&q->completed, &q->mutex);
 		if (q->terminate) {
 			thrd_exit(0);
 		}
@@ -206,7 +206,7 @@ blake3_team_destroy(blake3_team_t *team) {
 	cnd_broadcast(&team->queue.claimed);
 	cnd_broadcast(&team->queue.completed);
 	cnd_broadcast(&team->queue.dequeued);
-	for (i = 0; i < team->num_threads; i++) {
+	for (int i = 0; i < team->num_threads; i++) {
 		thrd_join(team->threads[i], NULL);
 	}
 	mtx_destroy(&team->queue.mutex);
