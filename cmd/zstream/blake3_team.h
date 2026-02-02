@@ -18,8 +18,8 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef	_BLAKE3_TEAM_H
-#define	_BLAKE3_TEAM_H
+#ifndef	_ZSTREAM_TEAM_H
+#define	_ZSTREAM_TEAM_H
 
 #include <stdint.h>
 #include <sys/dmu.h>
@@ -32,79 +32,77 @@
 extern "C" {
 #endif
 
-#define	B3_TEAM_QUEUE_SIZE		64
-#define	B3_TEAM_MIN_BATCH_SIZE	(64 * 1024)
+/* 
+ * This is a generalized multithreaded work queue for processing
+ * DRR records (compressing, decompressing, hashing, etc.). Records
+ * are returned in strict FIFO order.
+ *
+ * Only a subset of records will actually need work. The caller should
+ * set the needs_processing flag to B_FALSE or B_TRUE to identify those
+ * records. Records known to not need work can be fast-tracked in
+ * some cases while preserving the FIFO order.
+ * 
+ * The perform_work function can modify the record header or payload,
+ * or it can return results through the output field.
+ */
 
-typedef struct b3_work_unit {
+typedef struct work_unit {
 	dmu_replay_record_t	drr;
 	uint8_t				*payload;
 	uint64_t			payload_size;
-	zio_cksum_t			blake3_cksum;
-	boolean_t			needs_blake3;
-	boolean_t			end_of_stream;
-	boolean_t			completed;
-} b3_work_unit_t;
+	zio_cksum_t			zstream_cksum;	/* "Before" checksum */
+	boolean_t			needs_processing;
+	void				*output;
+} work_unit_t;
 
-/* 
- * The uniqueue is a circular buffer with four pointers: insert,
- * claim, complete, and dequeue, in that order. No pointer can
- * move beyond its preceding pointer. Every interval between pointers
- * corresponds to a specific state that applies to the intervening
- * work items: enqueued, claimed for work, completed.
- * FIFO order is guaranteed everywhere.
- */
-
-typedef struct b3_uniqueue {
-	b3_work_unit_t	slots[B3_TEAM_QUEUE_SIZE];
-	uint64_t		insert, claim, complete, dequeue;
-	cnd_t			inserted;
-	cnd_t			claimed;
-	cnd_t			completed;
-	cnd_t			dequeued;
-	mtx_t			mutex;
-	uint64_t		bytes_pending;
-	boolean_t		terminate;
-} b3_uniqueue_t;
-
-typedef struct blake3_team {
-	b3_uniqueue_t	queue;
-	int				num_threads;
-	thrd_t			*threads;
-	boolean_t		initialized;
-} blake3_team_t;
+typedef void
+process_unit_t(work_unit_t *unit);
 
 /*
- * Initialize the Blake3 hashing thread pool.
- * Must be called before submit or retrieve.
- */
-void 
-blake3_team_init(blake3_team_t *team);
-
-/*
- * Submit a work unit for Blake3 hashing. The unit will be
- * queued and processed by worker threads. The call blocks
- * if the input queue is full.
+ * Initialize the thread pool. Must be called before enqueue or dequeue.
  *
- * If a b3_work_unit with the end_of_stream flag is enqueued,
- * the call blocks until both input and output queues are empty
- * and then deconstructs the queue and kills the threads. 
+ * A target batch size can be set to allow threads to claim multiple
+ * records at once for processing, up to a maximum of 16 records. This
+ * measure can be helpful when multithreading overhead is significant in
+ * comparison to work time. The batch size is based on the net amount of
+ * payload data. If it's zero, records are processed individually (though
+ * concurrently).
+ */
+void * 
+zstream_team_init(process_unit_t process_unit, uint64_t batch_size,
+	uint64_t queue_length);
+
+/*
+ * Submit a work unit. The unit will be queued and processed by
+ * worker threads. The call blocks if the input queue is full.
  */
 void
-blake3_team_enqueue(blake3_team_t *team, b3_work_unit_t *unit);
+zstream_team_enqueue(void *team, work_unit_t *unit);
 
 /*
  * Retrieve a completed work unit. Work units are returned
- * in the same order they were submitted, with the blake3 field
- * filled in. Blocks if the next expected unit is not yet ready.
+ * in the same order they were submitted. Blocks if the next
+ * unit is not yet ready.
+ *
+ * If zstream_team_dequeue returns a value other than zero, the
+ * stream is complete. The returned item is not valid, and no
+ * further calls may be made.
  */
-void
-blake3_team_dequeue(blake3_team_t * team, b3_work_unit_t *unit);
+int
+zstream_team_dequeue(void *team, work_unit_t *unit);
+
+/*
+ * Notify the receiver and the team that all work items have
+ * been submitted. The team will continue to function for dequeuers
+ * until the end-of-stream marker has been read, at which point 
+ * threads will be taken down and the team's memory released.
+ */
 
 void
-blake3_team_destroy(blake3_team_t *team);
+zstream_team_fini(void *team);
 
 #ifdef	__cplusplus
 }
 #endif
 
-#endif	/* _BLAKE3_TEAM_H */
+#endif	

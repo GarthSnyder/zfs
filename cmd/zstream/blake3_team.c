@@ -27,67 +27,106 @@
 #include <string.h>
 #include <threads.h>
 #include <unistd.h>
-#include <sys/blake3.h>
-#include "blake3_team.h"
+#include <sys/zstream.h>
+#include "zstream_team.h"
 #include "zstream_shared.h"
 
 #define MIN_THREADS 6
-#define QUEUE_SIZE B3_TEAM_QUEUE_SIZE
 #define MAX_BATCH 16
+
+#define NEEDS_HASH(unit) (unit->drr.drr_type == DRR_WRITE && 
+	unit->payload_size > 0)
+
+/* 
+ * The uniqueue is a circular buffer with four pointers: insert,
+ * claim, complete, and dequeue, in that order. No pointer can
+ * move beyond its preceding pointer. Every interval between pointers
+ * corresponds to a specific state that applies to the intervening
+ * work items: enqueued, claimed for work, completed.
+ * FIFO order is guaranteed everywhere.
+ *
+ * No "claimed" condition is necessary because the next state
+ * in line is "completed". That transition is where the actual work
+ * is done, so the clock on that state is "when the hashing is done"
+ * rather than a gating condition.
+ */
+
+typedef struct queue_slot {
+	work_unit_t	unit;
+	boolean_t	completed;
+	boolean_t	end_of_stream;
+} queue_slot_t;
+
+typedef struct uniqueue {
+	queue_slot_t		*slots;
+	uint64_t		insert, claim, complete, dequeue;
+	cnd_t			inserted, completed, dequeued;
+	mtx_t			mutex;
+	uint64_t		bytes_pending;
+	boolean_t		terminating;
+} uniqueue_t;
+
+typedef struct zstream_team {
+	uniqueue_t		queue;
+	int				num_threads;
+	thrd_t			*threads;
+	perform_work_t	process;
+	uint64_t		batch_size;
+	uint64_t		queue_length;
+	boolean_t		finalized;
+} zstream_team_t;
 
 
 /*
  * Claim up to max_units work items, trying to accumulate at least
- * min_bytes worth of payload data. Does not block waiting to reach
- * min_bytes; returns whatever is available or awaits a condition if
+ * batch_size worth of payload data. Does not block waiting to reach
+ * batch_size; returns whatever is available or awaits a condition if
  * nothing is available.
  *
- * If the first-available item does not require hashing, scrape up all
+ * If the first-available item does not require processing, scrape up all
  * the leading items of this type and return. The worker will end up
  * doing no work and coming right back here, but it simplifies the
  * code to handle this case through the normal process.
  */
 static int
-claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
+claim_batch(zstream_team_t *team, work_unit_t **units, int max_units) {
 
-	b3_uniqueue_t	*q = &team->queue;
-	uint64_t 		bytes_claimed = 0;
-	uint64_t 		count = 0;
-	uint64_t		target_bytes = B3_TEAM_MIN_BATCH_SIZE;
-	boolean_t		junk_batch = B_FALSE;
+	uniqueue_t	*q = &team->queue;
+	uint64_t 	bytes_claimed = 0;
+	uint64_t 	count = 0;
+	uint64_t	target_bytes = team->batch_size;
+	boolean_t	junk_batch = B_FALSE;
 
 	mtx_lock(&q->mutex);
 	while (true) {
+		if (q->claim >= q->insert) {
+			cnd_wait(&q->inserted, &q->mutex);
+			if (q->terminating) {
+				mtx_unlock(&q->mutex);
+				thrd_exit(0);
+			}			
+		}
 		uint64_t fair_share = q->bytes_pending / team->num_threads;
-		if (fair_share > B3_TEAM_MIN_BATCH_SIZE) {
+		if (fair_share > team->batch_size && team->batch_size) {
 			target_bytes = fair_share;
 		}
-		/* Take all the no-work entries */
 		while (q->claim < q->insert && count < max_units &&
-			bytes_claimed < target_bytes)
+			bytes_claimed <= target_bytes)
 		{
-			if (junk_batch && q->slots[q->claim % QUEUE_SIZE].needs_blake3) {
+			uint64_t slot = q->claim % team->queue_length;
+			if (!count & !q->slots[slot].needs_processing) {
+				junk_batch = B_TRUE;
+			} else if (junk_batch && q->slots[slot].needs_processing) {
 				break;
 			}
-			units[count] = &q->slots[q->claim % QUEUE_SIZE];
+			units[count] = &q->slots[slot];
+			bytes_claimed += q->slots[slot].payload_size;
 			q->claim++;
-			if (units[count]->needs_blake3) {
-				bytes_claimed += units[count]->payload_size;
-				q->bytes_pending -= units[count]->payload_size;
-			} else {
-				junk_batch = B_TRUE;
-			}
 			count++;
 		}
 		if (count) {
-			cnd_signal(&q->claimed);
 			mtx_unlock(&q->mutex);
-			return count;
-		} else {
-			cnd_wait(&q->inserted, &q->mutex);
-			if (q->terminate) {
-				thrd_exit(0);
-			}
+			return count;			
 		}
 	}
 }
@@ -95,27 +134,24 @@ claim_batch(blake3_team_t *team, b3_work_unit_t **units, int max_units) {
 static int
 worker_thread(void *team_in)
 {
-	blake3_team_t 		*team = (blake3_team_t *)team_in;
-	b3_work_unit_t		*batch[MAX_BATCH];
-	b3_uniqueue_t		*q = &team->queue;
-	uint64_t			count = 0;
+	zstream_team_t 	*team = (zstream_team_t *)team_in;
+	work_unit_t		*batch[MAX_BATCH];
+	uniqueue_t		*q = &team->queue;
+	uint64_t		count = 0;
 
 	while (true) {
 		count = claim_batch(team, batch, MAX_BATCH);
 		/* Complete the whole batch before returning any items */
 		for (int i = 0; i < count; i++) {
-			b3_work_unit_t *unit = batch[i];
-			if (unit->payload != NULL && unit->payload_size > 0
-				&& unit->needs_blake3)
-			{
-				BLAKE3_CTX ctx;
-				Blake3_Init(&ctx);
-				Blake3_Update(&ctx, unit->payload, unit->payload_size);
-				Blake3_Final(&ctx, (uint8_t *)&unit->blake3_cksum);
+			work_unit_t *unit = batch[i];
+			if (unit->needs_processing) {
+				team->process(unit);
 			}
-			unit->completed = B_TRUE;
 		}
 		mtx_lock(&q->mutex);
+		for (int i = 0; i < count; i++) {
+			batch[i]->completed = B_TRUE;
+		}
 		boolean_t any_completed = B_FALSE;
 		while (q->slots[q->complete].completed) {
 			q->complete++;
@@ -129,14 +165,19 @@ worker_thread(void *team_in)
 	return 0;
 }
 
-void
-blake3_team_init(blake3_team_t *team)
+void *
+zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
+	uint64_t queue_length);
 {
-	if (team->initialized)
-		return;
+	zstream_team_t *team = safe_malloc(sizeof(zstream_team_t));
 
-	memset(team, 0, sizeof (blake3_team_t));
+	memset(team, 0, sizeof (zstream_team_t));
 
+	team->batch_size = batch_size;
+	team->queue_length = queue_length;
+	team->queue.slots = safe_calloc(sizeof(queue_slot_t) * queue_length);
+
+	mtx_init(&team->queue.mutex, mtx_plain);
 	cnd_init(&team->queue.inserted);
 	cnd_init(&team->queue.claimed);
 	cnd_init(&team->queue.completed);
@@ -158,64 +199,89 @@ blake3_team_init(blake3_team_t *team)
 		}
 	}
 
-	team->initialized = B_TRUE;
+	return (void *)team;
 }
 
 void
-blake3_team_enqueue(blake3_team_t *team, b3_work_unit_t *unit)
+zstream_team_enqueue(void *team_in, work_unit_t *unit, B_FALSE) {
+	zstream_team_enqueue_impl(team, unit);
+}
+
+void
+zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 {
-	b3_uniqueue_t *q = &team->queue;
+	zstream_team_t *team = (zstream_team_t *)team_in;
+	uniqueue_t *q = &team->queue;
 
 	mtx_lock(&q->mutex);
-	while (q->insert - q->dequeue >= QUEUE_SIZE) {
+	while (q->insert - q->dequeue >= team->queue_length) {
 		cnd_wait(&q->dequeued, &q->mutex);
-		if (q->terminate) {
+		if (q->terminating) {
+			mtx_unlock(&q->mutex);
 			thrd_exit(0);
 		}
 	}
-	q->slots[q->insert % QUEUE_SIZE] = *unit;
+	uint64_t slot = q->insert % team->queue_length;
+	q->slots[slot] = {*unit, B_FALSE, last_one};
 	q->insert++;
-	if (unit->needs_blake3) {
+	if (unit->needs_processing) {
 		q->bytes_pending += unit->payload_size;
 	}
-	cnd_signal(&q->dequeued);
+	team->finalized = last_one;
+	cnd_signal(&q->inserted);
 	mtx_unlock(&q->mutex);
 }
 
-void
-blake3_team_dequeue(blake3_team_t * team, b3_work_unit_t *unit) {
-	assert(team->initialized);
-	b3_uniqueue_t *q = &team->queue;
+int
+zstream_team_dequeue(void *team_in, work_unit_t *unit) {
+	zstream_team_t *team = (zstream_team_t *)team_in;
+	uniqueue_t *q = &team->queue;
 	mtx_lock(&q->mutex);
 	while (true) {
 		if (q->dequeue < q->complete) {
-			*unit = q->slots[q->dequeue % QUEUE_SIZE];
+			unit64_t slot = q->dequeue % team->queue_length;
 			q->dequeue++;
-			cnd_signal(&q->dequeued);
-			mtx_unlock(&q->mutex);
-			return;
+			if (q->slots[slot].end_of_stream) {
+				mtx_unlock(&q->mutex);
+				zstream_team_destroy(team);
+				return (1);
+			} else {
+				*unit = q->slots[slot];
+				cnd_signal(&q->dequeued);
+				mtx_unlock(&q->mutex);
+				return (0);
+			}
 		}
 		cnd_wait(&q->completed, &q->mutex);
-		if (q->terminate) {
+		if (q->terminating) {
+			mtx_unlock(&q->mutex);
 			thrd_exit(0);
 		}
 	}
 }
 
 void
-blake3_team_destroy(blake3_team_t *team) {
-	assert(team->initialized);
-	team->queue.terminate = B_TRUE;
+zstream_team_fini(void *team_in) {
+	work_unit_t unit;
+	memset(&unit, 0, sizeof(unit));
+	zstream_team_enqueue_impl(team_in, &unit, B_TRUE);
+}
+
+void
+zstream_team_destroy(zstream_team_t *team) {
+	team->queue.terminating = B_TRUE;
+	mtx_lock(&team->queue.mutex);
 	cnd_broadcast(&team->queue.inserted);
-	cnd_broadcast(&team->queue.claimed);
 	cnd_broadcast(&team->queue.completed);
 	cnd_broadcast(&team->queue.dequeued);
+	mtx_unlock(&team->queue.mutex);
 	for (int i = 0; i < team->num_threads; i++) {
 		thrd_join(team->threads[i], NULL);
 	}
 	mtx_destroy(&team->queue.mutex);
 	cnd_destroy(&team->queue.inserted);
-	cnd_destroy(&team->queue.claimed);
 	cnd_destroy(&team->queue.completed);
 	cnd_destroy(&team->queue.dequeued);
+	free(team->threads);
+	free(team->queue.slots);
 }
