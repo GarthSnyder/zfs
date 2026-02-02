@@ -287,7 +287,6 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 			drrw->drr_toguid = drrwb.drr_toguid;
 			drrw->drr_object = drrwb.drr_object;
 			drrw->drr_offset = drrwb.drr_offset;
-			drrw->drr_key = drrwb.drr_key;
 			break;
 		}
 
