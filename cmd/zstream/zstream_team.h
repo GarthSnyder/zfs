@@ -50,7 +50,6 @@ typedef struct work_unit {
 	dmu_replay_record_t	drr;
 	uint8_t				*payload;
 	uint64_t			payload_size;
-	zio_cksum_t			zstream_cksum;
 	boolean_t			needs_processing;
 	void				*output;
 } work_unit_t;
