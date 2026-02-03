@@ -177,24 +177,26 @@ static void
 zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 	bool verbose)
 {
-	work_unit_t				unit
-	dmu_replay_record_t		*drr = &unit->drr;
+	work_unit_t				unit;
+	dmu_replay_record_t		*drr;
 	zio_cksum_t 			stream_cksum;
 	dedup_stats_t 			stats;
 	dedup_entry_t			existing;
+	uint32_t				fflags;
 
-	struct drr_begin 		*drrb = &drr->drr_u.drr_begin;
-	struct drr_end			*drre = &drr->drr_u.drr_end;
-	struct drr_write		*drrw = &drr->drr_u.drr_write;
-	struct drr_write_yref	*drrwb = &drr->drr_u.drr_write_byref;
+	struct drr_begin 		*drrb;
+	struct drr_end			*drre;
+	struct drr_write		*drrw;
 
-	memset(&thedrr, 0, sizeof (dmu_replay_record_t));
 	memset(&stats, 0, sizeof (stats));
 	stats.last_status_time = gethrtime();
 
 	while (zstream_team_dequeue(team, &unit) == 0)
 	{
-		drrc->drr_checksum = zero_cksum;
+		drr = &unit.drr;
+		drrb = &drr->drr_u.drr_begin;
+		drre = &drr->drr_u.drr_end;
+		drrw = &drr->drr_u.drr_write;
 
 		switch (drr->drr_type) {
 
