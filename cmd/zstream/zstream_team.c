@@ -27,15 +27,11 @@
 #include <string.h>
 #include <threads.h>
 #include <unistd.h>
-#include <sys/zstream.h>
 #include "zstream_team.h"
 #include "zstream_shared.h"
 
 #define MIN_THREADS 6
 #define MAX_BATCH 16
-
-#define NEEDS_HASH(unit) (unit->drr.drr_type == DRR_WRITE && 
-	unit->payload_size > 0)
 
 /* 
  * The uniqueue is a circular buffer with four pointers: insert,
@@ -202,11 +198,6 @@ zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
 	return (void *)team;
 }
 
-void
-zstream_team_enqueue(void *team_in, work_unit_t *unit) {
-	zstream_team_enqueue_impl(team_in, unit, B_FALSE);
-}
-
 static void
 zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 {
@@ -232,6 +223,30 @@ zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 	team->finalized = last_one;
 	cnd_signal(&q->inserted);
 	mtx_unlock(&q->mutex);
+}
+
+void
+zstream_team_enqueue(void *team_in, work_unit_t *unit) {
+	zstream_team_enqueue_impl(team_in, unit, B_FALSE);
+}
+
+static void
+zstream_team_destroy(zstream_team_t *team) {
+	team->queue.terminating = B_TRUE;
+	mtx_lock(&team->queue.mutex);
+	cnd_broadcast(&team->queue.inserted);
+	cnd_broadcast(&team->queue.completed);
+	cnd_broadcast(&team->queue.dequeued);
+	mtx_unlock(&team->queue.mutex);
+	for (int i = 0; i < team->num_threads; i++) {
+		thrd_join(team->threads[i], NULL);
+	}
+	mtx_destroy(&team->queue.mutex);
+	cnd_destroy(&team->queue.inserted);
+	cnd_destroy(&team->queue.completed);
+	cnd_destroy(&team->queue.dequeued);
+	free(team->threads);
+	free(team->queue.slots);
 }
 
 int
@@ -269,21 +284,3 @@ zstream_team_fini(void *team_in) {
 	zstream_team_enqueue_impl(team_in, &unit, B_TRUE);
 }
 
-void
-zstream_team_destroy(zstream_team_t *team) {
-	team->queue.terminating = B_TRUE;
-	mtx_lock(&team->queue.mutex);
-	cnd_broadcast(&team->queue.inserted);
-	cnd_broadcast(&team->queue.completed);
-	cnd_broadcast(&team->queue.dequeued);
-	mtx_unlock(&team->queue.mutex);
-	for (int i = 0; i < team->num_threads; i++) {
-		thrd_join(team->threads[i], NULL);
-	}
-	mtx_destroy(&team->queue.mutex);
-	cnd_destroy(&team->queue.inserted);
-	cnd_destroy(&team->queue.completed);
-	cnd_destroy(&team->queue.dequeued);
-	free(team->threads);
-	free(team->queue.slots);
-}

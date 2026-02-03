@@ -36,8 +36,8 @@
 #include <stddef.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
-#include "zfs_fletcher.h"
 #include "zstream.h"
+#include "zfs_fletcher.h"
 #include "zstream_shared.h"
 
 /*
