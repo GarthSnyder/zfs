@@ -120,7 +120,6 @@ dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
 	    == sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
 	fletcher_4_incremental_native(drr,
 	    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), zc);
-	assert(ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum));
 	boolean_t skip_checksum = (drr->drr_type == DRR_BEGIN) ||
 		((drr->drr_type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
 	if (!skip_checksum) {
@@ -263,17 +262,21 @@ drr_byteswap(dmu_replay_record_t *drr, enum drr_type record_type)
 	}
 }
 
+#define CALL_ALL(filter_name, record, payload, payload_size, context) \
+	for (int i = 0; i < num_filters; i++) { \
+		if (filters[i]->filter_name) { \
+			filters[i]->filter_name(record, payload, payload_size, context); \
+		} \
+	}
+
 int 
 read_stream(FILE *input, int output, stream_filter_t *filters,
 	int num_filters, boolean_t retain_payload, void *context)
 {
-	zio_cksum_t in_cksum_stream;
-	zio_cksum_t in_cksum_native;
-	zio_cksum_t out_cksum_stream;
-	zio_cksum_t out_cksum_native;
+	zio_cksum_t in_cksum;
+	zio_cksum_t out_cksum;
 	boolean_t	first_record = B_TRUE;
 	boolean_t	do_byteswap;
-	boolean_t	checksum_valid;
 	uint32_t	payload_size;
 	uint8_t		*payload;
 
@@ -312,8 +315,7 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 			((type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
 		if (skip_checksum) {
 			ZIO_SET_CHECKSUM(&in_cksum, 0, 0, 0, 0);
-			ZIO_SET_CHECKSUM(&out_cksum_native, 0, 0, 0, 0);
-			ZIO_SET_CHECKSUM(&out_cksum_stream, 0, 0, 0, 0);
+			ZIO_SET_CHECKSUM(&out_cksum, 0, 0, 0, 0);
 		} else {
 			if (type == DRR_END) {
 				if (!ZIO_CHECKSUM_EQUAL(drre->drr_checksum, in_cksum)) {
@@ -348,15 +350,10 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 			 * the client, just so we can validate checksums on future
 			 * incoming records.
 			 */
-			fletcher_4_incremental_native(((uint8_t *)drr) +
-			    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum),
-			    sizeof(drr->drr_u.drr_checksum.drr_checksum), &in_cksum);
+			fletcher_4_incremental_native(&drrc->drr_checksum,
+				sizeof(drrc->drr_checksum), &in_cksum);
 		}
-		/* 
-		 * We need to read the payload up front so that it's 
-		 * available for the all_records_pre callback. Temporarily 
-		 * byteswap even though we haven't called all_records_pre yet.
-		 */
+
 		if (do_byteswap) {
 			drr_byteswap(drr, BSWAP_32(drr->drr_type));
 		}
@@ -385,33 +382,9 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 		}
 		fletcher_4_incremental_native(payload, payload_size, &in_cksum);
 
-		if (callbacks->all_records_pre) {
-			if (do_byteswap) {
-				drr_byteswap(drr, drr->drr_type);
-			}
-			callbacks->all_records_pre(drr, &payload, &payload_size, context);
-			if (do_byteswap) {
-				drr_byteswap(drr, BSWAP_32(drr->drr_type));
-			}
-		}
-		if (callbacks->all_records_pre_native) {
-			callbacks->all_records_pre_native(drr, &payload, &payload_size, 
-				context);
-		}
-		if (callbacks->by_type[record_type]) {
-			callbacks->by_type[record_type](drr, &payload, &payload_size,
-				context);
-		}
-		if (callbacks->all_records_post_native) {
-			callbacks->all_records_post_native(drr, &payload, &payload_size,
-				context);
-		}
-		if (do_byteswap) {
-			drr_byteswap(drr, drr->drr_type);
-		}
-		if (callbacks->all_records_post) {
-			callbacks->all_records_post(drr, &payload, &payload_size, context);
-		}
+		CALL_ALL(all_records_pre, drr, &payload, &payload_size, context);
+		CALL_ALL(by_type[record_type], drr, &payload, &payload_size, context);
+		CALL_ALL(all_records_post, drr, &payload, &payload_size, context);
 
 		/*
 		 * At this point all callback meddling is complete. Prepare
@@ -420,28 +393,36 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 
 		fletcher_4_incremental_native(drr,
 		    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), 
-		    &out_cksum_stream);
-		drrc->drr_checksum = out_cksum_stream;
-		ZIO_CHECKSUM_BSWAP(&drrc->drr_checksum);
-		fletcher_4_incremental_native(&drrc->drr_checksum, 
-			sizeof(drrc->drr_checksum), &out_cksum_stream);
-		fletcher_4_incremental_native(payload, payload_size, &out_cksum_stream);
-
-		if (do_byteswap) {
-			drr_byteswap(drr, BSWAP_32(drr->drr_type));
+		    &out_cksum);
+		boolean_t skip_checksum = (drr->drr_type == DRR_BEGIN) ||
+			((drr->drr_type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
+		if (!skip_checksum) {
+			drrc->drr_checksum = out_cksum;
+		} else {
+			ZIO_SET_CHECKSUM(&drrc->drr_checksum, 0, 0, 0, 0);
 		}
-		fletcher_4_incremental_native(drr,
-		    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), 
-		    &out_cksum_native);
-		drrc->drr_checksum = out_cksum_stream;
 		fletcher_4_incremental_native(&drrc->drr_checksum, 
-			sizeof(drrc->drr_checksum), &out_cksum_nativem);
-		fletcher_4_incremental_native(payload, payload_size, &out_cksum_native);
-		free(payload);
-		pcksum = zc;
-		drr_byte_count[drr->drr_type] += payload_size;
-		total_payload_size += payload_size;
-		stream_offset += sizeof(*drr) + payload_size;
+			sizeof(drrc->drr_checksum), &out_cksum);
+		if (payload_size) {
+			fletcher_4_incremental_native(payload, payload_size, &out_cksum);
+		}
+
+		if (output > 0) {
+			if (write(output, drr, sizeof (*drr)) == -1) {
+				fprintf(stderr, "Unable to write output record.\n");
+				exit(1);
+			}
+			if (payload_len != 0) {
+				fletcher_4_incremental_native(payload, payload_len, &out_cksum);
+				if (write(output, payload, payload_len) == -1) {
+					fprintf(stderr, "Unable to write output payload.\n");
+					exit(1);
+				}
+			}
+		}
+		if (!retain_payload) {
+			free(payload);
+		}
 	}
-	free(buf);
 	fletcher_4_fini();
+}
