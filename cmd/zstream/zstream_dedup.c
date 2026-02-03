@@ -41,6 +41,7 @@
 #include "linear_hash.h"
 #include "zstream_shared.h"
 #include "zstream_team.h"
+#include "zstream_stream.h"
 
 #define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
 #define SMALLEST_REASONABLE_DEDUP_MB	128
@@ -124,7 +125,7 @@ dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
 {
 	lh_iterator_t iter;
 
-	int ret = lh_retrieve_setup(ddt, BLAKE3_64_BIT(hash), &iter);
+	int ret = lh_retrieve_setup(ddt, BLAKE3_64_BIT(&hash), &iter);
 	if (ret < 0) {
 		fprintf(stderr, "Unable to initiate read from dedup table, aborting...\n");
 		exit(1);
@@ -143,7 +144,7 @@ dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
 		if (iter.iteration_complete) {
 			return false;
 		}
-		if (memcmp(&dde->hash, hash, BLAKE3_OUT_LEN) == 0) {
+		if (memcmp(&dde->hash, &hash, BLAKE3_OUT_LEN) == 0) {
 			return true;
 		}
 	}
@@ -156,14 +157,14 @@ dedup_table_insert(linear_hash_t *ddt, blake3_hash_t hash,
 {
 	dedup_entry_t dedup;
 
-	memcpy(&dedup.write_block, &drr->drr_u.drr_write, 
+	memcpy(&dedup.write_block, &drr->drr_u.drr_write,
 		sizeof(drr->drr_u.drr_write));
-	memcpy(&dedup.hash, hash, sizeof(dedup.hash));
+	memcpy(&dedup.hash, &hash, sizeof(dedup.hash));
 	memcpy(&dedup.checksum, &drr->drr_u.drr_checksum.drr_checksum,
 		sizeof(dedup.checksum));
 	dedup.payload_length = drr->drr_payloadlen;
 
-	if (lh_insert(ddt, BLAKE3_64_BIT(hash), &dedup) < 0) {
+	if (lh_insert(ddt, BLAKE3_64_BIT(&hash), &dedup) < 0) {
 		fprintf(stderr, "Error writing to dedup hash table, aborting...\n");
 		exit(1);
 	}
@@ -173,14 +174,13 @@ dedup_table_insert(linear_hash_t *ddt, blake3_hash_t hash,
  * Deduplicate a ZFS stream.
  */
 static void
-zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt, 
+zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 	bool verbose)
 {
 	work_unit_t				unit
 	dmu_replay_record_t		*drr = &unit->drr;
 	zio_cksum_t 			stream_cksum;
 	dedup_stats_t 			stats;
-	zio_checksum_t			zero_cksum;
 	dedup_entry_t			existing;
 
 	struct drr_begin 		*drrb = &drr->drr_u.drr_begin;
@@ -190,10 +190,9 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 
 	memset(&thedrr, 0, sizeof (dmu_replay_record_t));
 	memset(&stats, 0, sizeof (stats));
-	ZIO_SET_CHECKSUM(&zero_cksum, 0, 0, 0, 0);
 	stats.last_status_time = gethrtime();
 
-	while (zstream_team_dequeue(team, &unit) == 0) 
+	while (zstream_team_dequeue(team, &unit) == 0)
 	{
 		drrc->drr_checksum = zero_cksum;
 
@@ -210,6 +209,7 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 			fflags |= DMU_BACKUP_FEATURE_DEDUP;
 			/* cppcheck-suppress syntaxError */
 			DMU_SET_FEATUREFLAGS(drrb->drr_versioninfo, fflags);
+			break;
 
 		case DRR_END:
 			drre->drr_checksum = stream_cksum;
@@ -219,16 +219,16 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 			stats.write_records++;
 			/* Check if we've seen this block before */
 			zio_cksum_t blake3 = *((zio_cksum_t *)unit.output);
-			if (dedup_table_lookup(ddt, blake3), &existing) {
+			if (dedup_table_lookup(ddt, blake3, &existing)) {
 				if (!writes_compatible(drrw, &existing.write_block)) {
 					stats.disqualified_records++;
 				} else {
 					struct drr_write_byref byref;
 					memset(&byref, 0, sizeof(byref));
 
-					byref.drr_refguid = prev->write_block.drr_toguid;
-					byref.drr_refobject = prev->write_block.drr_object;
-					byref.drr_refoffset = prev->write_block.drr_offset;
+					byref.drr_refguid = existing.write_block.drr_toguid;
+					byref.drr_refobject = existing.write_block.drr_object;
+					byref.drr_refoffset = existing.write_block.drr_offset;
 
 					byref.drr_object = drrw->drr_object;
 					byref.drr_offset = drrw->drr_offset;
@@ -244,19 +244,23 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 					drr->drr_type = DRR_WRITE_BYREF;
 					drr->drr_payloadlen = 0;
 
-					stats->dedup_records++;
-					stats->bytes_saved += unit.payload_size;
+					stats.dedup_records++;
+					stats.bytes_saved += unit.payload_size;
 				}
 			} else {
 				/* First occurrence, insert into table and write as-is */
 				dedup_table_insert(ddt, blake3, drr);
 			}
+			break;
+
+		default:
+			/* Pass through all other record types unchanged */
+			break;
 		}
 
-		stats.bytes_read = sizeof(*drr) + unit.payload_size;
+		stats.bytes_read += sizeof(*drr) + unit.payload_size;
 		stats.total_records += 1;
-		dump_record(drr, unit.payload, unit.payload_size, &stream_cksum,
-		    &stream_cksum, int outfd);
+		dump_record(drr, unit.payload, unit.payload_size, &stream_cksum, outfd);
 		free(unit.payload);
 		if (verbose) {
 			print_status(&stats, false);
@@ -286,7 +290,7 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 }
 
 /* Callback that enqueues records on the zstream_team */
-static stream_callback_t
+static void
 enqueue_record(dmu_replay_record_t *drr, uint8_t **payload,
 	uint32_t *payload_size, void *context)
 {
@@ -302,18 +306,19 @@ enqueue_record(dmu_replay_record_t *drr, uint8_t **payload,
 }
 
 /* This is the packet passed to the feeder thread */
-typedef static struct {
-	zstream_team_t 	*team;
-	FILE			*input;
+typedef struct {
+	void	 	*team;
+	FILE		*input;
 } dedup_context_t;
 
 /* This is the feeder thread function */
-int
-enqueue_stream(struct dedup_context_t *context) {
+static int
+enqueue_stream(void *context_in) {
+	dedup_context_t *context = (dedup_context_t *)context_in;
 	stream_filter_t filter;
 	memset(&filter, 0, sizeof(filter));
 	filter.all_records_post = enqueue_record;
-	read_stream(context->input, -1, &filter, 1, B_TRUE, NULL);
+	read_stream(context->input, -1, &filter, 1, B_TRUE, context->team);
 	zstream_team_fini(context->team);
 	return 0;
 }
@@ -345,7 +350,7 @@ zstream_do_dedup(int argc, char *argv[])
 	int 			c;
 	dedup_context_t	feeder_context;
 	void			*hasher_team;
-	thrd_exit		feeder_thread;
+	thrd_t			feeder_thread;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
 		switch (c) {
@@ -405,10 +410,10 @@ zstream_do_dedup(int argc, char *argv[])
 
 	/* If a filename is provided, open it; otherwise use stdin */
 	if (argc == 1) {
-		input = fopen(argv[0], O_RDONLY);
+		input = fopen(argv[0], "r");
 		if (!input) {
 			(void) fprintf(stderr, "Error while opening file '%s': %s\n",
-			    filename, strerror(errno));
+			    argv[0], strerror(errno));
 			exit(1);
 		}
 	} else if (isatty(STDIN_FILENO)) {
@@ -421,13 +426,13 @@ zstream_do_dedup(int argc, char *argv[])
 	}
 
 	hasher_team = zstream_team_init(calculate_blake3_hash, 64 * 1024, 128);
-	context.team = hasher_team;
-	context.input = input;
+	feeder_context.team = hasher_team;
+	feeder_context.input = input;
 
-	if (thrd_create(&feeder_thread, enqueue_stream, context)
+	if (thrd_create(&feeder_thread, enqueue_stream, &feeder_context)
 		!= thrd_success)
 	{
-		fprintf(stderr, "Error creating feeder thread %d\n", i);
+		fprintf(stderr, "Error creating feeder thread\n");
 		exit(1);
 	}
 
