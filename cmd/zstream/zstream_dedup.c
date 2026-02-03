@@ -49,6 +49,7 @@
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
 typedef zio_cksum_t blake3_hash_t;
+typedef struct drr_write drr_write_t;
 
 typedef struct dedup_entry {
 	drr_write_t		write_block;
@@ -118,37 +119,6 @@ writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 	return true;
 }
 
-static void
-assemble_write_byref(dmu_replay_record_t *byref_drr, 
-	dmu_replay_record_t *being_deduped, dedup_entry_t *prev)
-{
-	memset(byref_drr, 0, sizeof(*byref_drr));
-
-	byref_drr->drr_type = DRR_WRITE_BYREF;
-	byref_drr->drr_payloadlen = 0;
-
-	drr_write_byref_t *drrwbr = &byref_drr->drr_u.drr_write_byref;
-	drr_write_t *thisw = &being_deduped->drr_u.drr_write;
-
-	drrwbr->drr_refguid = prev->write_block.drr_toguid;
-	drrwbr->drr_refobject = prev->write_block.drr_object;
-	drrwbr->drr_refoffset = prev->write_block.drr_offset;
-
-	drrwbr->drr_object = thisw->drr_object;
-	drrwbr->drr_offset = thisw->drr_offset;
-	drrwbr->drr_toguid = thisw->drr_toguid;
-
-	drrwbr->drr_length = thisw->drr_logical_size;
-	drrwbr->drr_checksumtype = thisw->drr_checksumtype;
-	drrwbr->drr_flags = thisw->drr_flags;
-	drrwbr->drr_key = thisw->drr_key;
-
-	memcpy(&byref_drr->drr_u.drr_checksum.drr_checksum,
-		&being_deduped->drr_u.drr_checksum.drr_checksum,
-		sizeof(zio_cksum_t));
-	memcpy(&drrwbr->drr_key, &thisw->drr_key, sizeof(thisw->drr_key));
-}
-
 static bool
 dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
 {
@@ -216,8 +186,7 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 	struct drr_begin 		*drrb = &drr->drr_u.drr_begin;
 	struct drr_end			*drre = &drr->drr_u.drr_end;
 	struct drr_write		*drrw = &drr->drr_u.drr_write;
-	struct drr_write_byref	*drrwb = &drr->drr_u.drr_write_byref;
-	struct drr_checksum		*drrc = &drr->drr_u.drr_checksum;
+	struct drr_write_yref	*drrwb = &drr->drr_u.drr_write_byref;
 
 	memset(&thedrr, 0, sizeof (dmu_replay_record_t));
 	memset(&stats, 0, sizeof (stats));
@@ -253,13 +222,31 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 			if (dedup_table_lookup(ddt, blake3), &existing) {
 				if (!writes_compatible(drrw, &existing.write_block)) {
 					stats.disqualified_records++;
+				} else {
+					struct drr_write_byref byref;
+					memset(&byref, 0, sizeof(byref));
+
+					byref.drr_refguid = prev->write_block.drr_toguid;
+					byref.drr_refobject = prev->write_block.drr_object;
+					byref.drr_refoffset = prev->write_block.drr_offset;
+
+					byref.drr_object = drrw->drr_object;
+					byref.drr_offset = drrw->drr_offset;
+					byref.drr_toguid = drrw->drr_toguid;
+
+					byref.drr_length = drrw->drr_logical_size;
+					byref.drr_checksumtype = drrw->drr_checksumtype;
+					byref.drr_flags = drrw->drr_flags;
+					byref.drr_key = drrw->drr_key;
+
+					memset(drr, 0, sizeof(*drr));
+					drr->drr_u.drr_write_byref = byref;
+					drr->drr_type = DRR_WRITE_BYREF;
+					drr->drr_payloadlen = 0;
+
+					stats->dedup_records++;
+					stats->bytes_saved += unit.payload_size;
 				}
-				dmu_replay_record_t byref_drr;
-				assemble_write_byref(&byref_drr, drr, &existing);
-				memset(drr, 0, sizeof(*drr));
-				*wrrb = byref_drr->drr_u.drr_write_byref;
-				stats->dedup_records++;
-				stats->bytes_saved += unit.payload_size;
 			} else {
 				/* First occurrence, insert into table and write as-is */
 				dedup_table_insert(ddt, blake3, drr);
@@ -296,9 +283,6 @@ zfs_dedup_stream(zstream_team_t *team, int outfd, linear_hash_t *ddt,
 				stats.disqualified_records);
 		}
 	}
-
-	free(buf);
-	return;
 }
 
 /* Callback that enqueues records on the zstream_team */
