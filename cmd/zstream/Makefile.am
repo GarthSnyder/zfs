@@ -15,6 +15,8 @@ zstream_SOURCES = \
 	%D%/zstream_token.c \
 	%D%/zstream_shared.c \
 	%D%/zstream_shared.h \
+	%D%/zstream_stream.c \
+	%D%/zstream_stream.h \
 	%D%/zstream_team.c \
 	%D%/zstream_team.h \
 	%D%/allocator.c \
