@@ -141,8 +141,8 @@ dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
  * Byteswapping only, should be invertible through a second call.
  * This function does not byte-swap checksums.
  */
-static void
-drr_byteswap(dmu_replay_record_t *drr, enum drr_type record_type) 
+void
+drr_byteswap(dmu_replay_record_t *drr, int record_type) 
 {
 	struct drr_begin *drrb = &drr->drr_u.drr_begin;
 	struct drr_end *drre = &drr->drr_u.drr_end;
@@ -264,8 +264,8 @@ drr_byteswap(dmu_replay_record_t *drr, enum drr_type record_type)
 
 #define CALL_ALL(filter_name, record, payload, payload_size, context) \
 	for (int i = 0; i < num_filters; i++) { \
-		if (filters[i]->filter_name) { \
-			filters[i]->filter_name(record, payload, payload_size, context); \
+		if (filters[i].filter_name) { \
+			filters[i].filter_name(record, payload, payload_size, context); \
 		} \
 	}
 
@@ -285,11 +285,15 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 
 	struct drr_begin *drrb = &drr->drr_u.drr_begin;
 	struct drr_end *drre = &drr->drr_u.drr_end;
+	struct drr_object *drro = &drr->drr_u.drr_object;
+	struct drr_write *drrw = &drr->drr_u.drr_write;
+	struct drr_spill *drrs = &drr->drr_u.drr_spill;
+	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 	struct drr_checksum *drrc = &drr->drr_u.drr_checksum;
 
 	fletcher_4_init();
 
-	while (sfread(&drr, sizeof(drr), in)) {
+	while (sfread(drr, sizeof(*drr), input)) {
 		
 		/*
 		 * If this is the first DMU record being processed, check for
@@ -308,7 +312,7 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 		/* Validate checksum before byteswapping */
 		uint32_t type = do_byteswap ? BSWAP_32(drr->drr_type) : drr->drr_type;
 		if (type > DRR_NUMTYPES) {
-			fprintf(stderr, "Invalid record type: %d\n", int(type));
+			fprintf(stderr, "Invalid record type: %d\n", (int)type);
 			exit(1);
 		}
 		boolean_t skip_checksum = (type == DRR_BEGIN) ||
@@ -335,7 +339,7 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 			if (do_byteswap) {
 				ZIO_CHECKSUM_BSWAP(&dup_cksum);
 			}
-			if (!ZIO_CHECKSUM_EQUAL(ddrc->drr_checksum, dup_cksum)) {
+			if (!ZIO_CHECKSUM_EQUAL(drrc->drr_checksum, dup_cksum)) {
 				fprintf(stderr, "Incorrect checksum in record header.\n");
 				fprintf(stderr, "Expected checksum = %llx/%llx/%llx/%llx\n",
 				    (longlong_t)dup_cksum.zc_word[0],
@@ -378,9 +382,9 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 
 		if (payload_size) {
 			payload = safe_malloc(payload_size);
-			(void) sfread(payload, payload_size, in);
+			(void) sfread(payload, payload_size, input);
+			fletcher_4_incremental_native(payload, payload_size, &in_cksum);
 		}
-		fletcher_4_incremental_native(payload, payload_size, &in_cksum);
 
 		CALL_ALL(all_records_pre, drr, &payload, &payload_size, context);
 		CALL_ALL(by_type[record_type], drr, &payload, &payload_size, context);
@@ -392,9 +396,9 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 		 */
 
 		fletcher_4_incremental_native(drr,
-		    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum), 
+		    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum),
 		    &out_cksum);
-		boolean_t skip_checksum = (drr->drr_type == DRR_BEGIN) ||
+		skip_checksum = (drr->drr_type == DRR_BEGIN) ||
 			((drr->drr_type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
 		if (!skip_checksum) {
 			drrc->drr_checksum = out_cksum;
@@ -420,7 +424,7 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 				}
 			}
 		}
-		if (!retain_payload) {
+		if (!retain_payload && payload_size > 0) {
 			free(payload);
 		}
 	}

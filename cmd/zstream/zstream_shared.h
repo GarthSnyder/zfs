@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <sys/zio_checksum.h>
 #include <sys/zfs_ioctl.h>
+#include <sys/dmu.h>
 
 #ifndef	_ZSTREAM_SHARED_H
 #define	_ZSTREAM_SHARED_H
@@ -85,8 +86,8 @@ extern int read_stream(FILE *input, int output, stream_filter_t *filters,
  * Byteswapping only, invertible through a second call. Always swaps, not
  * "byteswap if needed."
  */
-static void
-drr_byteswap(dmu_replay_record_t *drr, enum drr_type record_type);
+extern void
+drr_byteswap(dmu_replay_record_t *drr, int record_type);
 
 extern void *safe_malloc(size_t size);
 extern void *safe_calloc(size_t n);
