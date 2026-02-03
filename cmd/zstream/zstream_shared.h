@@ -39,11 +39,60 @@
 extern "C" {
 #endif
 
+/*
+ * read_stream: generalized ZFS stream processing
+ *
+ * read_stream copies input to output, passing individual records to
+ * one or more filters. It handles checksumming, checksum validation, 
+ * marshalling, and byteswapping.
+ *
+ * Filters may alter the record blocks or payloads as they wish. Payloads
+ * are malloc'ed. If a filter wants to increase a payload's size, it can 
+ * call realloc() or free the old payload and write a new payload address.
+ * 
+ * If a client wants full control over the tail of the pipeline, it can
+ * pass a negative value in the output field, which is functionally
+ * identical to passing an fd to /dev/null. If the retain_payload 
+ * argument is B_TRUE, the client is responsible for deallocating 
+ * payloads. The record header buffer is always reused, so that
+ * must be copied if the client wants to refer to earlier blocks.
+ *
+ * read_stream checks the stream's first block to determine endianness.
+ * It validates checksums and converts records to native-endian.
+ * Callbacks are always called with native-endian records.
+ *
+ * Record-type-specific callbacks are always called with native-endian
+ * order. To emit a stream in nonnative-endian order, call drr_byteswap
+ * from all_records_post and calculate your own running checksums.
+ *
+ * The context argument is a pointer to client-specific data. It is
+ * not examined and is passed to every callback. 
+ */
+
+typedef void stream_callback_t(dmu_replay_record_t *drr, uint8_t **payload,
+	uint32_t *payload_size, void *context);
+
+typedef struct {
+	stream_callback_t	*all_records_pre;			/* checksums validated */
+	stream_callback_t 	*by_type[DRR_NUMTYPES];		/* Record-type specific */
+	stream_callback_t 	*all_records_post;			/* checksummed */
+} stream_filter_t;
+
+extern int read_stream(FILE *input, int output, stream_filter_t *filters,
+	int num_filters, boolean_t retain_payload, void *context);
+
+/*
+ * Byteswapping only, invertible through a second call. Always swaps, not
+ * "byteswap if needed."
+ */
+static void
+drr_byteswap(dmu_replay_record_t *drr, enum drr_type record_type);
+
 extern void *safe_malloc(size_t size);
 extern void *safe_calloc(size_t n);
 extern int sfread(void *buf, size_t size, FILE *fp);
 extern int dump_record(dmu_replay_record_t *drr, void *payload,
-    int payload_len, zio_cksum_t *zc, int outfd);
+	int payload_len, zio_cksum_t *zc, int outfd);
 
 #ifdef	__cplusplus
 }
