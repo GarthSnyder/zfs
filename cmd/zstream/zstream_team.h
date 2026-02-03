@@ -50,13 +50,13 @@ typedef struct work_unit {
 	dmu_replay_record_t	drr;
 	uint8_t				*payload;
 	uint64_t			payload_size;
-	zio_cksum_t			zstream_cksum;	/* "Before" checksum */
+	zio_cksum_t			zstream_cksum;
 	boolean_t			needs_processing;
 	void				*output;
 } work_unit_t;
 
 typedef void
-process_unit_t(work_unit_t *unit);
+perform_work_t(work_unit_t *unit);
 
 /*
  * Initialize the thread pool. Must be called before enqueue or dequeue.
@@ -68,8 +68,8 @@ process_unit_t(work_unit_t *unit);
  * payload data. If it's zero, records are processed individually (though
  * concurrently).
  */
-void * 
-zstream_team_init(process_unit_t process_unit, uint64_t batch_size,
+void *
+zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
 	uint64_t queue_length);
 
 /*

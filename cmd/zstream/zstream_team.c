@@ -68,9 +68,9 @@ typedef struct uniqueue {
 
 typedef struct zstream_team {
 	uniqueue_t		queue;
-	int				num_threads;
+	int			num_threads;
 	thrd_t			*threads;
-	perform_work_t	process;
+	perform_work_t		*process;
 	uint64_t		batch_size;
 	uint64_t		queue_length;
 	boolean_t		finalized;
@@ -89,7 +89,7 @@ typedef struct zstream_team {
  * code to handle this case through the normal process.
  */
 static int
-claim_batch(zstream_team_t *team, work_unit_t **units, int max_units) {
+claim_batch(zstream_team_t *team, queue_slot_t **slots, int max_units) {
 
 	uniqueue_t	*q = &team->queue;
 	uint64_t 	bytes_claimed = 0;
@@ -114,13 +114,13 @@ claim_batch(zstream_team_t *team, work_unit_t **units, int max_units) {
 			bytes_claimed <= target_bytes)
 		{
 			uint64_t slot = q->claim % team->queue_length;
-			if (!count & !q->slots[slot].needs_processing) {
+			if (!count && !q->slots[slot].unit.needs_processing) {
 				junk_batch = B_TRUE;
-			} else if (junk_batch && q->slots[slot].needs_processing) {
+			} else if (junk_batch && q->slots[slot].unit.needs_processing) {
 				break;
 			}
-			units[count] = &q->slots[slot];
-			bytes_claimed += q->slots[slot].payload_size;
+			slots[count] = &q->slots[slot];
+			bytes_claimed += q->slots[slot].unit.payload_size;
 			q->claim++;
 			count++;
 		}
@@ -135,7 +135,7 @@ static int
 worker_thread(void *team_in)
 {
 	zstream_team_t 	*team = (zstream_team_t *)team_in;
-	work_unit_t		*batch[MAX_BATCH];
+	queue_slot_t	*batch[MAX_BATCH];
 	uniqueue_t		*q = &team->queue;
 	uint64_t		count = 0;
 
@@ -143,7 +143,7 @@ worker_thread(void *team_in)
 		count = claim_batch(team, batch, MAX_BATCH);
 		/* Complete the whole batch before returning any items */
 		for (int i = 0; i < count; i++) {
-			work_unit_t *unit = batch[i];
+			work_unit_t *unit = &batch[i]->unit;
 			if (unit->needs_processing) {
 				team->process(unit);
 			}
@@ -167,19 +167,19 @@ worker_thread(void *team_in)
 
 void *
 zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
-	uint64_t queue_length);
+	uint64_t queue_length)
 {
 	zstream_team_t *team = safe_malloc(sizeof(zstream_team_t));
 
 	memset(team, 0, sizeof (zstream_team_t));
 
+	team->process = perform_work;
 	team->batch_size = batch_size;
 	team->queue_length = queue_length;
 	team->queue.slots = safe_calloc(sizeof(queue_slot_t) * queue_length);
 
 	mtx_init(&team->queue.mutex, mtx_plain);
 	cnd_init(&team->queue.inserted);
-	cnd_init(&team->queue.claimed);
 	cnd_init(&team->queue.completed);
 	cnd_init(&team->queue.dequeued);
 
@@ -203,11 +203,11 @@ zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
 }
 
 void
-zstream_team_enqueue(void *team_in, work_unit_t *unit, B_FALSE) {
-	zstream_team_enqueue_impl(team, unit);
+zstream_team_enqueue(void *team_in, work_unit_t *unit) {
+	zstream_team_enqueue_impl(team_in, unit, B_FALSE);
 }
 
-void
+static void
 zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 {
 	zstream_team_t *team = (zstream_team_t *)team_in;
@@ -222,11 +222,13 @@ zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 		}
 	}
 	uint64_t slot = q->insert % team->queue_length;
-	q->slots[slot] = {*unit, B_FALSE, last_one};
-	q->insert++;
+	q->slots[slot].unit = *unit;
+	q->slots[slot].completed = B_FALSE;
+	q->slots[slot].end_of_stream = last_one;
 	if (unit->needs_processing) {
 		q->bytes_pending += unit->payload_size;
 	}
+	q->insert++;
 	team->finalized = last_one;
 	cnd_signal(&q->inserted);
 	mtx_unlock(&q->mutex);
@@ -239,14 +241,14 @@ zstream_team_dequeue(void *team_in, work_unit_t *unit) {
 	mtx_lock(&q->mutex);
 	while (true) {
 		if (q->dequeue < q->complete) {
-			unit64_t slot = q->dequeue % team->queue_length;
+			uint64_t slot = q->dequeue % team->queue_length;
 			q->dequeue++;
 			if (q->slots[slot].end_of_stream) {
 				mtx_unlock(&q->mutex);
 				zstream_team_destroy(team);
 				return (1);
 			} else {
-				*unit = q->slots[slot];
+				*unit = q->slots[slot].unit;
 				cnd_signal(&q->dequeued);
 				mtx_unlock(&q->mutex);
 				return (0);
