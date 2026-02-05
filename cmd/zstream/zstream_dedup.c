@@ -194,6 +194,7 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 	while (zstream_team_dequeue(team, &unit) == 0)
 	{
 		ZIO_SET_CHECKSUM(&drrc->drr_checksum, 0, 0, 0, 0);
+		stats.bytes_read += sizeof(*drr) + unit.payload_size;
 
 		switch (drr->drr_type) {
 
@@ -247,6 +248,9 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 					stats.dedup_records++;
 					stats.bytes_saved += unit.payload_size;
 
+					if (unit.payload_size) {
+						free(unit.payload);
+					}
 					unit.payload = NULL;
 					unit.payload_size = 0;
 				}
@@ -261,7 +265,6 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 			break;
 		}
 
-		stats.bytes_read += sizeof(*drr) + unit.payload_size;
 		stats.total_records += 1;
 		dump_record(drr, unit.payload, unit.payload_size, &stream_cksum, outfd);
 		if (unit.payload_size) {
