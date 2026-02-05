@@ -59,7 +59,6 @@ drr_byteswap(dmu_replay_record_t *drr, int record_type)
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 	struct drr_object_range *drror = &drr->drr_u.drr_object_range;
 	struct drr_redact *drrr = &drr->drr_u.drr_redact;
-	struct drr_checksum *drrc = &drr->drr_u.drr_checksum;
 
 	drr->drr_type = BSWAP_32(drr->drr_type);
 	drr->drr_payloadlen = BSWAP_32(drr->drr_payloadlen);
@@ -173,14 +172,14 @@ drr_byteswap(dmu_replay_record_t *drr, int record_type)
 		} \
 	}
 
-int
+void
 read_stream(FILE *input, int output, stream_filter_t *filters,
 	int num_filters, boolean_t retain_payload, void *context)
 {
-	zio_cksum_t in_cksum;
+	zio_cksum_t	in_cksum;
 	zio_cksum_t out_cksum;
 	boolean_t	first_record = B_TRUE;
-	boolean_t	do_byteswap;
+	boolean_t	do_byteswap = B_FALSE;
 	uint32_t	payload_size;
 	uint8_t		*payload;
 
@@ -195,6 +194,8 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 	struct drr_checksum *drrc = &drr->drr_u.drr_checksum;
 
+	ZIO_SET_CHECKSUM(&in_cksum, 0, 0, 0, 0);
+	ZIO_SET_CHECKSUM(&out_cksum, 0, 0, 0, 0);
 	fletcher_4_init();
 
 	while (sfread(drr, sizeof(*drr), input)) {
@@ -219,48 +220,34 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 			fprintf(stderr, "Invalid record type: %d\n", (int)type);
 			exit(1);
 		}
+		if (type == DRR_END && drre->drr_toguid != 0) {
+			if (!validate_checksum(&in_cksum, &drre->drr_checksum, 
+				"in END record")) { exit(1); }
+		}
+		if (type == DRR_BEGIN) {
+			ZIO_SET_CHECKSUM(&in_cksum, 0, 0, 0, 0);
+		}
+		fletcher_4_incremental_native(drr,
+		    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum),
+		    &in_cksum);
 		boolean_t skip_checksum = (type == DRR_BEGIN) ||
 			((type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
-		if (skip_checksum) {
-			ZIO_SET_CHECKSUM(&in_cksum, 0, 0, 0, 0);
-			ZIO_SET_CHECKSUM(&out_cksum, 0, 0, 0, 0);
-		} else {
-			if (type == DRR_END) {
-				if (!ZIO_CHECKSUM_EQUAL(drre->drr_checksum, in_cksum)) {
-					fprintf(stderr, "Incorrect checksum in END record.\n");
-					fprintf(stderr, "Expected checksum = %llx/%llx/%llx/%llx\n",
-					    (longlong_t)in_cksum.zc_word[0],
-					    (longlong_t)in_cksum.zc_word[1],
-					    (longlong_t)in_cksum.zc_word[2],
-					    (longlong_t)in_cksum.zc_word[3]);
-					exit(1);
-				}
-			}
-			fletcher_4_incremental_native(drr,
-			    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum),
-			    &in_cksum);
+		if (!skip_checksum) {
 			zio_cksum_t dup_cksum = in_cksum;
 			if (do_byteswap) {
 				ZIO_CHECKSUM_BSWAP(&dup_cksum);
 			}
-			if (!ZIO_CHECKSUM_EQUAL(drrc->drr_checksum, dup_cksum)) {
-				fprintf(stderr, "Incorrect checksum in record header.\n");
-				fprintf(stderr, "Expected checksum = %llx/%llx/%llx/%llx\n",
-				    (longlong_t)dup_cksum.zc_word[0],
-				    (longlong_t)dup_cksum.zc_word[1],
-				    (longlong_t)dup_cksum.zc_word[2],
-				    (longlong_t)dup_cksum.zc_word[3]);
-				exit(1);
-			}
-			/*
-			 * We need to complete the checksum's checksum and the
-			 * checksum of the payload even though it's not visible to
-			 * the client, just so we can validate checksums on future
-			 * incoming records.
-			 */
-			fletcher_4_incremental_native(&drrc->drr_checksum,
-				sizeof(drrc->drr_checksum), &in_cksum);
+			if (!validate_checksum(&dup_cksum, &drrc->drr_checksum, 
+				"at end of record header")) { exit(1); }
 		}
+		/*
+		 * We need to complete the checksum's checksum and the
+		 * checksum of the payload even though it's not visible to
+		 * the client, just so we can validate checksums on future
+		 * incoming records.
+		 */
+		fletcher_4_incremental_native(&drrc->drr_checksum,
+			sizeof(drrc->drr_checksum), &in_cksum);
 
 		if (do_byteswap) {
 			drr_byteswap(drr, BSWAP_32(drr->drr_type));
@@ -299,15 +286,16 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 		 * the final versions of the checksums.
 		 */
 
-		fletcher_4_incremental_native(drr,
-		    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum),
-		    &out_cksum);
-		skip_checksum = (drr->drr_type == DRR_BEGIN) ||
-			((drr->drr_type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
-		if (!skip_checksum) {
-			drrc->drr_checksum = out_cksum;
-		} else {
+		skip_checksum = (type == DRR_BEGIN) ||
+			((type == DRR_END && drr->drr_u.drr_end.drr_toguid == 0));
+		if (skip_checksum) {
+			ZIO_SET_CHECKSUM(&out_cksum, 0, 0, 0, 0);
 			ZIO_SET_CHECKSUM(&drrc->drr_checksum, 0, 0, 0, 0);
+		} else {
+			fletcher_4_incremental_native(drr,
+			    offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum),
+			    &out_cksum);
+			drrc->drr_checksum = out_cksum;
 		}
 		fletcher_4_incremental_native(&drrc->drr_checksum,
 			sizeof(drrc->drr_checksum), &out_cksum);

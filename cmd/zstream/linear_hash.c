@@ -39,7 +39,7 @@ bucket_for_hash(linear_hash_t* lh, uint64_t hash) {
 	return bucket;
 }
 
-/* Considers only the specific bucket, not the chain.
+/* Considers only the specific bucket segment, not the chain.
  * Bucket must already have been retrieved before calling, and
  * the bucket must be resaved afterwards (if successful). */
 static bool
@@ -117,7 +117,7 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 	}
 }
 
-#ifdef DEBUG
+#ifdef HASH_DEBUG
 #define MAX_CHAIN 1024
 static int
 validate(linear_hash_t *lh, bool print_stats) {
@@ -213,7 +213,7 @@ if there are unused entries. */
 static int
 split_bucket(linear_hash_t* lh) {
 
-#ifdef DEBUG
+#ifdef HASH_DEBUG
 	if (validate(lh, false) != 0) {
 		fprintf(stderr, "validation did not complete successfully\n");
 	}
@@ -282,7 +282,7 @@ split_bucket(linear_hash_t* lh) {
 
 	lh->num_splits++;
 
-#ifdef DEBUG
+#ifdef HASH_DEBUG
 	if (validate(lh, false) != 0) {
 		fprintf(stderr, "validation did not complete successfully\n");
 	}
@@ -397,7 +397,7 @@ lh_retrieve_next(lh_iterator_t *iter, void *buffer) {
 }
 
 void lh_destroy(linear_hash_t* lh) {
-#ifdef DEBUG
+#ifdef HASH_DEBUG
 	validate(lh, true);
 #endif
 	allocator_destroy(&lh->data_alloc);

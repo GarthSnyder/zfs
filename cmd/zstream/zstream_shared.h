@@ -46,6 +46,15 @@ extern int sfread(void *buf, size_t size, FILE *fp);
 extern int dump_record(dmu_replay_record_t *drr, void *payload,
 	int payload_len, zio_cksum_t *zc, int outfd);
 
+/* Static buffer, must use result before next call */
+extern char *
+checksum_str(zio_cksum_t *cksum);
+
+/* Returns B_TRUE for valid, B_FALSE for invalid */
+boolean_t
+validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual, 
+	const char *where); 
+
 #ifdef	__cplusplus
 }
 #endif

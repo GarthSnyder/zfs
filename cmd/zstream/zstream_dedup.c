@@ -178,29 +178,27 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 	bool verbose)
 {
 	work_unit_t				unit;
-	dmu_replay_record_t		*drr;
+	dmu_replay_record_t		*drr = &unit.drr;
 	zio_cksum_t 			stream_cksum;
 	dedup_stats_t 			stats;
 	dedup_entry_t			existing;
-	uint32_t				fflags;
 
-	struct drr_begin 		*drrb;
-	struct drr_end			*drre;
-	struct drr_write		*drrw;
+	struct drr_begin 		*drrb = &drr->drr_u.drr_begin;
+	struct drr_end			*drre = &drr->drr_u.drr_end;
+	struct drr_write		*drrw = &drr->drr_u.drr_write;
+	struct drr_checksum		*drrc = &drr->drr_u.drr_checksum;
 
 	memset(&stats, 0, sizeof (stats));
 	stats.last_status_time = gethrtime();
 
 	while (zstream_team_dequeue(team, &unit) == 0)
 	{
-		drr = &unit.drr;
-		drrb = &drr->drr_u.drr_begin;
-		drre = &drr->drr_u.drr_end;
-		drrw = &drr->drr_u.drr_write;
+		ZIO_SET_CHECKSUM(&drrc->drr_checksum, 0, 0, 0, 0);
 
 		switch (drr->drr_type) {
 
 		case DRR_BEGIN:
+			uint32_t fflags;
 			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
 			fflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 			if (fflags & DMU_BACKUP_FEATURE_DEDUP) {
@@ -263,7 +261,9 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 		stats.bytes_read += sizeof(*drr) + unit.payload_size;
 		stats.total_records += 1;
 		dump_record(drr, unit.payload, unit.payload_size, &stream_cksum, outfd);
-		free(unit.payload);
+		if (unit.payload_size) {
+			free(unit.payload);
+		}
 		if (verbose) {
 			print_status(&stats, false);
 		}
@@ -427,7 +427,7 @@ zstream_do_dedup(int argc, char *argv[])
 		input = stdin;
 	}
 
-	hasher_team = zstream_team_init(calculate_blake3_hash, 64 * 1024, 128);
+	hasher_team = zstream_team_init(calculate_blake3_hash, 64 * 1024, 256);
 	feeder_context.team = hasher_team;
 	feeder_context.input = input;
 

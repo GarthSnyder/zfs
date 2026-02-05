@@ -54,7 +54,7 @@ typedef struct queue_slot {
 } queue_slot_t;
 
 typedef struct uniqueue {
-	queue_slot_t		*slots;
+	queue_slot_t	*slots;
 	uint64_t		insert, claim, complete, dequeue;
 	cnd_t			inserted, completed, dequeued;
 	mtx_t			mutex;
@@ -64,9 +64,9 @@ typedef struct uniqueue {
 
 typedef struct zstream_team {
 	uniqueue_t		queue;
-	int			num_threads;
+	int				num_threads;
 	thrd_t			*threads;
-	perform_work_t		*process;
+	perform_work_t	*process;
 	uint64_t		batch_size;
 	uint64_t		queue_length;
 	boolean_t		finalized;
@@ -94,37 +94,34 @@ claim_batch(zstream_team_t *team, queue_slot_t **slots, int max_units) {
 	boolean_t	junk_batch = B_FALSE;
 
 	mtx_lock(&q->mutex);
-	while (true) {
-		if (q->claim >= q->insert) {
-			cnd_wait(&q->inserted, &q->mutex);
-			if (q->terminating) {
-				mtx_unlock(&q->mutex);
-				thrd_exit(0);
-			}			
-		}
-		uint64_t fair_share = q->bytes_pending / team->num_threads;
-		if (fair_share > team->batch_size && team->batch_size) {
-			target_bytes = fair_share;
-		}
-		while (q->claim < q->insert && count < max_units &&
-			bytes_claimed <= target_bytes)
-		{
-			uint64_t slot = q->claim % team->queue_length;
-			if (!count && !q->slots[slot].unit.needs_processing) {
-				junk_batch = B_TRUE;
-			} else if (junk_batch && q->slots[slot].unit.needs_processing) {
-				break;
-			}
-			slots[count] = &q->slots[slot];
-			bytes_claimed += q->slots[slot].unit.payload_size;
-			q->claim++;
-			count++;
-		}
-		if (count) {
+	while (q->claim >= q->insert) {
+		cnd_wait(&q->inserted, &q->mutex);
+		if (q->terminating) {
 			mtx_unlock(&q->mutex);
-			return count;			
-		}
+			thrd_exit(0);
+		}			
 	}
+	uint64_t fair_share = q->bytes_pending / team->num_threads;
+	if (fair_share > team->batch_size && team->batch_size) {
+		target_bytes = fair_share;
+	}
+	while (q->claim < q->insert && 
+		count < max_units &&
+		bytes_claimed <= target_bytes)
+	{
+		uint64_t slot = q->claim % team->queue_length;
+		if (q->slots[slot].unit.needs_processing) {
+			if (junk_batch) break;
+			bytes_claimed += q->slots[slot].unit.payload_size;
+		} else if (!count) {
+			junk_batch = B_TRUE;
+		}
+		slots[count] = &q->slots[slot];
+		q->claim++;
+		count++;
+	}
+	mtx_unlock(&q->mutex);
+	return count;
 }
 
 static int
@@ -149,7 +146,9 @@ worker_thread(void *team_in)
 			batch[i]->completed = B_TRUE;
 		}
 		boolean_t any_completed = B_FALSE;
-		while (q->slots[q->complete].completed) {
+		while (q->complete < q->claim &&
+			q->slots[q->complete % team->queue_length].completed) 
+		{
 			q->complete++;
 			any_completed = B_TRUE;
 		}
@@ -204,6 +203,9 @@ zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 	zstream_team_t *team = (zstream_team_t *)team_in;
 	uniqueue_t *q = &team->queue;
 
+	if (team->finalized) {
+		return;
+	}
 	mtx_lock(&q->mutex);
 	while (q->insert - q->dequeue >= team->queue_length) {
 		cnd_wait(&q->dequeued, &q->mutex);
@@ -216,11 +218,9 @@ zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 	q->slots[slot].unit = *unit;
 	q->slots[slot].completed = B_FALSE;
 	q->slots[slot].end_of_stream = last_one;
-	if (unit->needs_processing) {
-		q->bytes_pending += unit->payload_size;
-	}
+	q->bytes_pending += unit->needs_processing ? unit->payload_size : 0;
 	q->insert++;
-	team->finalized = last_one;
+	team->finalized = team->finalized || last_one;
 	cnd_signal(&q->inserted);
 	mtx_unlock(&q->mutex);
 }
@@ -250,30 +250,30 @@ zstream_team_destroy(zstream_team_t *team) {
 }
 
 int
-zstream_team_dequeue(void *team_in, work_unit_t *unit) {
+zstream_team_dequeue(void *team_in, work_unit_t *unit)
+{
 	zstream_team_t *team = (zstream_team_t *)team_in;
 	uniqueue_t *q = &team->queue;
+
 	mtx_lock(&q->mutex);
-	while (true) {
-		if (q->dequeue < q->complete) {
-			uint64_t slot = q->dequeue % team->queue_length;
-			q->dequeue++;
-			if (q->slots[slot].end_of_stream) {
-				mtx_unlock(&q->mutex);
-				zstream_team_destroy(team);
-				return (1);
-			} else {
-				*unit = q->slots[slot].unit;
-				cnd_signal(&q->dequeued);
-				mtx_unlock(&q->mutex);
-				return (0);
-			}
-		}
+	while (q->dequeue >= q->complete) {
 		cnd_wait(&q->completed, &q->mutex);
 		if (q->terminating) {
 			mtx_unlock(&q->mutex);
 			thrd_exit(0);
 		}
+	}
+	uint64_t slot = q->dequeue % team->queue_length;
+	q->dequeue++;
+	if (q->slots[slot].end_of_stream) {
+		mtx_unlock(&q->mutex);
+		zstream_team_destroy(team);
+		return (1);
+	} else {
+		*unit = q->slots[slot].unit;
+		cnd_signal(&q->dequeued);
+		mtx_unlock(&q->mutex);
+		return (0);
 	}
 }
 

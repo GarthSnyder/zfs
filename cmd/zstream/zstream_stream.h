@@ -76,7 +76,7 @@ typedef struct {
 	stream_callback_t 	*all_records_post;			/* checksummed */
 } stream_filter_t;
 
-extern int read_stream(FILE *input, int output, stream_filter_t *filters,
+extern void read_stream(FILE *input, int output, stream_filter_t *filters,
 	int num_filters, boolean_t retain_payload, void *context);
 
 /*

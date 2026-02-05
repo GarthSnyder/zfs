@@ -98,17 +98,13 @@ read_hdr(dmu_replay_record_t *drr, zio_cksum_t *cksum)
 	if (r == 0)
 		return (0);
 	if (do_cksum &&
-	    !ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum) &&
-	    !ZIO_CHECKSUM_EQUAL(saved_cksum,
-	    drr->drr_u.drr_checksum.drr_checksum)) {
-		fprintf(stderr, "invalid checksum\n");
-		(void) printf("Incorrect checksum in record header.\n");
-		(void) printf("Expected checksum = %llx/%llx/%llx/%llx\n",
-		    (longlong_t)saved_cksum.zc_word[0],
-		    (longlong_t)saved_cksum.zc_word[1],
-		    (longlong_t)saved_cksum.zc_word[2],
-		    (longlong_t)saved_cksum.zc_word[3]);
-		return (0);
+	    !ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum))
+	{
+		if (!validate_checksum(&saved_cksum, 
+			&drr->drr_u.drr_checksum.drr_checksum, "at end of record"))
+		{
+			return (0);
+		}
 	}
 	return (sizeof (*drr));
 }
@@ -425,26 +421,12 @@ zstream_do_dump(int argc, char *argv[])
 			 * value, because the stored checksum is of
 			 * everything before the DRR_END record.
 			 */
-			if (do_cksum && !ZIO_CHECKSUM_EQUAL(drre->drr_checksum, pcksum)) {
-				(void) printf("Expected checksum differs from "
-				    "checksum in stream.\n");
-				(void) printf("Expected checksum = "
-				    "%llx/%llx/%llx/%llx\n",
-				    (long long unsigned int)pcksum.zc_word[0],
-				    (long long unsigned int)pcksum.zc_word[1],
-				    (long long unsigned int)pcksum.zc_word[2],
-				    (long long unsigned int)pcksum.zc_word[3]);
+			if (!do_cksum || validate_checksum(&pcksum, &drre->drr_checksum,
+					"in END record"))
+			{
+				(void) printf("END %schecksum = %s\n", offset_str,
+					checksum_str(&drre->drr_checksum));
 			}
-			(void) printf("END %schecksum = %llx / %llx / %llx / %llx\n",
-				offset_str,
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[0],
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[1],
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[2],
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[3]);	
 			(void) printf("    toguid = %lx\n", drre->drr_toguid);
 
 			ZIO_SET_CHECKSUM(&zc, 0, 0, 0, 0);
@@ -767,7 +749,7 @@ zstream_do_dump(int argc, char *argv[])
 			exit(1);
 		}
 		if (drr->drr_type != DRR_BEGIN && very_verbose) {
-			(void) printf("    checksum = %llx/%llx/%llx/%llx\n",
+			(void) printf("    checksum = %llx / %llx / %llx / %llx\n",
 			    (longlong_t)drrc->drr_checksum.zc_word[0],
 			    (longlong_t)drrc->drr_checksum.zc_word[1],
 			    (longlong_t)drrc->drr_checksum.zc_word[2],

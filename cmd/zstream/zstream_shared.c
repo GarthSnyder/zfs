@@ -137,3 +137,28 @@ dump_record(dmu_replay_record_t *drr, void *payload, int payload_len,
 	return (0);
 }
 
+static char cksum_str[128];
+
+char *
+checksum_str(zio_cksum_t *cksum) {
+	snprintf(cksum_str, sizeof(cksum_str), "%.16llx / %.16llx / %.16llx / %.16llx",
+		(long long unsigned int) cksum->zc_word[0],
+		(long long unsigned int) cksum->zc_word[1],
+		(long long unsigned int) cksum->zc_word[2],
+		(long long unsigned int) cksum->zc_word[3]);
+	return cksum_str;
+}
+
+boolean_t
+validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
+	const char *where) 
+{
+	if (ZIO_CHECKSUM_EQUAL(*expected, *actual)) {
+		return B_TRUE;
+	}
+	fprintf(stderr, "Incorrect checksum %s.\n", where);
+	fprintf(stderr, "Expected = %s\n", checksum_str(expected));
+	fprintf(stderr, "  Actual = %s\n", checksum_str(actual));
+	return B_FALSE;
+}
+
