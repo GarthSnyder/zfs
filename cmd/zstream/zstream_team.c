@@ -247,6 +247,7 @@ zstream_team_destroy(zstream_team_t *team) {
 	cnd_destroy(&team->queue.dequeued);
 	free(team->threads);
 	free(team->queue.slots);
+	free(team);
 }
 
 int

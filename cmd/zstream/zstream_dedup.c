@@ -258,6 +258,7 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 				/* First occurrence, insert into table and write as-is */
 				dedup_table_insert(ddt, blake3, drr);
 			}
+			free(blake3);
 			break;
 
 		default:
