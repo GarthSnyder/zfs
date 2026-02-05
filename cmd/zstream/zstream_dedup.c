@@ -114,18 +114,21 @@ writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 		|| memcmp(this->drr_salt, prev->drr_salt, sizeof(this->drr_salt))
 		|| memcmp(this->drr_iv, prev->drr_iv, sizeof(this->drr_iv))
 		|| memcmp(this->drr_mac, prev->drr_mac, sizeof(this->drr_mac))
-	) {
+		|| !ZIO_CHECKSUM_EQUAL(this->drr_key.ddk_cksum, 
+			prev->drr_key.ddk_cksum)
+		|| this->drr_key.ddk_prop != prev->drr_key.ddk_prop)
+	{
 		return false;
 	}
 	return true;
 }
 
 static bool
-dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
+dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t *hash, dedup_entry_t *dde)
 {
 	lh_iterator_t iter;
 
-	int ret = lh_retrieve_setup(ddt, BLAKE3_64_BIT(&hash), &iter);
+	int ret = lh_retrieve_setup(ddt, BLAKE3_64_BIT(hash), &iter);
 	if (ret < 0) {
 		fprintf(stderr, "Unable to initiate read from dedup table, aborting...\n");
 		exit(1);
@@ -144,7 +147,7 @@ dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
 		if (iter.iteration_complete) {
 			return false;
 		}
-		if (memcmp(&dde->hash, &hash, BLAKE3_OUT_LEN) == 0) {
+		if (memcmp(&dde->hash, hash, BLAKE3_OUT_LEN) == 0) {
 			return true;
 		}
 	}
@@ -152,19 +155,19 @@ dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t hash, dedup_entry_t *dde)
 }
 
 static void
-dedup_table_insert(linear_hash_t *ddt, blake3_hash_t hash,
+dedup_table_insert(linear_hash_t *ddt, blake3_hash_t *hash,
 	dmu_replay_record_t *drr)
 {
 	dedup_entry_t dedup;
 
 	memcpy(&dedup.write_block, &drr->drr_u.drr_write,
 		sizeof(drr->drr_u.drr_write));
-	memcpy(&dedup.hash, &hash, sizeof(dedup.hash));
+	memcpy(&dedup.hash, hash, sizeof(dedup.hash));
 	memcpy(&dedup.checksum, &drr->drr_u.drr_checksum.drr_checksum,
 		sizeof(dedup.checksum));
 	dedup.payload_length = drr->drr_payloadlen;
 
-	if (lh_insert(ddt, BLAKE3_64_BIT(&hash), &dedup) < 0) {
+	if (lh_insert(ddt, BLAKE3_64_BIT(hash), &dedup) < 0) {
 		fprintf(stderr, "Error writing to dedup hash table, aborting...\n");
 		exit(1);
 	}
@@ -218,7 +221,7 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 		case DRR_WRITE:
 			stats.write_records++;
 			/* Check if we've seen this block before */
-			zio_cksum_t blake3 = *((zio_cksum_t *)unit.output);
+			zio_cksum_t *blake3 = (zio_cksum_t *)unit.output;
 			if (dedup_table_lookup(ddt, blake3, &existing)) {
 				if (!writes_compatible(drrw, &existing.write_block)) {
 					stats.disqualified_records++;
@@ -246,6 +249,9 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 
 					stats.dedup_records++;
 					stats.bytes_saved += unit.payload_size;
+
+					unit.payload = NULL;
+					unit.payload_size = 0;
 				}
 			} else {
 				/* First occurrence, insert into table and write as-is */
