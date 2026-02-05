@@ -113,10 +113,7 @@ writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 		|| this->drr_compressed_size != prev->drr_compressed_size
 		|| memcmp(this->drr_salt, prev->drr_salt, sizeof(this->drr_salt))
 		|| memcmp(this->drr_iv, prev->drr_iv, sizeof(this->drr_iv))
-		|| memcmp(this->drr_mac, prev->drr_mac, sizeof(this->drr_mac))
-		|| !ZIO_CHECKSUM_EQUAL(this->drr_key.ddk_cksum, 
-			prev->drr_key.ddk_cksum)
-		|| this->drr_key.ddk_prop != prev->drr_key.ddk_prop)
+		|| memcmp(this->drr_mac, prev->drr_mac, sizeof(this->drr_mac)))
 	{
 		return false;
 	}
