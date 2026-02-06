@@ -3,6 +3,7 @@
  */
 
 #include "linear_hash.h"
+#include "zstream_shared.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -299,7 +300,7 @@ split_bucket(linear_hash_t* lh) {
 		if (new_bucket_ix != bucket_being_split) {
 			iter.bucket.entries[iter.entry_ix] = empty_entry;
 			iter.dirty = true;
-			store_in_bucket_chain(lh, new_bucket_ix, entry));
+			store_in_bucket_chain(lh, new_bucket_ix, entry);
 		}
 	}
 
@@ -315,8 +316,8 @@ split_bucket(linear_hash_t* lh) {
 		bucket_entry_t *head_entry = &head.bucket.entries[head.entry_ix];
 		if (head_entry->record != 0) {
 			bucket_entry_t *tail_entry = &tail.bucket.entries[tail.entry_ix];
-			if (tail_entry.hash != head_entry.hash ||
-				tail_entry.record != head_entry.record)
+			if (tail_entry->hash != head_entry->hash ||
+				tail_entry->record != head_entry->record)
 			{
 				tail.bucket.entries[tail.entry_ix] = *head_entry;
 				tail.dirty = true;
@@ -324,12 +325,12 @@ split_bucket(linear_hash_t* lh) {
 					break;
 				}
 			}
-			if (!entry_iterator_get_next(lh, &head)) { 
+			if (!entry_iterator_get_next(lh, &head)) {
 				/* Zero out the remaining entries */
 				do {
 					tail.bucket.entries[tail.entry_ix] = empty_entry;
 					tail.dirty = true;
-				while (entry_iterator_get_next(lh, &tail));
+				} while (entry_iterator_get_next(lh, &tail));
 				break;
 			}
 		}
@@ -371,8 +372,8 @@ check_memory(linear_hash_t *lh) {
 	size_t overflow_memory = allocator_memory_use(&lh->overflow_alloc);
 	size_t data_memory = allocator_memory_use(&lh->data_alloc);
 	size_t total_memory = bucket_memory + overflow_memory + data_memory;
-	mem_highwater = (total_memory > mem_highwater) ? total_memory : 
-		mem_highwater;
+	lh->mem_highwater = (total_memory > lh->mem_highwater) ? total_memory :
+		lh->mem_highwater;
 	if (total_memory > lh->max_memory) {
 		allocator_t *allocator_to_convert;
 		if (data_memory) {
@@ -396,13 +397,15 @@ lh_memory_high_water(void *lh_in) {
 
 /* Buffer length must be pre-checked */
 static FILE *
-create_temp_file(dir, pathbuff) {
-	sprintf(pathbuff, "%s/linear-hash-XXXXXX");
-	if ((int fd = mkstemp(pathbuff)) < 0) {
+create_temp_file(const char *dir, char *pathbuff) {
+	sprintf(pathbuff, "%s/linear-hash-XXXXXX", dir);
+	int fd = mkstemp(pathbuff);
+	if (fd < 0) {
 		(void) fprintf(stderr, "Unable to open temp file %s.\n", pathbuff);
 		exit(1);
 	}
-	if (!(FILE *fp = fdopen(fd, "rw"))) {
+	FILE *fp = fdopen(fd, "w+");
+	if (!fp) {
 		(void) fprintf(stderr, "fdopen failed for temp file %s.\n", pathbuff);
 		exit(1);
 	}
@@ -455,17 +458,18 @@ lh_init(size_t record_size, size_t max_memory, const char *cache_dir)
 			allocator_destroy(&lh->data_alloc);
 			return NULL;
 		}
-		if (allocator_init_memory(&lh->overflow_alloc, sizeof (bucket_t), 
+		if (allocator_init_memory(&lh->overflow_alloc, sizeof (bucket_t),
 			max_memory))
 		{
 			allocator_destroy(&lh->data_alloc);
 			allocator_destroy(&lh->bucket_alloc);
 			return NULL;
 		}
-		/* 
-		 * Skip first overflow and data buckets to allow 0 
-		 * to indicate empty or end-of-chain
-		 */
+	}
+	/*
+	 * Skip first overflow and data buckets to allow 0
+	 * to indicate empty or end-of-chain
+	 */
 	if ((allocator_skip(&lh->data_alloc) < 0) ||
 		(allocator_skip(&lh->overflow_alloc) < 0))
 	{
@@ -480,21 +484,20 @@ lh_insert(void* lh_in, uint64_t hash, const void* data) {
 	if (!lh || !data) {
 		return -1;
 	}
-	static memory_check = INSERTIONS_BETWEEN_MEM_CHECKS;
+	static int memory_check = INSERTIONS_BETWEEN_MEM_CHECKS;
 	record_ix record = allocator_append(&lh->data_alloc, data);
-	if (record < 0) { 
+	if (record < 0) {
 		(void) fprintf(stderr, "Error inserting new hash entry.\n");
 		exit(1);
 	}
 	bucket_entry_t entry = {hash, record};
 	record_ix bucket_ix = bucket_for_hash(lh, hash);
-	CHECKED(int, store_in_bucket_chain(lh, bucket_ix, entry),
-		"storing in bucket chain");
+	store_in_bucket_chain(lh, bucket_ix, entry);
 	lh->num_entries++;
 	check_split(lh);
 	if (!memory_check) {
 		memory_check = INSERTIONS_BETWEEN_MEM_CHECKS;
-		check_memory();
+		check_memory(lh);
 	}
 }
 
@@ -523,14 +526,14 @@ lh_retrieve_next(void *iter_in, void *buffer) {
 		if (!entry_iterator_get_next(iter->lh, entry_iterator)) {
 			return false;
 		}
-		bucket_entry_t entry = 
+		bucket_entry_t *entry =
 			&entry_iterator->bucket.entries[entry_iterator->entry_ix];
 		if (entry->record == 0) {
 			return false;
-		} 
+		}
 		if (entry->hash == iter->hash) {
-			CHECKED(record_ix, allocator_retrieve(&iter->lh->data_alloc, 
-				entry.record, buffer), "retrieving next hash entry");
+			CHECKED(record_ix, allocator_retrieve(&iter->lh->data_alloc,
+				entry->record, buffer), "retrieving next hash entry");
 			return true;
 		}
 	}
