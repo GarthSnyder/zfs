@@ -157,7 +157,7 @@ allocator_memory_use(allocator_t *alloc) {
 
 record_ix
 allocator_append(allocator_t* alloc, const void* data) {
-    return allocator_store(alloc, data, alloc->count);
+    return allocator_store(alloc, alloc->count, data);
 }
 
 record_ix
@@ -172,7 +172,7 @@ allocator_skip(allocator_t* alloc) {
 }
 
 record_ix
-allocator_store(allocator_t *alloc, const void *data, record_ix record) {
+allocator_store(allocator_t *alloc, record_ix record, const void *data) {
     if (!alloc || !data) {
         return (-1);
     }

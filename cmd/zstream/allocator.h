@@ -103,7 +103,7 @@ allocator_skip(allocator_t* alloc);
  * @return Record index on success, negative on error
  */
 record_ix
-allocator_store(allocator_t *alloc, const void *data, record_ix record);
+allocator_store(allocator_t *alloc, record_ix record, const void *data);
 
 /*
  * Retrieve a data record.

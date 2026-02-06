@@ -120,14 +120,14 @@ writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 }
 
 static bool
-dedup_table_lookup(void *ddt, zio_cksum_t *hash, dedup_entry_t *dde) {
-	void *iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(hash));
+dedup_table_lookup(void *ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
+	void *iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(blake3));
 	/* 
 	 * Dedup table hashes are only 64 bits, so a table match does not
 	 * guarantee an actual BLAKE3 match.
 	 */
-	while (lh_retrieve_next(&iter, dde)) {
-		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *hash) == 0) {
+	while (lh_retrieve_next(iter, dde)) {
+		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *blake3) == 0) {
 			return true;
 		}
 	}
@@ -426,7 +426,7 @@ zstream_do_dedup(int argc, char *argv[])
 	}
 
 	fletcher_4_init();
-	zfs_dedup_stream(hasher_team, STDOUT_FILENO, &dedup_table, verbose);
+	zfs_dedup_stream(hasher_team, STDOUT_FILENO, dedup_table, verbose);
 	fletcher_4_fini();
 	thrd_join(feeder_thread, NULL);
 	return 0;
