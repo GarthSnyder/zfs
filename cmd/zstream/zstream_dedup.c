@@ -50,6 +50,7 @@
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
 typedef struct drr_write drr_write_t;
+extern void validate(void *, bool);
 
 typedef struct dedup_entry {
 	drr_write_t		write_block;
@@ -127,7 +128,7 @@ dedup_table_lookup(void *ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
 	 * guarantee an actual BLAKE3 match.
 	 */
 	while (lh_retrieve_next(iter, dde)) {
-		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *blake3) == 0) {
+		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *blake3)) {
 			return true;
 		}
 	}
@@ -269,6 +270,8 @@ zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 			fprintf(stderr, "%lu write records were exempt from deduplication\n",
 				stats.disqualified_records);
 		}
+		fprintf(stderr, "\n");
+		validate(ddt, true);
 	}
 }
 
