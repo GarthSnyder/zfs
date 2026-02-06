@@ -117,6 +117,13 @@ record_ix
 allocator_retrieve(allocator_t* alloc, record_ix record, void* buffer);
 
 /*
+ * Determine the amount of memory being used by the allocator
+ * @param alloc Allocator instance
+ */
+size_t
+allocator_memory_use(allocator_t *alloc);
+
+/*
  * Destroy allocator and free all resources.
  * For memory allocators: frees all allocated memory.
  * For disk allocators: closes and deletes the file.

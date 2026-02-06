@@ -49,13 +49,12 @@
 
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
-typedef zio_cksum_t blake3_hash_t;
 typedef struct drr_write drr_write_t;
 
 typedef struct dedup_entry {
 	drr_write_t		write_block;
 	zio_cksum_t		checksum;  
-	blake3_hash_t	hash;
+	zio_cksum_t		blake3_hash;
 	uint64_t		payload_length;
 } dedup_entry_t;
 
@@ -121,30 +120,14 @@ writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 }
 
 static bool
-dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t *hash, dedup_entry_t *dde)
-{
-	lh_iterator_t iter;
-
-	int ret = lh_retrieve_setup(ddt, BLAKE3_64_BIT(hash), &iter);
-	if (ret < 0) {
-		fprintf(stderr, "Unable to initiate read from dedup table, aborting...\n");
-		exit(1);
-	}
-
+dedup_table_lookup(void *ddt, zio_cksum_t *hash, dedup_entry_t *dde) {
+	void *iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(hash));
 	/* 
 	 * Dedup table hashes are only 64 bits, so a table match does not
 	 * guarantee an actual BLAKE3 match.
 	 */
-	while (true) {
-		ret = lh_retrieve_next(&iter, dde);
-		if (ret < 0) {
-			fprintf(stderr, "Read error on dedup table, aborting...\n");
-			exit(1);
-		}
-		if (iter.iteration_complete) {
-			return false;
-		}
-		if (memcmp(&dde->hash, hash, BLAKE3_OUT_LEN) == 0) {
+	while (lh_retrieve_next(&iter, dde)) {
+		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *hash) == 0) {
 			return true;
 		}
 	}
@@ -152,30 +135,23 @@ dedup_table_lookup(linear_hash_t *ddt, blake3_hash_t *hash, dedup_entry_t *dde)
 }
 
 static void
-dedup_table_insert(linear_hash_t *ddt, blake3_hash_t *hash,
-	dmu_replay_record_t *drr)
+dedup_table_insert(void *ddt, zio_cksum_t *blake3, dmu_replay_record_t *drr)
 {
 	dedup_entry_t dedup;
-
 	memcpy(&dedup.write_block, &drr->drr_u.drr_write,
 		sizeof(drr->drr_u.drr_write));
-	memcpy(&dedup.hash, hash, sizeof(dedup.hash));
+	memcpy(&dedup.blake3_hash, blake3, sizeof(dedup.blake3_hash));
 	memcpy(&dedup.checksum, &drr->drr_u.drr_checksum.drr_checksum,
 		sizeof(dedup.checksum));
-	dedup.payload_length = drr->drr_payloadlen;
-
-	if (lh_insert(ddt, BLAKE3_64_BIT(hash), &dedup) < 0) {
-		fprintf(stderr, "Error writing to dedup hash table, aborting...\n");
-		exit(1);
-	}
+	dedup.payload_length = DRR_WRITE_PAYLOAD_SIZE(&drr->drr_u.drr_write);
+	lh_insert(ddt, BLAKE3_64_BIT(blake3), &dedup);
 }
 
 /*
  * Deduplicate a ZFS stream.
  */
 static void
-zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
-	bool verbose)
+zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 {
 	work_unit_t				unit;
 	dmu_replay_record_t		*drr = &unit.drr;
@@ -279,10 +255,8 @@ zfs_dedup_stream(void *team, int outfd, linear_hash_t *ddt,
 	if (verbose) {
 		print_status(&stats, true);
 		fprintf(stderr, "\n");
-
 		char mem_str[32];
-		zfs_nicenum(ddt->num_entries * sizeof (dedup_entry_t),
-		    mem_str, sizeof (mem_str));
+		zfs_nicenum(lh_memory_high_water(ddt), mem_str, sizeof (mem_str));
 		fprintf(stderr,
 		    "Processed %llu total records, including %llu write "
 		    "records.\n",
@@ -354,12 +328,13 @@ zstream_do_dedup(int argc, char *argv[])
 {
 	bool 			verbose = false;
 	int 			mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
-	char 			*cache_dir = NULL;
+	const char 		*cache_dir = NULL;
 	FILE			*input;
 	int 			c;
 	dedup_context_t	feeder_context;
 	void			*hasher_team;
 	thrd_t			feeder_thread;
+	void			*dedup_table;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
 		switch (c) {
@@ -404,11 +379,16 @@ zstream_do_dedup(int argc, char *argv[])
 	    SMALLEST_REASONABLE_DEDUP_MB << 20);
 #endif
 
-	linear_hash_t dedup_table;
-	if (lh_init(&dedup_table, sizeof(dedup_entry_t), max_memory) < 0) {
-		fprintf(stderr, "Unable to initialize dedup hash table, aborting...\n");
+	cache_dir = cache_dir ? cache_dir : "/tmp";
+	struct stat statbuff;
+	if (stat(cache_dir, &statbuff) < 0) {
+		fprintf(stderr, "Cache directory %s does not exist.\n", cache_dir);
+		exit(1);
+	} else if ((statbuff.st_mode & S_IFMT) != S_IFDIR) {
+		fprintf(stderr, "The -c argument requires a directory argument\n");
 		exit(1);
 	}
+	dedup_table = lh_init(sizeof(dedup_entry_t), max_memory, cache_dir);
 
 	if (isatty(STDOUT_FILENO)) {
 		(void) fprintf(stderr,

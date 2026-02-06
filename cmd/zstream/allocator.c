@@ -129,14 +129,12 @@ free_memory(allocator_t *alloc) {
 
 int
 allocator_convert_to_disk(allocator_t *alloc) {
-
     if (alloc->using_disk) {
         return (0);
     }
     if (!alloc->file) {
         return -1;
     }
-
     if (alloc->count > 0) {
         size_t num_bytes = alloc->count * alloc->record_size;
         if (fwrite(alloc->base_addr, 1, num_bytes, alloc->file) != num_bytes) {
@@ -147,6 +145,14 @@ allocator_convert_to_disk(allocator_t *alloc) {
     free_memory(alloc);
     alloc->using_disk = true;
     return (0);
+}
+
+size_t
+allocator_memory_use(allocator_t *alloc) {
+    if (alloc->using_disk) {
+        return 0;
+    }
+    return alloc->count * alloc->record_size;
 }
 
 record_ix
