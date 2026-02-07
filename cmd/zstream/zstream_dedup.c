@@ -346,7 +346,7 @@ zstream_do_dedup(int argc, char *argv[])
 			break;
 		case 'm':
 			mem_percent = atoi(optarg);
-			if (mem_percent <= 0 || mem_percent > 100) {
+			if (mem_percent < 0 || mem_percent > 100) {
 				fprintf(stderr,
 				    "invalid memory percentage '%s'\n", optarg);
 				exit(1);

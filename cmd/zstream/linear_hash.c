@@ -8,8 +8,8 @@
 #include <string.h>
 
 #define MAX_OCCUPANCY 0.75
-#define INITIAL_HASH_SUFFIX_LENGTH 16
-#define ENTRIES_PER_BUCKET 2
+#define INITIAL_HASH_SUFFIX_LENGTH 10
+#define ENTRIES_PER_BUCKET 6
 #define INSERTIONS_BETWEEN_MEM_CHECKS 1024
 #define MAX_ITERATORS_OUTSTANDING 4
 
@@ -51,7 +51,7 @@ typedef struct {
 typedef struct {
 	uint64_t 	num_entries;      	/* total entries in table */
 	uint64_t	mem_highwater;		/* Most memory ever used */
-	op_stats_t	stores;				/* Stores from external client */
+	op_stats_t	inserts;			/* Inserts from external client */
 	op_stats_t	retrieves;			/* Retrieves from external client */
 	op_stats_t	splits;				/* Splits, generated internally */
 	op_stats_t	*current_op;		/* Operation currently in progress */
@@ -90,6 +90,15 @@ void validate(linear_hash_t *lh, bool print_stats);
 	{lh->bucket_alloc, bucket, -1, {{{0}}}, false}
 
 #define EMPTY_BUCKET {{{0}}, 0}
+
+static uint64_t
+total_io_ops(linear_hash_t *lh) {
+	allocator_stats_t data, bucket, over;
+	allocator_get_stats(lh->data_alloc, &data);
+	allocator_get_stats(lh->bucket_alloc, &bucket);
+	allocator_get_stats(lh->overflow_alloc, &over);
+	return data.num_ops + bucket.num_ops + over.num_ops;
+}
 
 /*
 Calculate bucket for a given hash value.
@@ -274,6 +283,22 @@ validate(linear_hash_t *lh, bool print_stats)
 		fprintf(stderr, "Overall %lu of %lu bucket slots occupied, %.2f%%\n",
 			lh->stats.num_entries, total_bucket_entries, 
 			(double)100 * lh->stats.num_entries / total_bucket_entries);
+		fprintf(stderr, "Occupancy value is %lu entries over %lu "
+			"top-level buckets = %.2f%%\n", lh->stats.num_entries,
+			bucket_stats.num_records, 100.0 * lh->stats.num_entries /
+			bucket_stats.num_records);
+		fprintf(stderr, "\n%lu inserts with %lu total I/O ops, "
+			"%.2f ops/insert\n", lh->stats.inserts.count, 
+			lh->stats.inserts.num_io_ops, (double)lh->stats.inserts.num_io_ops
+			/ lh->stats.inserts.count);
+		fprintf(stderr, "%lu retrieve chains with %lu total I/O ops, "
+			"%.2f ops/retrieve\n", lh->stats.retrieves.count, 
+			lh->stats.retrieves.num_io_ops, 
+			(double)lh->stats.retrieves.num_io_ops / lh->stats.retrieves.count);
+		fprintf(stderr, "%lu splits with %lu total I/O ops, "
+			"%.2f ops/split\n", lh->stats.splits.count, 
+			lh->stats.splits.num_io_ops, (double)lh->stats.splits.num_io_ops
+			/ lh->stats.splits.count);
 	}
 }
 #endif
@@ -294,6 +319,7 @@ split_bucket(linear_hash_t* lh) {
 		validate(lh, false);
 	}
 #endif
+	uint64_t start_ops = total_io_ops(lh);
 	lh->stats.splits.count++;
 	record_ix bucket_being_split = (record_ix)lh->split_pointer;
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_being_split);
@@ -359,6 +385,9 @@ split_bucket(linear_hash_t* lh) {
 		lh->split_pointer = 0;
 	}
 
+	uint64_t end_ops = total_io_ops(lh);
+	lh->stats.splits.num_io_ops += (end_ops - start_ops);
+
 #ifdef DEBUG
 	if (lh->validate) {
 		validate(lh, false);
@@ -377,6 +406,7 @@ check_split(linear_hash_t *lh) {
 
 static void
 check_memory(linear_hash_t *lh) {
+	return;
 	allocator_stats_t bucket, over, data;
 	allocator_get_stats(lh->bucket_alloc, &bucket);
 	allocator_get_stats(lh->overflow_alloc, &over);
@@ -417,6 +447,10 @@ create_temp_file(const char *dir, char *pathbuff) {
 	FILE *fp = fdopen(fd, "w+");
 	if (!fp) {
 		(void) fprintf(stderr, "fdopen failed for temp file %s.\n", pathbuff);
+		exit(1);
+	}
+	if (unlink(pathbuff) < 0) {
+		perror(pathbuff);
 		exit(1);
 	}
 	return fp;
@@ -474,9 +508,8 @@ lh_init(size_t record_size, size_t max_memory, const char *cache_dir)
 void
 lh_insert(void* lh_in, uint64_t hash, const void* data) {
 	linear_hash_t *lh = lh_in;
-	if (!lh || !data) {
-		return;
-	}
+	assert(lh && data);
+	uint64_t start_ops = total_io_ops(lh);
 	record_ix record = allocator_append(lh->data_alloc, data);
 	if (record < 0) {
 		(void) fprintf(stderr, "Error inserting new hash entry.\n");
@@ -486,6 +519,9 @@ lh_insert(void* lh_in, uint64_t hash, const void* data) {
 	record_ix bucket_ix = bucket_for_hash(lh, hash);
 	store_in_bucket_chain(lh, bucket_ix, entry);
 	lh->stats.num_entries++;
+	uint64_t end_ops = total_io_ops(lh);
+	lh->stats.inserts.num_io_ops += (end_ops - start_ops);
+	lh->stats.inserts.count++;
 	check_split(lh);
 	lh->next_memory_check--;
 	if (lh->next_memory_check <= 0) {
@@ -494,12 +530,20 @@ lh_insert(void* lh_in, uint64_t hash, const void* data) {
 	}
 }
 
+static uint64_t retrieve_start_ops = 0;
+static uint64_t retrieve_end_ops = 0;
+
 void *
 lh_initiate_retrieve(void *lh_in, uint64_t hash) {
 	linear_hash_t *lh = lh_in;
-	if (!lh) {
-		return NULL;
+	assert(lh);
+	if (retrieve_start_ops && retrieve_end_ops) {
+		lh->stats.retrieves.count++;
+		lh->stats.retrieves.num_io_ops +=
+			(retrieve_end_ops - retrieve_start_ops);
 	}
+	retrieve_start_ops = total_io_ops(lh);
+	retrieve_end_ops = 0;
 	lh_iterator_t *iter = &lh->iterators[lh->next_iterator];
 	lh->next_iterator = (lh->next_iterator + 1) % MAX_ITERATORS_OUTSTANDING;
 	memset(iter, 0, sizeof(*iter));
@@ -519,14 +563,17 @@ lh_retrieve_next(void *iter_in, void *buffer) {
 		bucket_entry_t *entry =
 			&entry_iterator->bucket.entries[entry_iterator->entry_ix];
 		if (entry->record == 0) {
+			retrieve_end_ops = total_io_ops(iter->lh);
 			return false;
 		}
 		if (entry->hash == iter->hash) {
 			CHECKED(record_ix, allocator_retrieve(iter->lh->data_alloc,
 				entry->record, buffer), "retrieving next hash entry");
+			retrieve_end_ops = total_io_ops(iter->lh);
 			return true;
 		}
 	}
+	retrieve_end_ops = total_io_ops(iter->lh);
 	return false;
 }
 

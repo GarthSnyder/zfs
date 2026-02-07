@@ -13,36 +13,48 @@
 #include "allocator.h"
 #include "zstream_shared.h"
 
+#ifndef MAP_ANONYMOUS
+#  ifdef MAP_ANON
+#    define MAP_ANONYMOUS MAP_ANON
+#  else
+#    error "Neither MAP_ANONYMOUS nor MAP_ANON is defined"
+#  endif
+#endif
+
+#ifndef MAP_NORESERVE
+#  define MAP_NORESERVE 0
+#endif
+
 typedef struct {
 
 	bool        using_disk;
-	size_t      record_size;
+	uint64_t    record_size;
 	uint64_t    count;          /* number of records allocated */
 	uint64_t    io_ops;         /* Number of reads and writes */
 
-	char        *base_addr;     /* Memory allocator fields */
-	size_t      max_memory;
+	void        *base_addr;     /* Memory allocator fields */
+	uint64_t    max_memory;
 
 	FILE		*file;			/* Disk allocator fields */
 
 } allocator_t;
 
-static size_t
-write_zeros(allocator_t *alloc, size_t count) {
-	static const unsigned char zeros[4096] = { 0 };
+static int
+write_zeros(allocator_t *alloc, uint64_t count) {
+	static const uint8_t zeros[4096] = { 0 };
 	while (count > 0) {
-		size_t chunk = count < sizeof (zeros) ? count : sizeof (zeros);
+		size_t chunk = count < sizeof(zeros) ? count : sizeof(zeros);
 		if (fwrite(zeros, chunk, 1, alloc->file) != chunk) {
-			return (-1);
+			return -1;
 		}
 		alloc->io_ops++;
 		count -= chunk;
 	}
-	return count;
+	return 0;
 }
 
 void *
-allocator_init(size_t record_size, uint64_t max_memory, FILE *file) 
+allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file) 
 {
 	assert(record_size);
 	
@@ -53,10 +65,7 @@ allocator_init(size_t record_size, uint64_t max_memory, FILE *file)
 	if (max_memory) {
 		// Use mmap to reserve address space MAP_NORESERVE on Linux prevents
 		//swap space reservation. Pages are allocated on write (demand paging)
-		int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#ifdef MAP_NORESERVE
-		flags |= MAP_NORESERVE;
-#endif
+		int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 		long page_size = sysconf(_SC_PAGESIZE);
 		page_size = page_size <= 0 ? 4096 : page_size;
 		alloc->max_memory = max_memory;
@@ -74,7 +83,7 @@ allocator_init(size_t record_size, uint64_t max_memory, FILE *file)
 
 static void
 free_memory(allocator_t *alloc) {
-	if (alloc->base_addr && alloc->base_addr != MAP_FAILED) {
+	if (alloc->base_addr) {
 		munmap(alloc->base_addr, alloc->max_memory);
 	}
 	alloc->base_addr = NULL;
@@ -91,8 +100,9 @@ allocator_convert_to_disk(void *alloc_in) {
 		return -1;
 	}
 	if (alloc->count > 0) {
-		size_t num_bytes = alloc->count * alloc->record_size;
-		if (fwrite(alloc->base_addr, 1, num_bytes, alloc->file) != num_bytes) {
+		if (fwrite(alloc->base_addr, alloc->record_size, alloc->count,
+			alloc->file) != alloc->count)
+		{
 			fclose(alloc->file);
 			return -3;
 		}
@@ -113,14 +123,14 @@ allocator_get_stats(void *alloc_in, allocator_stats_t *stats) {
 }
 
 record_ix
-allocator_append(void *alloc_in, const void* data) {
+allocator_append(void *alloc_in, const void *data) {
 	allocator_t *alloc = alloc_in;
 	assert(alloc && data);
 	return allocator_store(alloc, alloc->count, data);
 }
 
 record_ix
-allocator_skip(void* alloc_in) {
+allocator_skip(void *alloc_in) {
 	allocator_t *alloc = alloc_in;
 	assert(alloc);
 	char *buffer = safe_calloc(alloc->record_size);
@@ -134,48 +144,41 @@ allocator_store(void *alloc_in, record_ix record, const void *data)
 {
 	allocator_t *alloc = alloc_in;
 	assert(alloc && data);
+	alloc->io_ops++;
+
 	uint64_t offset = record * alloc->record_size;
 	uint64_t allocated_size = alloc->count * alloc->record_size;
-	size_t gap_bytes = 0;
+	uint64_t gap_bytes;
 
-	alloc->io_ops++;
-	if (offset > allocated_size) {
-		gap_bytes = offset - allocated_size;
+	if (!alloc->using_disk &&
+		(record + 1) * alloc->record_size > alloc->max_memory)
+	{
+		int ret = allocator_convert_to_disk(alloc);
+		if (ret < 0) { return ret; }
 	}
-	if (!alloc->using_disk) {
-		if (offset + alloc->record_size > alloc->max_memory) {
-			if (alloc->file) {
-				int ret = allocator_convert_to_disk(alloc);
-				if (ret < 0) { return ret; }
-				/* Falls through to disk write below */
-			} else {
-				return -2; /* Out of memory */
-			}
-		} else {
-			if (gap_bytes > 0) {
-				memset(alloc->base_addr + allocated_size, 0, gap_bytes);
-			}
-			void* dest = (char*)alloc->base_addr + offset;
-			memcpy(dest, data, alloc->record_size);
-		}
-	}
+	gap_bytes = (offset > allocated_size) ? 0 : (offset - allocated_size);
 	if (alloc->using_disk) {
-		if (gap_bytes > 0) {
-			if (fseeko(alloc->file, (off_t)allocated_size, SEEK_SET) != 0) {
-				return (-4);
+		if (gap_bytes) {
+			if (fseeko(alloc->file, (off_t)allocated_size, SEEK_SET) ||
+				write_zeros(alloc, gap_bytes))
+			{
+				return -2;
 			}
-			write_zeros(alloc, gap_bytes);
+		} else if (fseeko(alloc->file, offset, SEEK_SET)) {
+			return -3;
 		}
-		if (fseeko(alloc->file, offset, SEEK_SET) != 0) {
-			return -5;
+		if (fwrite(data, alloc->record_size, 1, alloc->file) != 1) {
+			return -4;
 		}
-		size_t written = fwrite(data, alloc->record_size, 1, alloc->file);
-		if (written != 1) {
-			return -6;  /* disk full or I/O error */
+	} else {
+		if (gap_bytes > 0) {
+			memset(alloc->base_addr + allocated_size, 0, gap_bytes);
 		}
+		memcpy(alloc->base_addr + offset, data, alloc->record_size);
 	}
-	alloc->count = ((record_ix)alloc->count > record ?
-		alloc->count : record) + 1;
+	if (record >= alloc->count) {
+		alloc->count = record + 1;
+	}
 	return record;
 }
 

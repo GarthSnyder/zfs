@@ -32,7 +32,7 @@ typedef struct {
  * max_memory must be specified and nonzero.
  */
 allocator
-allocator_init(size_t record_size, size_t max_memory, FILE *file);
+allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file);
 
 /*
  * Convert a memory-backed allocator to disk-backed.
