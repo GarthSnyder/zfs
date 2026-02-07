@@ -26,38 +26,18 @@
 #endif
 
 typedef struct {
-
 	bool        using_disk;
 	uint64_t    record_size;
 	uint64_t    count;          /* number of records allocated */
 	uint64_t    io_ops;         /* Number of reads and writes */
-
 	void        *base_addr;     /* Memory allocator fields */
 	uint64_t    max_memory;
-
-	FILE		*file;			/* Disk allocator fields */
-
+	FILE		*file;			/* Disk allocator field */
 } allocator_t;
 
-static int
-write_zeros(allocator_t *alloc, uint64_t count) {
-	static const uint8_t zeros[4096] = { 0 };
-	while (count > 0) {
-		size_t chunk = count < sizeof(zeros) ? count : sizeof(zeros);
-		if (fwrite(zeros, chunk, 1, alloc->file) != chunk) {
-			return -1;
-		}
-		alloc->io_ops++;
-		count -= chunk;
-	}
-	return 0;
-}
-
 void *
-allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file) 
-{
+allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file) {
 	assert(record_size);
-	
 	allocator_t *alloc = safe_calloc(sizeof(allocator_t));
 	alloc->using_disk = (file && !max_memory);
 	alloc->record_size = record_size;
@@ -93,22 +73,18 @@ int
 allocator_convert_to_disk(void *alloc_in) {
 	allocator_t *alloc = alloc_in;
 	assert(alloc);
-	if (alloc->using_disk) {
-		return 0;
-	}
-	if (!alloc->file) {
-		return -1;
-	}
-	if (alloc->count > 0) {
+	if (!alloc->using_disk) {
+		if (!alloc->file) {
+			return -1;
+		}
 		if (fwrite(alloc->base_addr, alloc->record_size, alloc->count,
 			alloc->file) != alloc->count)
 		{
-			fclose(alloc->file);
 			return -3;
 		}
+		free_memory(alloc);
+		alloc->using_disk = true;
 	}
-	free_memory(alloc);
-	alloc->using_disk = true;
 	return 0;
 }
 
@@ -175,7 +151,6 @@ allocator_retrieve(void *alloc_in, record_ix record, void* buffer)
 {
 	allocator_t *alloc = alloc_in;
 	uint64_t offset = record * alloc->record_size;
-
 	assert(alloc && buffer && (record >= 0));
 	alloc->io_ops++;
 	/* Nonexistent records are returned zero-filled */
@@ -184,12 +159,10 @@ allocator_retrieve(void *alloc_in, record_ix record, void* buffer)
 		return record;
 	}
 	if (alloc->using_disk) {
-		if (fseeko(alloc->file, (off_t)offset, SEEK_SET) != 0) {
-			return (-2);
-		}
-		size_t items_read = fread(buffer, alloc->record_size, 1, alloc->file);
-		if (items_read != 1) {
-			return (-3);
+		if (fseeko(alloc->file, (off_t)offset, SEEK_SET) ||
+			fread(buffer, alloc->record_size, 1, alloc->file) != 1)
+		{
+			return -3;
 		}
 	} else { 
 		void *src = (char*)alloc->base_addr + offset;

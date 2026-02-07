@@ -286,7 +286,7 @@ validate(linear_hash_t *lh, bool print_stats)
 		fprintf(stderr, "Occupancy value is %lu entries over %lu "
 			"top-level buckets = %.2f%%\n", lh->stats.num_entries,
 			bucket_stats.num_records, 100.0 * lh->stats.num_entries /
-			bucket_stats.num_records);
+			(bucket_stats.num_records * ENTRIES_PER_BUCKET));
 		fprintf(stderr, "\n%lu inserts with %lu total I/O ops, "
 			"%.2f ops/insert\n", lh->stats.inserts.count, 
 			lh->stats.inserts.num_io_ops, (double)lh->stats.inserts.num_io_ops
