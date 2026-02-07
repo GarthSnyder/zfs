@@ -73,6 +73,7 @@ int
 allocator_convert_to_disk(void *alloc_in) {
 	allocator_t *alloc = alloc_in;
 	assert(alloc);
+	fprintf(stderr, "Converting allocator from memory to disk\n");
 	if (!alloc->using_disk) {
 		if (!alloc->file) {
 			return -1;
