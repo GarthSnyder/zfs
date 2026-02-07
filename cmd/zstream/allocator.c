@@ -146,34 +146,22 @@ allocator_store(void *alloc_in, record_ix record, const void *data)
 	assert(alloc && data);
 	alloc->io_ops++;
 
-	uint64_t offset = record * alloc->record_size;
-	uint64_t allocated_size = alloc->count * alloc->record_size;
-	uint64_t gap_bytes;
-
 	if (!alloc->using_disk &&
 		(record + 1) * alloc->record_size > alloc->max_memory)
 	{
 		int ret = allocator_convert_to_disk(alloc);
 		if (ret < 0) { return ret; }
 	}
-	gap_bytes = (offset > allocated_size) ? 0 : (offset - allocated_size);
+	uint64_t offset = record * alloc->record_size;
+	// Both file holes and unwritten mmap pages are guaranteed to
+	// return zeros under POSIX, so we needn't fill gaps manually.
 	if (alloc->using_disk) {
-		if (gap_bytes) {
-			if (fseeko(alloc->file, (off_t)allocated_size, SEEK_SET) ||
-				write_zeros(alloc, gap_bytes))
-			{
-				return -2;
-			}
-		} else if (fseeko(alloc->file, offset, SEEK_SET)) {
+		if (fseeko(alloc->file, offset, SEEK_SET) ||
+			fwrite(data, alloc->record_size, 1, alloc->file) != 1)
+		{
 			return -3;
 		}
-		if (fwrite(data, alloc->record_size, 1, alloc->file) != 1) {
-			return -4;
-		}
 	} else {
-		if (gap_bytes > 0) {
-			memset(alloc->base_addr + allocated_size, 0, gap_bytes);
-		}
 		memcpy(alloc->base_addr + offset, data, alloc->record_size);
 	}
 	if (record >= alloc->count) {
