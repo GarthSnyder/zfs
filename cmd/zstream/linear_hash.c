@@ -28,10 +28,10 @@ typedef struct {
 /* Internal iterator for bucket entries */
 typedef struct {
 	allocator	alloc;
-	record_ix 	bucket_ix;
-	int64_t 	entry_ix; 			/* -1 == bucket not yet retrieved */
-	bucket_t 	bucket;
-	bool 		dirty;				/* needs writeback */
+	record_ix 	bucket_ix;	/* -1 == overflow not yet assigned */
+	record_ix 	entry_ix; 	/* -1 == bucket not yet retrieved */
+	bucket_t 	bucket;		/* Working copy of allocator version */
+	bool 		dirty;		/* needs writeback */
 } entry_iterator_t;
 
 struct linear_hash;
@@ -54,14 +54,13 @@ typedef struct {
 	op_stats_t	inserts;			/* Inserts from external client */
 	op_stats_t	retrieves;			/* Retrieves from external client */
 	op_stats_t	splits;				/* Splits, generated internally */
-	op_stats_t	*current_op;		/* Operation currently in progress */
 } lh_stats_t;
 
 /* Hash table structure */
 typedef struct linear_hash 
 {
 	size_t 		record_size;
-	uint8_t 	hash_suffix_length;	/* current hashing granularity below split */
+	uint8_t 	hash_suffix_length;	/* hashing granularity below split */
 	record_ix 	split_pointer;   	/* next bucket to split */
 	uint64_t	max_memory;			/* Can decrease if allocators convert */
 	int			next_memory_check;  /* Number of splits before check */
@@ -70,7 +69,7 @@ typedef struct linear_hash
 	lh_iterator_t	iterators[MAX_ITERATORS_OUTSTANDING];
 	int				next_iterator;
 #ifdef DEBUG
-	bool		validate;			/* Validate after every transaction (slow) */
+	bool		validate;			/* Validate after each transaction (slow) */
 #endif
 	allocator 	data_alloc;    		/* data records */
 	allocator	bucket_alloc;  		/* main buckets */
@@ -103,12 +102,13 @@ total_io_ops(linear_hash_t *lh) {
 /*
 Calculate bucket for a given hash value.
 
-Here, hashing level is defined as the hash suffix length 
-in effect below the split point. At or above, it is one bit less.
-E.g., if level = 3, items below the split point  
-are hashed into 8 buckets and at the split point or above, they were
-previously hashed into 4 buckets. Ergo, when the split pointer reaches
-index 4, 2^(level-1), all mod 4 entries have been upgraded. The
+Here, suffix length is defined as the hash suffix length 
+in effect at or above the split point. Below the split,
+it is one bit longer.
+E.g., if hash_suffix_length = 3, items below the split point  
+are hashed into 16 buckets. At the split point or above, they are 
+hashed into 8 buckets. Ergo, when the split pointer reaches
+index 8, 2^level, all mod 8 entries have been upgraded. The
 split pointer is reset to zero and the suffix length increases. 
 */
 
@@ -126,10 +126,11 @@ bucket_for_hash(linear_hash_t *lh, uint64_t hash) {
 /* Send an entry iterator struct back to its allocator */
 static void
 save_entry_iterator(entry_iterator_t *iter) {
-	
-	CHECKED(record_ix, allocator_store(iter->alloc, iter->bucket_ix,
-		&iter->bucket), "saving from entry iterator"); 
-
+	if (iter->dirty) {
+		CHECKED(record_ix, allocator_store(iter->alloc, iter->bucket_ix,
+			&iter->bucket), "saving from entry iterator");
+		iter->dirty = false;
+	}
 }
 
 /* Read the bucket corresponding to an entry iterator */
@@ -139,11 +140,13 @@ read_entry_iterator(entry_iterator_t *iter) {
 		&iter->bucket), "reading from entry iterator"); 
 }
 
-/* Updates entry_iterator_t struct, false when there are no more entries. 
-   This type of iteration does not care whether bucket entries are full
-   or not. */
+/* Updates entry_iterator_t struct, returns false when there are no more
+ * entries, or, alternately, extends the bucket chain indefinitely.
+  */
 static bool
-entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
+entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter,
+	bool extend)
+{
 	while (true) {
 		if (iter->entry_ix < 0) {
 			read_entry_iterator(iter);
@@ -151,48 +154,30 @@ entry_iterator_get_next(linear_hash_t *lh, entry_iterator_t *iter) {
 			iter->dirty = false;
 			return true;
 		} else if (iter->entry_ix == ENTRIES_PER_BUCKET - 1) {
-			if (iter->dirty) {
-				save_entry_iterator(iter);
-				iter->dirty = false;
-			}
-			if (!iter->bucket.overflow) {
+			save_entry_iterator(iter);
+			if (iter->bucket.overflow) {
+				iter->alloc =  lh->overflow_alloc;
+				iter->entry_ix = -1;
+				iter->bucket_ix = iter->bucket.overflow;
+			} else if (!extend) {
 				return false;
+			} else {
+				bucket_t new_overflow_bucket = EMPTY_BUCKET;
+				iter.bucket.overflow = allocator_append(lh->overflow_alloc,
+					&new_overflow_bucket);
+				assert(iter.bucket.overflow > 0);
+				save_entry_iterator(&iter);
+				iter->bucket_ix = iter.bucket.overflow;
+				iter->bucket = new_overflow_bucket;
+				iter->alloc = lh->overflow_alloc;
+				iter->entry_ix = 0;
+				return true;
 			}
-			iter->alloc =  lh->overflow_alloc;
-			iter->entry_ix = -1;
-			iter->bucket_ix = iter->bucket.overflow;
 		} else {
 			iter->entry_ix += 1;
 			return true;
 		}
 	}
-}
-
-/* Stores in first available slot in bucket chain, extending if needed */
-static void
-store_in_bucket_chain(linear_hash_t *lh, record_ix chain_head,
-	bucket_entry_t new_entry)
-{
-	bucket_entry_t *entry;
-	entry_iterator_t iter = ITER_BUCKET(lh, chain_head);
-	while (entry_iterator_get_next(lh, &iter)) {
-		entry = &iter.bucket.entries[iter.entry_ix];
-		if (entry->record == 0) {
-			*entry = new_entry;
-			save_entry_iterator(&iter);
-			return;
-		}
-	}
-	/*
-	 * We're off the end of the iterator, but the iterator still has
-	 * the allocator, contents, and index of the last bucket.
-	 */
-	bucket_t new_overflow_bucket = EMPTY_BUCKET;
-	new_overflow_bucket.entries[0] = new_entry;
-	iter.bucket.overflow = allocator_append(lh->overflow_alloc,
-		&new_overflow_bucket);
-	assert(iter.bucket.overflow >= 0);
-	save_entry_iterator(&iter);
 }
 
 #ifdef DEBUG
@@ -218,7 +203,7 @@ validate(linear_hash_t *lh, bool print_stats)
 		bool saw_empty_entry = false;
 		uint64_t full_entries = 0;
 		uint64_t empty_entries = 0;
-		while (entry_iterator_get_next(lh, &iter)) {
+		while (entry_iterator_get_next(lh, &iter, false)) {
 			bucket_entry_t *entry = &iter.bucket.entries[iter.entry_ix];
 			if (entry->record) {
 				if (saw_empty_entry) {
@@ -303,14 +288,14 @@ validate(linear_hash_t *lh, bool print_stats)
 }
 #endif
 
-/* Split a bucket, rehashing all entries according to the current
+/* Split a bucket, rehashing all entries according to the one-higher
 suffix length. Since only one bit is added, existing entries either
 stay where they are or go to one alternate bucket. We'll do this partition
 in two passes for clarity and reliability: one to eject relocated entries
 and one to consolidate entries now that some may have been removed. 
 
-It is an invariant that bucket entries must be filled linearly, even
-if there are unused entries. */
+It is an invariant that at steady state, bucket entries must be filled
+* linearly, even if there are unused entries. */
 static void
 split_bucket(linear_hash_t* lh) {
 
@@ -322,60 +307,41 @@ split_bucket(linear_hash_t* lh) {
 	uint64_t start_ops = total_io_ops(lh);
 	lh->stats.splits.count++;
 	record_ix bucket_being_split = (record_ix)lh->split_pointer;
-	entry_iterator_t iter = ITER_BUCKET(lh, bucket_being_split);
+	record_ix buddy_ix = bucket_being_split | 
+		(1 << (lh->hash_suffix_length + 1))
+	entry_iterator_t source = ITER_BUCKET(lh, bucket_being_split);
+	entry_iterator_t stay = ITER_BUCKET(lh, bucket_being_split);;
+	entry_iterator_t move = ITER_BUCKET(lh, buddy_ix);
 	bucket_entry_t empty_entry = {0, 0};
 
-	/* Increment split pointer now so bucket_for_hash uses new value */
+	/* Increment split pointer now so bucket_for_hash uses extended length */
 	lh->split_pointer++;
 
 	/* Partition */
-	while(entry_iterator_get_next(lh, &iter)) {
-		bucket_entry_t entry = iter.bucket.entries[iter.entry_ix];
-		/* 
-		 * Entries in a bucket are required to be contiguous at the
-		 * start of the bucket chain, so any empty spot signals
-		 * the end. But we have to read to the end of the bucket
-		 * if it needs saving.
-		 */
-		if (entry.record != 0) {
-			record_ix new_bucket_ix = bucket_for_hash(lh, entry.hash);
-			if (new_bucket_ix != bucket_being_split) {
-				iter.bucket.entries[iter.entry_ix] = empty_entry;
-				iter.dirty = true;
-				store_in_bucket_chain(lh, new_bucket_ix, entry);
+	while(entry_iterator_get_next(lh, &source, false)) {
+		bucket_entry_t *source_entry = &source.bucket.entries[source.entry_ix];
+		if (source_entry->record != 0) {
+			if (bucket_for_hash(lh, source_entry.hash) == bucket_being_split) {
+				(void) entry_iterator_get_next(lh, &stay, false);
+				stay.bucket.entries[stay.entry_ix] = *source_entry;
+				stay.dirty = true;
+			} else {
+				(void) entry_iter_get_next(lh, &move, true);
+				move.bucket.entries[move.entry_ix] = *source_entry;
+				move.dirty = true;
 			}
-		} else if (!iter.dirty) {
+		} else {
+			/* Entries must be filled in order */
 			break;
 		}
 	}
-
-	/* Consolidate the bucket that was split. It doesn't matter that there
-	are two iterators
-	running simultaneously because the head will never write and will
-	never be behind the tail. Also, initial reads on a valid bucket are 
-	guaranteed to succeed. */
-
-	entry_iterator_t head = ITER_BUCKET(lh, bucket_being_split);
-	entry_iterator_t tail = head;
-	while (entry_iterator_get_next(lh, &head)) {
-		bucket_entry_t *head_entry = &head.bucket.entries[head.entry_ix];
-		if (head_entry->record != 0) {
-			assert(entry_iterator_get_next(lh, &tail) == true);
-			bucket_entry_t *tail_entry = &tail.bucket.entries[tail.entry_ix];
-			if (tail_entry->hash != head_entry->hash ||
-				tail_entry->record != head_entry->record)
-			{
-				*tail_entry = *head_entry;
-				tail.dirty = true;
-			}
-		}
+	/* Zero out the rest of the source bucket */
+	while(entry_iterator_get_next(lh, &stay, false)) {
+		stay.bucket.entries[stay.entry_ix] = empty_entry;
+		stay.dirty = true;
 	}
-
-	/* Zero out the remaining entries */
-	while (entry_iterator_get_next(lh, &tail)) {
-		tail.bucket.entries[tail.entry_ix] = empty_entry;
-		tail.dirty = true;
-	}
+	save_entry_iterator(&stay);
+	save_entry_iterator(&move);
 
 	/* Check if we've completed this level. Split pointer was
 	already incremented. */
@@ -476,7 +442,7 @@ lh_init(size_t record_size, size_t max_memory, const char *cache_dir)
 			free(lh);
 			return NULL;
 		}
-		FILE *fp = create_temp_file(cache_dir, path);
+		FILE *fp = cache_dir ? create_temp_file(cache_dir, path) :;
 		lh->data_alloc = allocator_init(record_size, max_memory, fp);
 		fp = create_temp_file(cache_dir, path);
 		lh->bucket_alloc = allocator_init(sizeof(bucket_t), max_memory, fp);
@@ -515,9 +481,17 @@ lh_insert(void* lh_in, uint64_t hash, const void* data) {
 		(void) fprintf(stderr, "Error inserting new hash entry.\n");
 		exit(1);
 	}
-	bucket_entry_t entry = {hash, record};
-	record_ix bucket_ix = bucket_for_hash(lh, hash);
-	store_in_bucket_chain(lh, bucket_ix, entry);
+	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
+	bucket_entry_t new_entry = {hash, record};
+	while (entry_iterator_get_next(lh, &iter, true)) {
+		bucket_entry_t *entry = &iter.bucket.entries[iter.entry_ix];
+		if (!entry->record) {
+			*entry = new_entry;
+			iter.dirty = true;
+			save_entry_iterator(&iter);
+			break;
+		}
+	}
 	lh->stats.num_entries++;
 	uint64_t end_ops = total_io_ops(lh);
 	lh->stats.inserts.num_io_ops += (end_ops - start_ops);
@@ -559,7 +533,7 @@ bool
 lh_retrieve_next(void *iter_in, void *buffer) {
 	lh_iterator_t *iter = iter_in;
 	entry_iterator_t *entry_iterator = &iter->entry_iterator;
-	while (entry_iterator_get_next(iter->lh, entry_iterator)) {
+	while (entry_iterator_get_next(iter->lh, entry_iterator, false)) {
 		bucket_entry_t *entry =
 			&entry_iterator->bucket.entries[entry_iterator->entry_ix];
 		if (entry->record == 0) {
