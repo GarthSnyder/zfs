@@ -15,8 +15,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include "allocator.h"
 
+struct linear_hash;
+typealias struct linear_hash *linear_hash_t;
 
 /*
  * Initialize a memory-based or convertible linear hash table.
@@ -60,9 +61,6 @@ lh_initiate_retrieve(void *lh, uint64_t hash);
  */
 bool
 lh_retrieve_next(void *iter, void *buffer);
-
-size_t
-lh_memory_high_water(void *lh);
 
 /*
  * Destroy hash table and free all resources.

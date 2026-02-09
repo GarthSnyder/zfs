@@ -22,7 +22,10 @@ zstream_SOURCES = \
 	%D%/allocator.c \
 	%D%/allocator.h \
 	%D%/linear_hash.c \
-	%D%/linear_hash.h
+	%D%/linear_hash_extras.c \
+	%D%/linear_hash.h \
+	%D%/linear_hash_stats.h \
+	%D%/linear_hash_types.h \
 
 zstream_LDADD = \
 	libzfs.la \

@@ -1,0 +1,33 @@
+#ifndef LINEAR_HASH_STATS_H
+#define LINEAR_HASH_STATS_H
+
+#import "linear_hash.h"
+
+#define MAX_CHAIN 16
+
+typedef struct {
+  uint64_t    num_chains;
+  uint64_t    num_empty_chains;
+  uint64_t    num_slots_filled;
+  double      pct_empty;
+  double      occupancy;          /* Full slots / Total slots */
+  double      nonempty_occupancy; /* Full slots / Slots in nonempty chains */
+} chain_stats_t;
+
+typedef struct {
+  chain_stats_t chains_by_length[MAX_CHAIN];
+  uint64_t    	total_entries;
+  uint64_t    	total_chains;
+  uint64_t    	bytes_in_data;
+  uint64_t    	bytes_in_buckets;
+  op_stats_t    splits;
+  op_stats_t    inserts;
+  op_stats_t    retrieves;
+  double      	occupancy;        /* Entries / number of chains */
+  double      	overall_occupancy;    /* Full slots / Total slots */
+} lh_report_t;
+
+void
+lh_get_stats(void *lh, lh_report_t *stats);
+
+#endif /* LINEAR_HASH_STATS_H */
