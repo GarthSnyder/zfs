@@ -123,13 +123,13 @@ lh_print_stats(linear_hash_t lh) {
 			}
 		}
 	}
-	fprintf(stderr, "\n%lu inserts with %lu total I/O ops, %.2f ops/insert\n",
+	fprintf(stderr, "%lu inserts with %lu total I/O ops, %.2f ops/insert\n",
 		stats.inserts.count, stats.inserts.num_io_ops, 
 		(double)stats.inserts.num_io_ops / stats.inserts.count);
-	fprintf(stderr, "\n%lu retrieve chains with %lu total I/O ops, %.2f "
+	fprintf(stderr, "%lu retrieve chains with %lu total I/O ops, %.2f "
 		"ops/retrieve\n", stats.retrieves.count, stats.retrieves.num_io_ops, 
 		(double)stats.retrieves.num_io_ops / stats.retrieves.count);
-	fprintf(stderr, "\n%lu splits with %lu total I/O ops, %.2f ops/split\n",
+	fprintf(stderr, "%lu splits with %lu total I/O ops, %.2f ops/split\n",
 		stats.splits.count, stats.splits.num_io_ops, 
 		(double)stats.splits.num_io_ops / stats.splits.count);
 }
