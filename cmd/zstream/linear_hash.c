@@ -108,8 +108,7 @@ split_bucket(linear_hash_t lh)
 	begin_ops_tracking(lh, &lh->stats.splits);
 
 	record_ix bucket_being_split = (record_ix)lh->split_pointer;
-	record_ix buddy_ix = bucket_being_split | 
-		(1ULL << (lh->hash_suffix_length + 1));
+	record_ix buddy_ix = bucket_being_split | (1ULL << lh->hash_suffix_length);
 	bucket_entry_t empty_entry = {0, 0};
 
 	entry_iterator_t source = ITER_BUCKET(lh, bucket_being_split);
@@ -121,16 +120,19 @@ split_bucket(linear_hash_t lh)
 
 	/* Partition */
 	while(entry_iterator_next(&source, false)) {
-		bucket_entry_t *source_entry = &source.bucket.entries[source.entry_ix];
-		if (source_entry->record == 0) {
+		bucket_entry_t *sbe = &source.bucket.entries[source.entry_ix];
+		if (sbe->record == 0) {
 			/* Entries must be filled in order, so we're done */
 			break;
 		}
-		entry_iterator_t *dest = (bucket_for_hash(lh, source_entry->hash) == 
+		entry_iterator_t *dest = (bucket_for_hash(lh, sbe->hash) == 
 			bucket_being_split) ? &stay : &move;
-		(void) entry_iterator_next(dest, false);
-		dest->bucket.entries[dest->entry_ix] = *source_entry;
-		dest->dirty = true;
+		(void) entry_iterator_next(dest, true);
+		bucket_entry_t *dbe = &dest->bucket.entries[dest->entry_ix];
+		if (dbe->hash != sbe->hash || dbe->record != sbe->record) {
+			*dbe = *sbe;
+			dest->dirty = true;			
+		}
 	}
 
 	/* Zero out the rest of the source bucket */
@@ -171,7 +173,7 @@ check_memory_use(linear_hash_t lh) {
 	lh->stats.mem_highwater = (total_memory > lh->stats.mem_highwater) ?
 		total_memory : lh->stats.mem_highwater;
 	if (total_memory > lh->max_memory) {
-		allocator allocator_to_convert;
+		allocator_t allocator_to_convert;
 		if (data.mem_used) {
 			allocator_to_convert = lh->data_alloc;
 		} else if (over.mem_used) {
@@ -220,7 +222,7 @@ lh_init(size_t record_size, size_t max_memory, const char *cache_dir)
 	lh->hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH;
 	lh->split_pointer = 0;
 	lh->max_memory = max_memory;
-	lh->validate = true;
+	lh->validate = false;
 
 	/* Initialize allocators */
 	if (cache_dir) {

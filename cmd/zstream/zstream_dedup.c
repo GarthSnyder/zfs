@@ -271,6 +271,7 @@ zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 				stats.disqualified_records);
 		}
 		fprintf(stderr, "\n");
+		lh_print_stats(ddt);
 	}
 }
 
@@ -429,8 +430,9 @@ zstream_do_dedup(int argc, char *argv[])
 
 	fletcher_4_init();
 	zfs_dedup_stream(hasher_team, STDOUT_FILENO, dedup_table, verbose);
-	fletcher_4_fini();
 	thrd_join(feeder_thread, NULL);
+	fletcher_4_fini();
+	lh_destroy(dedup_table);
 	return 0;
 }
 

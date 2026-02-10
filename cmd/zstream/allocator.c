@@ -25,20 +25,20 @@
 #  define MAP_NORESERVE 0
 #endif
 
-typedef struct {
+struct allocator {
 	bool        using_disk;
 	uint64_t    record_size;
 	uint64_t    count;          /* number of records allocated */
 	uint64_t    io_ops;         /* Number of reads and writes */
 	void        *base_addr;     /* Memory allocator fields */
 	uint64_t    max_memory;
-	FILE		*file;			/* Disk allocator field */
-} allocator_t;
+	FILE				*file;			/* Disk allocator field */
+};
 
-void *
+allocator_t
 allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file) {
 	assert(record_size);
-	allocator_t *alloc = safe_calloc(sizeof(allocator_t));
+	allocator_t alloc = safe_calloc(sizeof(struct allocator));
 	alloc->using_disk = (file && !max_memory);
 	alloc->record_size = record_size;
 	alloc->file = file;
@@ -62,7 +62,7 @@ allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file) {
 }
 
 static void
-free_memory(allocator_t *alloc) {
+free_memory(allocator_t alloc) {
 	if (alloc->base_addr) {
 		munmap(alloc->base_addr, alloc->max_memory);
 	}
@@ -70,8 +70,7 @@ free_memory(allocator_t *alloc) {
 }
 
 int
-allocator_convert_to_disk(void *alloc_in) {
-	allocator_t *alloc = alloc_in;
+allocator_convert_to_disk(allocator_t alloc) {
 	assert(alloc);
 	fprintf(stderr, "Converting allocator from memory to disk\n");
 	if (!alloc->using_disk) {
@@ -90,8 +89,7 @@ allocator_convert_to_disk(void *alloc_in) {
 }
 
 void
-allocator_get_stats(void *alloc_in, allocator_stats_t *stats) {
-	allocator_t *alloc = alloc_in;
+allocator_get_stats(allocator_t alloc, allocator_stats_t *stats) {
 	assert(alloc && stats);
 	stats->num_ops = alloc->io_ops;
 	stats->num_records = alloc->count;
@@ -100,15 +98,13 @@ allocator_get_stats(void *alloc_in, allocator_stats_t *stats) {
 }
 
 record_ix
-allocator_append(void *alloc_in, const void *data) {
-	allocator_t *alloc = alloc_in;
+allocator_append(allocator_t alloc, const void *data) {
 	assert(alloc && data);
 	return allocator_store(alloc, alloc->count, data);
 }
 
 record_ix
-allocator_skip(void *alloc_in) {
-	allocator_t *alloc = alloc_in;
+allocator_skip(allocator_t alloc) {
 	assert(alloc);
 	char *buffer = safe_calloc(alloc->record_size);
 	record_ix ret = allocator_append(alloc, buffer);
@@ -117,9 +113,8 @@ allocator_skip(void *alloc_in) {
 }
 
 record_ix
-allocator_store(void *alloc_in, record_ix record, const void *data)
+allocator_store(allocator_t alloc, record_ix record, const void *data)
 {
-	allocator_t *alloc = alloc_in;
 	assert(alloc && data);
 	alloc->io_ops++;
 
@@ -148,9 +143,8 @@ allocator_store(void *alloc_in, record_ix record, const void *data)
 }
 
 record_ix 
-allocator_retrieve(void *alloc_in, record_ix record, void* buffer) 
+allocator_retrieve(allocator_t alloc, record_ix record, void* buffer) 
 {
-	allocator_t *alloc = alloc_in;
 	uint64_t offset = record * alloc->record_size;
 	assert(alloc && buffer && (record >= 0));
 	alloc->io_ops++;
@@ -173,8 +167,7 @@ allocator_retrieve(void *alloc_in, record_ix record, void* buffer)
 }
 
 void
-allocator_destroy(void *alloc_in) {
-	allocator_t *alloc = alloc_in;
+allocator_destroy(allocator_t alloc) {
 	assert(alloc);
 	if (!alloc->using_disk) {
 		free_memory(alloc);

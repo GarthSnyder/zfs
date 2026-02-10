@@ -23,7 +23,7 @@ typedef struct {
 /* Internal iterator for bucket entries */
 typedef struct {
 	linear_hash_t		lh;
-	allocator			alloc;
+	allocator_t			alloc;
 	record_ix			bucket_ix;	/* -1 == overflow not yet assigned */
 	record_ix			entry_ix;   /* -1 == bucket not yet retrieved */
 	bucket_t			bucket;		/* Working copy of allocator version */
@@ -62,9 +62,9 @@ struct linear_hash {
 	lh_iter_t		iterators[MAX_ITERATORS_OUTSTANDING];
 	lh_stats_t		stats;
 	ops_tracker_t	ops_tracker;
-	allocator		data_alloc;			/* data records */
-	allocator		bucket_alloc;		/* main buckets */
-	allocator		overflow_alloc;		/* overflow buckets */
+	allocator_t		data_alloc;			/* data records */
+	allocator_t		bucket_alloc;		/* main buckets */
+	allocator_t		overflow_alloc;		/* overflow buckets */
 };
 
 #endif /* LINEAR_HASH_TYPES_H */
