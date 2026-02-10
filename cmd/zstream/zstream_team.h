@@ -54,6 +54,9 @@ typedef struct work_unit {
 	void				*output;
 } work_unit_t;
 
+struct zstream_team;
+typedef struct zstream_team *zstream_team_t;
+
 typedef void
 perform_work_t(work_unit_t *unit);
 
@@ -67,38 +70,42 @@ perform_work_t(work_unit_t *unit);
  * payload data. If it's zero, records are processed individually (though
  * concurrently).
  */
-void *
+zstream_team_t
 zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
 	uint64_t queue_length);
 
 /*
  * Submit a work unit. The unit will be queued and processed by
  * worker threads. The call blocks if the input queue is full.
+ * The work unit is shallow-copied into the queue.
  */
 void
-zstream_team_enqueue(void *team, work_unit_t *unit);
+zstream_team_enqueue(zstream_team_t team, work_unit_t *unit);
 
 /*
- * Retrieve a completed work unit. Work units are returned
- * in the same order they were submitted. Blocks if the next
- * unit is not yet ready.
+ * Retrieve a completed work unit. The caller must provide a
+ * work_unit_t buffer into which the dequeued item is copied.
+ *
+ * Work units are returned in the same order they were
+ * submitted. If the next unit is not yet ready, this
+ * call will block.
  *
  * If zstream_team_dequeue returns a value other than zero, the
  * stream is complete. The returned item is not valid, and no
  * further calls may be made.
  */
 int
-zstream_team_dequeue(void *team, work_unit_t *unit);
+zstream_team_dequeue(zstream_team_t team, work_unit_t *unit);
 
 /*
  * Notify the receiver and the team that all work items have
- * been submitted. The team will continue to function for dequeuers
- * until the end-of-stream marker has been read, at which point 
- * threads will be taken down and the team's memory released.
+ * been submitted. The team will continue to function normally
+ * for dequeuers until the end-of-stream marker has been read,
+ * at which point threads will be taken down and the team's
+ * memory released.
  */
-
 void
-zstream_team_fini(void *team);
+zstream_team_fini(zstream_team_t team);
 
 #ifdef	__cplusplus
 }

@@ -33,26 +33,25 @@
 #define MIN_THREADS 6
 #define MAX_BATCH 16
 
-/* 
- * The uniqueue is a circular buffer with four pointers: insert,
- * claim, complete, and dequeue, in that order. No pointer can
- * move beyond its preceding pointer. Every interval between pointers
- * corresponds to a specific state that applies to the intervening
- * work items: enqueued, claimed for work, completed.
- * FIFO order is guaranteed everywhere.
- *
- * No "claimed" condition is necessary because the next state
- * in line is "completed". That transition is where the actual work
- * is done, so the clock on that state is "when the hashing is done"
- * rather than a gating condition.
- */
-
 typedef struct queue_slot {
 	work_unit_t	unit;
 	boolean_t	completed;
 	boolean_t	end_of_stream;
 } queue_slot_t;
 
+/* 
+ * The uniqueue is a circular buffer with four pointers: insert,
+ * claim, complete, and dequeue, in that order. No pointer can
+ * move beyond its preceding pointer. Every interval between pointers
+ * corresponds to a specific state that applies to the intervening
+ * work items: enqueued, claimed for work, completed. FIFO order is
+ * guaranteed everywhere.
+ *
+ * No "claimed" condition is necessary because the next state
+ * in line is "completed". That transition is where the actual work
+ * is done, so the clock on that state is "when the hashing is done"
+ * rather than a gating condition.
+ */
 typedef struct uniqueue {
 	queue_slot_t	*slots;
 	uint64_t		insert, claim, complete, dequeue;
@@ -62,7 +61,7 @@ typedef struct uniqueue {
 	boolean_t		terminating;
 } uniqueue_t;
 
-typedef struct zstream_team {
+struct zstream_team {
 	uniqueue_t		queue;
 	int				num_threads;
 	thrd_t			*threads;
@@ -70,8 +69,7 @@ typedef struct zstream_team {
 	uint64_t		batch_size;
 	uint64_t		queue_length;
 	boolean_t		finalized;
-} zstream_team_t;
-
+};
 
 /*
  * Claim up to max_units work items, trying to accumulate at least
@@ -85,7 +83,7 @@ typedef struct zstream_team {
  * code to handle this case through the normal process.
  */
 static int
-claim_batch(zstream_team_t *team, queue_slot_t **slots, int max_units) {
+claim_batch(zstream_team_t team, queue_slot_t **slots, int max_units) {
 
 	uniqueue_t	*q = &team->queue;
 	uint64_t 	bytes_claimed = 0;
@@ -111,7 +109,7 @@ claim_batch(zstream_team_t *team, queue_slot_t **slots, int max_units) {
 	{
 		uint64_t slot = q->claim % team->queue_length;
 		if (q->slots[slot].unit.needs_processing) {
-			if (junk_batch) break;
+			if (junk_batch) { break; }
 			bytes_claimed += q->slots[slot].unit.payload_size;
 		} else if (!count) {
 			junk_batch = B_TRUE;
@@ -127,7 +125,7 @@ claim_batch(zstream_team_t *team, queue_slot_t **slots, int max_units) {
 static int
 worker_thread(void *team_in)
 {
-	zstream_team_t 	*team = (zstream_team_t *)team_in;
+	zstream_team_t 	team = (zstream_team_t)team_in;
 	queue_slot_t	*batch[MAX_BATCH];
 	uniqueue_t		*q = &team->queue;
 	uint64_t		count = 0;
@@ -160,13 +158,13 @@ worker_thread(void *team_in)
 	return 0;
 }
 
-void *
+zstream_team_t
 zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
 	uint64_t queue_length)
 {
-	zstream_team_t *team = safe_malloc(sizeof(zstream_team_t));
+	zstream_team_t team = safe_malloc(sizeof(struct zstream_team));
 
-	memset(team, 0, sizeof (zstream_team_t));
+	memset(team, 0, sizeof(*team));
 
 	team->process = perform_work;
 	team->batch_size = batch_size;
@@ -194,15 +192,14 @@ zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
 		}
 	}
 
-	return (void *)team;
+	return team;
 }
 
 static void
-zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
+zstream_team_enqueue_impl(zstream_team_t team, work_unit_t *unit, 
+	boolean_t last_one)
 {
-	zstream_team_t *team = (zstream_team_t *)team_in;
 	uniqueue_t *q = &team->queue;
-
 	if (team->finalized) {
 		return;
 	}
@@ -226,12 +223,12 @@ zstream_team_enqueue_impl(void *team_in, work_unit_t *unit, boolean_t last_one)
 }
 
 void
-zstream_team_enqueue(void *team_in, work_unit_t *unit) {
-	zstream_team_enqueue_impl(team_in, unit, B_FALSE);
+zstream_team_enqueue(zstream_team_t team, work_unit_t *unit) {
+	zstream_team_enqueue_impl(team, unit, B_FALSE);
 }
 
 static void
-zstream_team_destroy(zstream_team_t *team) {
+zstream_team_destroy(zstream_team_t team) {
 	team->queue.terminating = B_TRUE;
 	mtx_lock(&team->queue.mutex);
 	cnd_broadcast(&team->queue.inserted);
@@ -251,11 +248,9 @@ zstream_team_destroy(zstream_team_t *team) {
 }
 
 int
-zstream_team_dequeue(void *team_in, work_unit_t *unit)
+zstream_team_dequeue(zstream_team_t team, work_unit_t *unit)
 {
-	zstream_team_t *team = (zstream_team_t *)team_in;
 	uniqueue_t *q = &team->queue;
-
 	mtx_lock(&q->mutex);
 	while (q->dequeue >= q->complete) {
 		cnd_wait(&q->completed, &q->mutex);
@@ -279,9 +274,9 @@ zstream_team_dequeue(void *team_in, work_unit_t *unit)
 }
 
 void
-zstream_team_fini(void *team_in) {
+zstream_team_fini(zstream_team_t team) {
 	work_unit_t unit;
 	memset(&unit, 0, sizeof(unit));
-	zstream_team_enqueue_impl(team_in, &unit, B_TRUE);
+	zstream_team_enqueue_impl(team, &unit, B_TRUE);
 }
 
