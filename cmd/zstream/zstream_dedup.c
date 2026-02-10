@@ -39,6 +39,7 @@
 #include "zfs_fletcher.h"
 #include "zstream.h"
 #include "linear_hash.h"
+#include "linear_hash_stats.h"
 #include "zstream_shared.h"
 #include "zstream_team.h"
 #include "zstream_stream.h"
@@ -50,7 +51,6 @@
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
 typedef struct drr_write drr_write_t;
-extern void validate(void *, bool);
 
 typedef struct dedup_entry {
 	drr_write_t		write_block;
@@ -257,7 +257,7 @@ zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 		print_status(&stats, true);
 		fprintf(stderr, "\n");
 		char mem_str[32];
-		zfs_nicenum(lh_memory_high_water(ddt), mem_str, sizeof (mem_str));
+		zfs_nicenum(lh_get_mem_highwater(ddt), mem_str, sizeof (mem_str));
 		fprintf(stderr,
 		    "Processed %llu total records, including %llu write "
 		    "records.\n",
@@ -271,7 +271,6 @@ zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 				stats.disqualified_records);
 		}
 		fprintf(stderr, "\n");
-		validate(ddt, true);
 	}
 }
 

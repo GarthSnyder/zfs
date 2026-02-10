@@ -1,3 +1,7 @@
+#include "allocator.h"
+#include "linear_hash.h"
+#include "linear_hash_stats.h"
+
 #ifndef LINEAR_HASH_TYPES_H
 #define LINEAR_HASH_TYPES_H
 
@@ -18,7 +22,7 @@ typedef struct {
 
 /* Internal iterator for bucket entries */
 typedef struct {
-	struct linear_hash	*lh
+	linear_hash_t		lh;
 	allocator			alloc;
 	record_ix			bucket_ix;	/* -1 == overflow not yet assigned */
 	record_ix			entry_ix;   /* -1 == bucket not yet retrieved */
@@ -27,26 +31,27 @@ typedef struct {
 } entry_iterator_t;
 
 /* Iterator for retrieving records by hash */
-typedef struct {
+typedef struct lh_iterator {
 	uint64_t			hash;
 	entry_iterator_t	entry_iterator;
-} lh_iterator_t;
+} lh_iter_t;
 
 typedef struct {
-	uint64_t	count;
-	uint64_t	num_io_ops;
-} op_stats_t;
+	op_stats_t	*stat_bin;
+	uint64_t	start_ops;
+	uint64_t	latest_ops;
+} ops_tracker_t;
 
 typedef struct {
 	uint64_t	num_entries;	/* total entries in table */
+	uint64_t	mem_highwater;	/* Most memory used by allocators */
 	op_stats_t	inserts;		/* Inserts from external client */
 	op_stats_t	retrieves;		/* Retrieves from external client */
 	op_stats_t	splits;			/* Splits, generated internally */
 } lh_stats_t;
 
 /* Hash table structure */
-typedef struct linear_hash 
-{
+struct linear_hash {
 	size_t			record_size;
 	uint8_t			hash_suffix_length;	/* hashing granularity below split */
 	record_ix		split_pointer;    	/* next bucket to split */
@@ -54,11 +59,12 @@ typedef struct linear_hash
 	uint64_t		max_memory;
 	int     		next_memory_check;  /* Number of splits before check */
 	int       		next_iterator;
-	lh_iterator_t	iterators[MAX_ITERATORS_OUTSTANDING];
+	lh_iter_t		iterators[MAX_ITERATORS_OUTSTANDING];
 	lh_stats_t		stats;
+	ops_tracker_t	ops_tracker;
 	allocator		data_alloc;			/* data records */
 	allocator		bucket_alloc;		/* main buckets */
 	allocator		overflow_alloc;		/* overflow buckets */
-} linear_hash_t;
+};
 
 #endif /* LINEAR_HASH_TYPES_H */

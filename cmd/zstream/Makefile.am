@@ -26,6 +26,7 @@ zstream_SOURCES = \
 	%D%/linear_hash.h \
 	%D%/linear_hash_stats.h \
 	%D%/linear_hash_types.h \
+	%D%/linear_hash_extras.h
 
 zstream_LDADD = \
 	libzfs.la \

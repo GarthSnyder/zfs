@@ -1,8 +1,11 @@
-#import "linear_hash_types.h"
-#import "linear_hash_stats.h"
+#include <assert.h>
+#include <string.h>
+#include "linear_hash_types.h"
+#include "linear_hash_stats.h"
+#include "linear_hash_extras.h"
 
 bool
-lh_validate(linear_hash_t *lh) {
+lh_validate(linear_hash_t lh) {
 	uint64_t total_entries = 0;
 	allocator_stats_t bucket_stats;
 	allocator_get_stats(lh->bucket_alloc, &bucket_stats);
@@ -10,7 +13,7 @@ lh_validate(linear_hash_t *lh) {
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t full_entries = 0;
 		uint64_t empty_entries = 0;
-		while (entry_iterator_next(lh, &iter, false)) {
+		while (entry_iterator_next(&iter, false)) {
 			bucket_entry_t *entry = &iter.bucket.entries[iter.entry_ix];
 			if (entry->record) {
 				if (empty_entries) {
@@ -37,17 +40,25 @@ lh_validate(linear_hash_t *lh) {
 }
 
 void
-lh_get_stats(void *lh_in, lh_report_t *stats)
+lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 {
-	linear_hash_t *lh = lh_in;
-	assert(lh_in && stats);
+	assert(lh && stats);
 	memset(stats, 0, sizeof(*stats));
+	
+	allocator_stats_t bucket_stats, overflow_stats, data_stats;
+	allocator_get_stats(lh->bucket_alloc, &bucket_stats);
+	allocator_get_stats(lh->overflow_alloc, &overflow_stats);
+	allocator_get_stats(lh->data_alloc, &data_stats);
+	stats->bytes_in_data = data_stats.num_records * lh->record_size;
+	stats->bytes_in_buckets = 
+		(bucket_stats.num_records + overflow_stats.num_records) *
+		sizeof(bucket_t);
 
 	for (uint64_t i = 0; i < bucket_stats.num_records; i++) {
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t num_entries = 0;
 		uint64_t num_filled = 0;
-		while (entry_iterator_next(lh, &iter, false)) {
+		while (entry_iterator_next(&iter, false)) {
 			bucket_entry_t *entry = &iter.bucket.entries[iter.entry_ix];
 			num_entries++;
 			if (entry->record) {
@@ -71,22 +82,13 @@ lh_get_stats(void *lh_in, lh_report_t *stats)
 	for (uint64_t i = 0; i < MAX_CHAIN; i++) {
 		chain_stats_t *cs = &stats->chains_by_length[i];
 		stats->total_entries += cs->num_slots_filled;
-		stats->total_chains += cs->total_chains;
+		stats->total_chains += cs->num_chains;
 		cs->pct_empty = (double) cs->num_empty_chains / cs->num_chains;
 		cs->occupancy = (double) cs->num_slots_filled /
 			(i * cs->num_chains * ENTRIES_PER_BUCKET);
 		cs->nonempty_occupancy = (double) cs->num_slots_filled / 
 			(i * (cs->num_chains - cs->num_empty_chains) * ENTRIES_PER_BUCKET);
 	}
-
-	allocator_stats_t bucket_stats, overflow_stats, data_stats;
-	allocator_get_stats(lh->bucket_alloc, &bucket_stats);
-	allocator_get_stats(lh->overflow_alloc, &overflow_stats);
-	allocator_get_stats(lh->data_alloc, &data_stats);
-	stats->bytes_in_data = data_stats.num_records * lh->record_size;
-	stats->bytes_in_buckets = 
-		(bucket_stats.num_records + overflow_stats.num_records) *
-		sizeof(bucket_t);
 
 	stats->splits = lh->stats.splits;
 	stats->inserts = lh->stats.inserts;
@@ -97,8 +99,7 @@ lh_get_stats(void *lh_in, lh_report_t *stats)
 }
 
 void
-lh_print_report(void *lh_in) {
-	linear_hash_t *lh = lh_in;
+lh_print_stats(linear_hash_t lh) {
 	lh_report_t stats;
 	lh_get_stats(lh, &stats);
 	fprintf(stderr, "%lu entries in %lu bucket chains (occupancy %.0f%%):\n",
@@ -106,13 +107,7 @@ lh_print_report(void *lh_in) {
 	for (int i = 0; i < MAX_CHAIN; i++) {
 		chain_stats_t *cs = &stats.chains_by_length[i];
 		if (cs->num_chains) {
-			uint64_t entries_per_chain = i * ENTRIES_PER_BUCKET;
-			total_bucket_entries += entries_per_chain * chain_lengths[i];
-			double avg_full = (double)chain_occupancies[i] / 
-				(chain_lengths[i] - empties[i]);
-			double avg_occupancies = (double)avg_full / entries_per_chain;
-			double max_occ = (double)max_occupancy[i] / entries_per_chain;
-			fprintf(stderr, "    %lu bucket chains of length %lu, ",
+			fprintf(stderr, "    %lu bucket chains of length %d, ",
 				cs->num_chains, i);
 			if (cs->num_empty_chains == cs->num_chains) {
 				fprintf(stderr, "all empty\n");
@@ -121,10 +116,10 @@ lh_print_report(void *lh_in) {
 					fprintf(stderr, "none empty, ");
 				} else {
 					fprintf(stderr, "%lu (%.0f%%) empty, ",
-						cs->num_empty_chains, cs->pct_empty);
+						cs->num_empty_chains, 100 * cs->pct_empty);
 				}
 				fprintf(stderr, "nonempty occupancy avg %.0f%%\n", 
-					stats.nonempty_occupancy * 100);
+					cs->nonempty_occupancy * 100);
 			}
 		}
 	}
@@ -139,3 +134,37 @@ lh_print_report(void *lh_in) {
 		(double)stats.splits.num_io_ops / stats.splits.count);
 }
 
+uint64_t
+total_io_ops(linear_hash_t lh) {
+	allocator_stats_t data, bucket, over;
+	allocator_get_stats(lh->data_alloc, &data);
+	allocator_get_stats(lh->bucket_alloc, &bucket);
+	allocator_get_stats(lh->overflow_alloc, &over);
+	return data.num_ops + bucket.num_ops + over.num_ops;
+}
+
+void
+begin_ops_tracking(linear_hash_t lh, op_stats_t *bin) {
+	if (lh->ops_tracker.stat_bin) {
+		complete_ops_tracking(lh);
+	}
+	lh->ops_tracker.stat_bin = bin;
+	lh->ops_tracker.start_ops = total_io_ops(lh);
+}
+
+void
+update_ops_tracking(linear_hash_t lh){
+	if (lh->ops_tracker.stat_bin) {
+		lh->ops_tracker.latest_ops = total_io_ops(lh);
+	}
+}
+
+void
+complete_ops_tracking(linear_hash_t lh) {
+	ops_tracker_t *tracker = &lh->ops_tracker;
+	if (tracker->stat_bin) {
+		update_ops_tracking(lh);
+		tracker->stat_bin->count++;
+		tracker->stat_bin->num_io_ops += tracker->latest_ops - tracker->start_ops;
+	}
+}
