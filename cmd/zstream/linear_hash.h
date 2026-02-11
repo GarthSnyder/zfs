@@ -16,6 +16,14 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+/*
+ * Callers are required neither to manage iterators nor to pursue iterations
+ * to completion. In return, callers must limit themselves to  8 concurrent
+ * iterations at once.
+ */
+
+#define MAX_ITERATORS_OUTSTANDING 8
+
 struct linear_hash;
 typedef struct linear_hash *linear_hash_t;
 

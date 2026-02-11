@@ -71,6 +71,38 @@ struct zstream_team {
 	boolean_t		finalized;
 };
 
+static int worker_thread(void *);
+
+zstream_team_t
+zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
+	uint64_t queue_length, int num_threads)
+{
+	zstream_team_t team = safe_calloc(sizeof(struct zstream_team));
+
+	team->process = perform_work;
+	team->batch_size = batch_size;
+	team->queue_length = queue_length;
+	team->queue.slots = safe_calloc(sizeof(queue_slot_t) * queue_length);
+	team->num_threads = num_threads;
+	team->threads = safe_calloc(team->num_threads * sizeof(thrd_t));
+
+	mtx_init(&team->queue.mutex, mtx_plain);
+	cnd_init(&team->queue.inserted);
+	cnd_init(&team->queue.completed);
+	cnd_init(&team->queue.dequeued);
+
+	for (int i = 0; i < team->num_threads; i++) {
+		if (thrd_create(&team->threads[i], worker_thread, team)
+			!= thrd_success)
+		{
+			fprintf(stderr, "Error creating worker thread %d\n", i);
+			exit(1);
+		}
+	}
+
+	return team;
+}
+
 /*
  * Claim up to max_units work items, trying to accumulate at least
  * batch_size worth of payload data. Does not block waiting to reach
@@ -156,43 +188,6 @@ worker_thread(void *team_in)
 		mtx_unlock(&q->mutex);
 	}
 	return 0;
-}
-
-zstream_team_t
-zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
-	uint64_t queue_length)
-{
-	zstream_team_t team = safe_malloc(sizeof(struct zstream_team));
-
-	memset(team, 0, sizeof(*team));
-
-	team->process = perform_work;
-	team->batch_size = batch_size;
-	team->queue_length = queue_length;
-	team->queue.slots = safe_calloc(sizeof(queue_slot_t) * queue_length);
-
-	mtx_init(&team->queue.mutex, mtx_plain);
-	cnd_init(&team->queue.inserted);
-	cnd_init(&team->queue.completed);
-	cnd_init(&team->queue.dequeued);
-
-	team->num_threads = sysconf(_SC_NPROCESSORS_ONLN);
-	if (team->num_threads < MIN_THREADS) {
-		team->num_threads = MIN_THREADS;
-	}
-
-	team->threads = safe_calloc(team->num_threads * sizeof(thrd_t));
-
-	for (int i = 0; i < team->num_threads; i++) {
-		if (thrd_create(&team->threads[i], worker_thread, team)
-			!= thrd_success)
-		{
-			fprintf(stderr, "Error creating worker thread %d\n", i);
-			exit(1);
-		}
-	}
-
-	return team;
 }
 
 static void

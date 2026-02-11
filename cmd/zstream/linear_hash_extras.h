@@ -1,17 +1,17 @@
 #include "linear_hash_types.h"
 #include "linear_hash_stats.h"
 
+#define ITER_BUCKET(lh, bucket) \
+	{.lh=lh, .alloc=lh->bucket_alloc, .bucket_ix=bucket, .entry_ix=-1}
+
+#define EMPTY_BUCKET {}
+
 #define CHECKED(type, expr, doing_what) \
 	type ret = expr; \
 	if (ret < 0) { \
 		(void) fprintf(stderr, "Error while %s.\n", doing_what); \
 		exit(1); \
 	} 
-
-#define ITER_BUCKET(lh, bucket) \
-	{lh, lh->bucket_alloc, bucket, -1, {{{0}}}, false}
-
-#define EMPTY_BUCKET {{{0}}, 0}
 
 #define START_VALIDATION(lh) \
 	bool started_ok = true; \

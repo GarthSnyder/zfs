@@ -72,7 +72,7 @@ perform_work_t(work_unit_t *unit);
  */
 zstream_team_t
 zstream_team_init(perform_work_t perform_work, uint64_t batch_size,
-	uint64_t queue_length);
+	uint64_t queue_length, int num_threads);
 
 /*
  * Submit a work unit. The unit will be queued and processed by
@@ -98,11 +98,11 @@ int
 zstream_team_dequeue(zstream_team_t team, work_unit_t *unit);
 
 /*
- * Notify the receiver and the team that all work items have
- * been submitted. The team will continue to function normally
- * for dequeuers until the end-of-stream marker has been read,
- * at which point threads will be taken down and the team's
- * memory released.
+ * Mark the point at which all work items have been submitted.
+ * The team will continue to function normally for dequeuers
+ * and worker threads until zstream_team_dequeue() returns a
+ * nonzero value, at which point threads will be taken down and
+ * the team's memory released.
  */
 void
 zstream_team_fini(zstream_team_t team);

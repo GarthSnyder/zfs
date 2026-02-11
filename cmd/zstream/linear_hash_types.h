@@ -6,7 +6,6 @@
 #define LINEAR_HASH_TYPES_H
 
 #define ENTRIES_PER_BUCKET			6
-#define MAX_ITERATORS_OUTSTANDING	4
 
 /* Entry in a bucket: hash value + locator to data */
 typedef struct {

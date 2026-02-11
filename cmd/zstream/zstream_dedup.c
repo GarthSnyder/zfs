@@ -417,7 +417,9 @@ zstream_do_dedup(int argc, char *argv[])
 		input = stdin;
 	}
 
-	hasher_team = zstream_team_init(calculate_blake3_hash, 64 * 1024, 256);
+	int num_threads = sysconf(_SC_NPROCESSORS_ONLN);
+	hasher_team = zstream_team_init(calculate_blake3_hash, 64 * 1024, 256,
+		(num_threads < 6) ? 6 : num_threads);
 	feeder_context.team = hasher_team;
 	feeder_context.input = input;
 
