@@ -32,13 +32,13 @@ struct allocator {
 	uint64_t    io_ops;         /* Number of reads and writes */
 	void        *base_addr;     /* Memory allocator fields */
 	uint64_t    max_memory;
-	FILE				*file;			/* Disk allocator field */
+	FILE		*file;			/* Disk allocator field */
 };
 
-allocator_t
+allocator
 allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file) {
 	assert(record_size);
-	allocator_t alloc = safe_calloc(sizeof(struct allocator));
+	allocator alloc = safe_calloc(sizeof(struct allocator));
 	alloc->using_disk = (file && !max_memory);
 	alloc->record_size = record_size;
 	alloc->file = file;
@@ -62,7 +62,7 @@ allocator_init(uint64_t record_size, uint64_t max_memory, FILE *file) {
 }
 
 static void
-free_memory(allocator_t alloc) {
+free_memory(allocator alloc) {
 	if (alloc->base_addr) {
 		munmap(alloc->base_addr, alloc->max_memory);
 	}
@@ -70,7 +70,7 @@ free_memory(allocator_t alloc) {
 }
 
 int
-allocator_convert_to_disk(allocator_t alloc) {
+allocator_convert_to_disk(allocator alloc) {
 	assert(alloc);
 	fprintf(stderr, "Converting allocator from memory to disk\n");
 	if (!alloc->using_disk) {
@@ -89,7 +89,7 @@ allocator_convert_to_disk(allocator_t alloc) {
 }
 
 void
-allocator_get_stats(allocator_t alloc, allocator_stats_t *stats) {
+allocator_get_stats(allocator alloc, allocator_stats *stats) {
 	assert(alloc && stats);
 	stats->num_ops = alloc->io_ops;
 	stats->num_records = alloc->count;
@@ -98,13 +98,13 @@ allocator_get_stats(allocator_t alloc, allocator_stats_t *stats) {
 }
 
 record_ix
-allocator_append(allocator_t alloc, const void *data) {
+allocator_append(allocator alloc, const void *data) {
 	assert(alloc && data);
 	return allocator_store(alloc, alloc->count, data);
 }
 
 record_ix
-allocator_skip(allocator_t alloc) {
+allocator_skip(allocator alloc) {
 	assert(alloc);
 	char *buffer = safe_calloc(alloc->record_size);
 	record_ix ret = allocator_append(alloc, buffer);
@@ -113,7 +113,7 @@ allocator_skip(allocator_t alloc) {
 }
 
 record_ix
-allocator_store(allocator_t alloc, record_ix record, const void *data)
+allocator_store(allocator alloc, record_ix record, const void *data)
 {
 	assert(alloc && data);
 	alloc->io_ops++;
@@ -143,7 +143,7 @@ allocator_store(allocator_t alloc, record_ix record, const void *data)
 }
 
 record_ix 
-allocator_retrieve(allocator_t alloc, record_ix record, void* buffer) 
+allocator_retrieve(allocator alloc, record_ix record, void* buffer) 
 {
 	uint64_t offset = record * alloc->record_size;
 	assert(alloc && buffer && (record >= 0));
@@ -167,7 +167,7 @@ allocator_retrieve(allocator_t alloc, record_ix record, void* buffer)
 }
 
 void
-allocator_destroy(allocator_t alloc) {
+allocator_destroy(allocator alloc) {
 	assert(alloc);
 	if (!alloc->using_disk) {
 		free_memory(alloc);

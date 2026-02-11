@@ -12,33 +12,33 @@ typedef struct {
   double      pct_empty;
   double      occupancy;          /* Full slots / Total slots */
   double      nonempty_occupancy; /* Full slots / Slots in nonempty chains */
-} chain_stats_t;
+} chain_stats;
 
 typedef struct {
   uint64_t  count;
   uint64_t  num_io_ops;
-} op_stats_t;
+} op_stats;
 
 typedef struct {
-  chain_stats_t chains_by_length[MAX_CHAIN];
+  chain_stats   chains_by_length[MAX_CHAIN];
   uint64_t    	total_entries;
   uint64_t    	total_chains;
   uint64_t    	bytes_in_data;
   uint64_t    	bytes_in_buckets;
-  op_stats_t    splits;
-  op_stats_t    inserts;
-  op_stats_t    retrieves;
+  op_stats      splits;
+  op_stats      inserts;
+  op_stats      retrieves;
   double      	occupancy;        /* Entries / number of chains */
   double      	overall_occupancy;    /* Full slots / Total slots */
-} lh_report_t;
+} lh_report;
 
 void
-lh_get_stats(linear_hash_t lh, lh_report_t *stats);
+lh_get_stats(linear_hash lh, lh_report *stats);
 
 void
-lh_print_stats(linear_hash_t lh);
+lh_print_stats(linear_hash lh);
 
 uint64_t
-lh_get_mem_highwater(linear_hash_t lh);
+lh_get_mem_highwater(linear_hash lh);
 
 #endif /* LINEAR_HASH_STATS_H */
