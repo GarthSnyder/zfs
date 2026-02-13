@@ -41,7 +41,7 @@
 #include "linear_hash.h"
 #include "linear_hash_stats.h"
 #include "zstream_shared.h"
-#include "zstream_team.h"
+#include "team.h"
 #include "zstream_stream.h"
 
 #define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
@@ -50,14 +50,14 @@
 
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
-typedef struct drr_write drr_write_t;
+typedef struct drr_write drr_write;
 
-typedef struct dedup_entry {
-	drr_write_t		write_block;
+typedef struct {
+	drr_write		write_block;
 	zio_cksum_t		checksum;  
 	zio_cksum_t		blake3_hash;
 	uint64_t		payload_length;
-} dedup_entry_t;
+} dedup_entry;
 
 typedef struct dedup_stats {
 	uint64_t	total_records;
@@ -67,13 +67,28 @@ typedef struct dedup_stats {
 	uint64_t	bytes_saved;
 	uint64_t	disqualified_records;
 	hrtime_t	last_status_time;
-} dedup_stats_t;
+} dedup_stats;
+
+typedef struct {
+	dmu_replay_record_t	drr;
+	uint8_t			*payload;
+	uint64_t		payload_size;
+	zio_cksum_t		blake3_hash;
+} blake3_queue_item;
+
+typedef struct {
+	dmu_replay_record_t	drr;
+	uint8_t			*payload;
+	uint64_t		payload_size;
+	zio_cksum_t		fletcher4_record;
+	zio_cksum_t		fletcher4_payload;
+} fletcher4_queue_item;
 
 /*
  * Print status update to stderr.
  */
 static void
-print_status(dedup_stats_t *stats, boolean_t force)
+print_status(dedup_stats *stats, boolean_t force)
 {
 	hrtime_t now = gethrtime();
 	char bytes_read_str[32];
@@ -106,7 +121,7 @@ print_status(dedup_stats_t *stats, boolean_t force)
 }
 
 static bool
-writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
+writes_compatible(const drr_write *this, const drr_write *prev) {
 	if (this->drr_type != prev->drr_type
 		|| this->drr_logical_size != prev->drr_logical_size
 		|| this->drr_compressiontype != prev->drr_compressiontype
@@ -121,7 +136,7 @@ writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 }
 
 static bool
-dedup_table_lookup(void *ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
+dedup_table_lookup(void *ddt, zio_cksum_t *blake3, dedup_entry *dde) {
 	void *iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(blake3));
 	/* 
 	 * Dedup table hashes are only 64 bits, so a table match does not
@@ -138,7 +153,7 @@ dedup_table_lookup(void *ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
 static void
 dedup_table_insert(void *ddt, zio_cksum_t *blake3, dmu_replay_record_t *drr)
 {
-	dedup_entry_t dedup;
+	dedup_entry dedup;
 	memcpy(&dedup.write_block, &drr->drr_u.drr_write,
 		sizeof(drr->drr_u.drr_write));
 	memcpy(&dedup.blake3_hash, blake3, sizeof(dedup.blake3_hash));
@@ -157,8 +172,8 @@ zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 	work_unit_t				unit;
 	dmu_replay_record_t		*drr = &unit.drr;
 	zio_cksum_t 			stream_cksum;
-	dedup_stats_t 			stats;
-	dedup_entry_t			existing;
+	dedup_stats 			stats;
+	dedup_entry			existing;
 
 	struct drr_begin 		*drrb = &drr->drr_u.drr_begin;
 	struct drr_end			*drre = &drr->drr_u.drr_end;
@@ -168,7 +183,7 @@ zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 	memset(&stats, 0, sizeof (stats));
 	stats.last_status_time = gethrtime();
 
-	while (zstream_team_dequeue(team, &unit) == 0)
+	while (team_dequeue(team, &unit) == 0)
 	{
 		ZIO_SET_CHECKSUM(&drrc->drr_checksum, 0, 0, 0, 0);
 		stats.bytes_read += sizeof(*drr) + unit.payload_size;
@@ -275,7 +290,7 @@ zfs_dedup_stream(void *team, int outfd, void *ddt, bool verbose)
 	}
 }
 
-/* Callback that enqueues records on the zstream_team */
+/* Callback that enqueues records on the team */
 static void
 enqueue_record(dmu_replay_record_t *drr, uint8_t **payload,
 	uint32_t *payload_size, void *context)
@@ -288,7 +303,7 @@ enqueue_record(dmu_replay_record_t *drr, uint8_t **payload,
 	unit.output = NULL;
 	unit.needs_processing = drr->drr_type == DRR_WRITE;
 
-	zstream_team_enqueue(context, &unit);
+	team_enqueue(context, &unit);
 }
 
 /* This is the packet passed to the feeder thread */
@@ -305,11 +320,11 @@ enqueue_stream(void *context_in) {
 	memset(&filter, 0, sizeof(filter));
 	filter.all_records_post = enqueue_record;
 	read_stream(context->input, -1, &filter, 1, B_TRUE, context->team);
-	zstream_team_fini(context->team);
+	team_fini(context->team);
 	return 0;
 }
 
-/* This is the zstream_team worker function */
+/* This is the team worker function */
 static void
 calculate_blake3_hash(work_unit_t *unit)
 {
@@ -391,7 +406,7 @@ zstream_do_dedup(int argc, char *argv[])
 		fprintf(stderr, "The -c argument requires a directory argument\n");
 		exit(1);
 	}
-	dedup_table = lh_init(sizeof(dedup_entry_t), max_memory, cache_dir);
+	dedup_table = lh_init(sizeof(dedup_entry), max_memory, cache_dir);
 
 	if (isatty(STDOUT_FILENO)) {
 		(void) fprintf(stderr,
@@ -418,7 +433,7 @@ zstream_do_dedup(int argc, char *argv[])
 	}
 
 	int num_threads = sysconf(_SC_NPROCESSORS_ONLN);
-	hasher_team = zstream_team_init(calculate_blake3_hash, 64 * 1024, 256,
+	hasher_team = team_init(calculate_blake3_hash, 64 * 1024, 256,
 		(num_threads < 6) ? 6 : num_threads);
 	feeder_context.team = hasher_team;
 	feeder_context.input = input;

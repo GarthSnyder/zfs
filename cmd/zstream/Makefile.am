@@ -17,8 +17,8 @@ zstream_SOURCES = \
 	%D%/zstream_shared.h \
 	%D%/zstream_stream.c \
 	%D%/zstream_stream.h \
-	%D%/zstream_team.c \
-	%D%/zstream_team.h \
+	%D%/team.c \
+	%D%/team.h \
 	%D%/allocator.c \
 	%D%/allocator.h \
 	%D%/linear_hash.c \
