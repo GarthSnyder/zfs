@@ -24,9 +24,10 @@
 #include <string.h>
 #include <threads.h>
 #include <unistd.h>
-#include <pthreads.h>
+#include <pthread.h>
 #include <sched.h>
-#include "team.h"
+#include <math.h>
+#include "zstream_queue.h"
 #include "zstream_shared.h"
 
 #define MIN_THREADS 6
@@ -56,17 +57,15 @@ typedef struct {
 	boolean_t	end_of_stream;
 } queue_slot;
 
-struct zstream_queue {
+struct zstream_queue{
 	pthread_mutex_t		mutex;
+	pthread_cond_t		completed, dequeued;
+	uint64_t			enqueue, claim, complete, dequeue;
 	queue_slot			*slots;
 	int					num_slots;
+	size_t				item_size;
 	process_item_func	*process;
 	int					batch_budget;
-	int					thread_limit;
-	int					threads_assigned;
-	uint64_t			enqueue, claim, complete, dequeue;
-	pthread_cond_t		completed, dequeued;
-	uint64_t			bytes_pending;
 	boolean_t			finalized;
 };
 
@@ -79,14 +78,18 @@ typedef struct {
 	int					num_threads;
 } thread_pool;
 
-static thread_pool		pool = {};
+typedef void pthread_cleanup_func(void *);
 
+static thread_pool pool = {};
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
+
+static void *worker_thread(void *);
 
 static void
 thread_pool_init(void) {
 	pthread_mutex_init(&pool.mutex, NULL);
-	pthread_cond_init(&pool, NULL);
+	pthread_cond_init(&pool.enqueued, NULL);
+	srand48(0x83b606fb0dba7627);
 }
 
 /*
@@ -137,18 +140,18 @@ unlock_mutex(pthread_mutex_t *mutex) {
 
 static void
 await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex) {
-	pthread_cleanup_push(unlock_mutex, mutex);
+	pthread_cleanup_push((pthread_cleanup_func *)unlock_mutex, mutex);
 	pthread_cond_wait(cond, mutex);
 	pthread_cleanup_pop(0);
 }
 
 zstream_queue
 zstream_queue_create(process_item_func *process, size_t item_size,
-	int batch_budget, uint64_t queue_length, int max_threads);
+	int batch_budget, uint64_t queue_length)
 {
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.mutex);
-	if (pool.num_threads) {
+	if (!pool.num_threads) {
 		thread_pool_spinup();
 	}
 	zstream_queue queue = safe_malloc(sizeof(struct zstream_queue));
@@ -157,20 +160,39 @@ zstream_queue_create(process_item_func *process, size_t item_size,
 
 	*queue = (struct zstream_queue) {
 		.num_slots = queue_length,
+		.item_size = item_size,
 		.process = process,
 		.batch_budget = batch_budget,
-		.num_slots = queue_length,
-		.slots = safe_calloc(sizeof(queue_slot) * queue_length),
-		.thread_limit = max_threads,
+		.slots = safe_calloc(queue_length * (sizeof(queue_slot) + item_size)),
+	};
+	void *items_base = &queue->slots[queue_length];
+	for (int i = 0; i < queue_length; i++) {
+		queue->slots[i].item = items_base + i * item_size;
 	}
 
 	pthread_mutex_init(&queue->mutex, NULL);
-	pthread_cond_init(&queue->inserted);
-	pthread_cond_init(&queue->completed);
-	pthread_cond_init(&queue->dequeued);
+	pthread_cond_init(&queue->completed, NULL);
+	pthread_cond_init(&queue->dequeued, NULL);
 
 	pthread_mutex_unlock(&pool.mutex);
 	return queue;
+}
+
+/*
+ * Calling thread must hold the queue lock
+ */
+static void
+advance_completion_pointer(zstream_queue queue) {
+	boolean_t any_completed = B_FALSE;
+	while (queue->complete < queue->claim &&
+		queue->slots[queue->complete % queue->num_slots].completed)
+	{
+		queue->complete++;
+		any_completed = B_TRUE;
+	}
+	if (any_completed) {
+		pthread_cond_signal(&queue->completed);
+	}
 }
 
 /*
@@ -188,25 +210,24 @@ zstream_queue_create(process_item_func *process, size_t item_size,
  * on entry to the queue because
  */
 static int
-claim_batch(zstream_queue queue, queue_item **batch)
+claim_batch(zstream_queue queue, queue_slot **batch)
 {
 	uint64_t 	cost_claimed = 0;
 	uint64_t 	count = 0;
-	boolean_t	any_completed = B_FALSE;
 
 	pthread_mutex_lock(&queue->mutex);
 
-	while (q->claim < q->insert &&
+	while (queue->claim < queue->enqueue &&
 		count < MAX_BATCH &&
 		cost_claimed <= queue->batch_budget)
 	{
-		uint64_t slot_num = queue->claim % queue->queue_length;
+		uint64_t slot_num = queue->claim % queue->num_slots;
 		queue_slot *slot = &queue->slots[slot_num];
 		if (slot->cost == 0) {
 			slot->completed = B_TRUE;
 		} else {
 			cost_claimed += slot->cost;
-			slots[count] = slot;
+			batch[count] = slot;
 			count++;
 		}
 		queue->claim++;
@@ -225,18 +246,16 @@ claim_batch(zstream_queue queue, queue_item **batch)
  * mutex, which guarantees that enqueue signals will not arrive while a thread
  * is attempting to pick a queue. See note in zstream_enqueue_impl().
  */
-zstream_queue
+static zstream_queue
 assign_thread_to_queue(void) {
-	pid_t my_tid = gettid();
-	static unsigned short xsubi[3] = {my_tid, my_tid, my_tid};
 	pthread_mutex_lock(&pool.mutex);
 	while (true) {
 		double cum_weights[MAX_QUEUES];
 		for (int i = 0; i < pool.num_queues; i++) {
-			queue = pool.queues[i];
+			zstream_queue queue = pool.queues[i];
 			int claimable_est = queue->enqueue - queue->claim;
 			int in_queue_est = queue->enqueue - queue->dequeue;
-			int open_slots_est = queue->queue_length - in_queue_est;
+			int open_slots_est = queue->num_slots - in_queue_est;
 			double claim_factor = claimable_est / CLAIM_FACTOR;
 			double slot_factor = (open_slots_est > 0) ?
 				(1.0 / open_slots_est) : 2.0;
@@ -249,7 +268,7 @@ assign_thread_to_queue(void) {
 			pthread_cond_wait(&pool.enqueued, &pool.mutex);
 			continue;
 		} else {
-			double select_val = erand48(xsubi) * cum_weight;
+			double select_val = drand48() * scale;
 			for (int i = 0; i < pool.num_queues; i++) {
 				if (cum_weights[i] <= select_val) {
 					zstream_queue selected_queue = pool.queues[i];
@@ -261,26 +280,13 @@ assign_thread_to_queue(void) {
 	}
 }
 
-static void
-advance_completion_pointer(zstream_queue queue) {
-	boolean_t any_completed = B_FALSE;
-	while (queue->complete < queue->claim &&
-		queue->slots[queue->complete % queue->num_slots].completed)
-	{
-		queue->complete++;
-		any_completed = B_TRUE;
-	}
-	if (any_completed) {
-		pthread_cond_signal(&queue->completed);
-	}
-}
-
 static void *
 worker_thread(void *dummy)
 {
+	(void) dummy; /* Prevent compiler "unused" warning */
 	while (true) {
 		zstream_queue queue = assign_thread_to_queue();
-		queue_item *batch[MAX_BATCH];
+		queue_slot *batch[MAX_BATCH];
 		uint64_t count = claim_batch(queue, batch);
 		/* Complete the whole batch before returning any items */
 		for (int i = 0; i < count; i++) {
@@ -288,11 +294,12 @@ worker_thread(void *dummy)
 		}
 		pthread_mutex_lock(&queue->mutex);
 		for (int i = 0; i < count; i++) {
-			&batch[i]->item->completed = B_TRUE;
+			batch[i]->completed = B_TRUE;
 		}
 		advance_completion_pointer(queue);
 		pthread_mutex_unlock(&queue->mutex);
 	}
+	return NULL;
 }
 
 static void
@@ -304,20 +311,18 @@ zstream_enqueue_impl(zstream_queue queue, queue_item *item, int cost,
 		pthread_mutex_unlock(&queue->mutex);
 		return;
 	}
-	while (queue->insert - queue->dequeue >= team->queue_length) {
+	while (queue->enqueue - queue->dequeue >= queue->num_slots) {
 		await_condition(&queue->dequeued, &queue->mutex);
 	}
-	uint64_t slot = queue->insert % team->queue_length;
+	uint64_t slot = queue->enqueue % queue->num_slots;
 	queue->slots[slot] = (queue_slot) {
 		.item = item,
 		.cost = cost,
 		.end_of_stream = last_one
 	};
-	queue->bytes_pending += cost;
 	queue->finalized = queue->finalized || last_one;
-	queue->insert++;
+	queue->enqueue++;
 	pthread_mutex_unlock(&queue->mutex);
-	pthread_cond_signal(&queue->enqueued);
 
 	/*
 	 * Enqueueing doesn't require any participation from the thread pool.
@@ -329,7 +334,7 @@ zstream_enqueue_impl(zstream_queue queue, queue_item *item, int cost,
 	 * thread is in the queue assignment step when the signal is sent.
 	 */
 	pthread_mutex_lock(&pool.mutex);
-	pthread_cond_signal(&pool.any_queue_enqueued)
+	pthread_cond_signal(&pool.enqueued);
 	pthread_mutex_unlock(&pool.mutex);
 }
 
@@ -340,43 +345,14 @@ zstream_enqueue(zstream_queue queue, queue_item *item, int cost) {
 
 void
 zstream_queue_fini(zstream_queue queue) {
-	struct queue_item item = {};
-	team_enqueue_impl(queue, &item, 0, B_TRUE);
-}
-
-boolean_t
-zstream_dequeue(zstream_queue queue, queue_item *item); {
-	pthread_mutex_lock(&queue->mutex);
-	while (queue->dequeue >= queue->complete) {
-		await_condition(&queue->completed, &queue->mutex);
-	}
-	uint64_t slot = queue->dequeue % team->queue_length;
-	queue->dequeue++;
-	if (queue->slots[slot].end_of_stream) {
-		pthread_mutex_unlock(&queue->mutex);
-		zstream_queue_destroy(queue);
-		return B_FALSE;
-	} else {
-		*item = *(queue->slots[slot].item);
-		pthread_mutex_unlock(&queue->mutex);
-		pthread_cond_signal(&q->dequeued);
-		return B_TRUE;
-	}
+	uint8_t item[queue->item_size];
+	zstream_enqueue_impl(queue, &item, 0, B_TRUE);
 }
 
 static void
 zstream_queue_destroy(zstream_queue queue) {
-	pthread_mutex_lock(&queue->mutex);
-	/*
-	 * All items have been processed, so this should always be true.
-	 * Furthermore, there should be no possibility of new threads
-	 * attempting to enter the queue.
-	 */
-	assert(!queue->threads_assigned);
-	pthread_mutex_unlock(&queue->mutex);
-	pthread_mutex_lock(&pool->mutex);
-	pthread_mutex_destroy(&queue->queue.mutex);
-	pthread_cond_destroy(&queue->inserted);
+	pthread_mutex_lock(&pool.mutex);
+	pthread_mutex_destroy(&queue->mutex);
 	pthread_cond_destroy(&queue->completed);
 	pthread_cond_destroy(&queue->dequeued);
 	free(queue->slots);
@@ -385,7 +361,7 @@ zstream_queue_destroy(zstream_queue queue) {
 		thread_pool_spindown();
 	} else {
 		for (int i = 0; i < pool.num_queues; i++) {
-			if (queue == &pool.queues[i]) {
+			if (queue == pool.queues[i]) {
 				memmove(&pool.queues[i], &pool.queues[i+1],
 					(pool.num_queues - i - 1) * sizeof(zstream_queue));
 				break;
@@ -394,5 +370,25 @@ zstream_queue_destroy(zstream_queue queue) {
 	}
 	pool.num_queues--;
 	pthread_mutex_unlock(&pool.mutex);
+}
+
+boolean_t
+zstream_dequeue(zstream_queue queue, queue_item *item) {
+	pthread_mutex_lock(&queue->mutex);
+	while (queue->dequeue >= queue->complete) {
+		await_condition(&queue->completed, &queue->mutex);
+	}
+	uint64_t slot = queue->dequeue % queue->num_slots;
+	queue->dequeue++;
+	if (queue->slots[slot].end_of_stream) {
+		pthread_mutex_unlock(&queue->mutex);
+		zstream_queue_destroy(queue);
+		return B_FALSE;
+	} else {
+		memcpy(item, queue->slots[slot].item, queue->item_size);
+		pthread_mutex_unlock(&queue->mutex);
+		pthread_cond_signal(&queue->dequeued);
+		return B_TRUE;
+	}
 }
 

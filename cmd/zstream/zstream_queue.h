@@ -11,16 +11,20 @@
  * http://www.illumos.org/license/CDDL.
  *
  * CDDL HEADER END
- *
+ */
+
+/*
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
- *
+ */
+
+ /*
  * This is a generalized implementation of multithreaded, FIFO work queues. Even
- * though I call them queues, there is no inherent order of work inside the
+ * though I'm calling them queues, there is no inherent order of work inside the
  * queue. The only guarantee is that completed items will emerge from the queue
  * in the same order they entered. The implementation broadly tries to work on
  * items in order, but that is not guaranteed.
  *
- * Callers define a fixed item size to be used by each queue and supply a
+ * Callers define a fixed item size to be used by each queue and define a
  * thread-safe function that processes a single item. The queue treats items as
  * black boxes, so processing functions can modify them freely.
  *
@@ -41,7 +45,7 @@
  * All queues share a single thread pool that is managed to avoid contention.
  * Threads are allocated to queues dynamically according to where work is
  * available. When multiple queues have work, threads are allocated among them
- * in averagely-equal proportion.
+ * with an eye toward preventing pipeline stalls.
  */
 
 #pragma once
@@ -73,11 +77,10 @@ process_item_func(queue_item *item);
  * item_size	sizeof(struct work_item) where work_item is caller-defined
  * batch_budget	target cost sum per thread dispatch loop, 0 for item-by-item
  * queue_length	number of items the queue can hold at once
- * max_threads	limit threads that can work on this queue concurrently
- * 				  0 == no specific limit == number of CPU cores
  */
-zstream_queue zstream_queue_create(process_item_func process, size_t item_size,
-	int batch_budget, uint64_t queue_length, int max_threads);
+zstream_queue
+zstream_queue_create(process_item_func *process, size_t item_size,
+	int batch_budget, uint64_t queue_length);
 
 /*
  * Submit a work item. The call blocks if the input queue is full. The work item

@@ -27,18 +27,13 @@
  * Copyright (c) 2024, Klara, Inc.
  */
 
+#pragma once
+
 #include <stdio.h>
 #include <stddef.h>
 #include <sys/zio_checksum.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/dmu.h>
-
-#ifndef	_ZSTREAM_SHARED_H
-#define	_ZSTREAM_SHARED_H
-
-#ifdef	__cplusplus
-extern "C" {
-#endif
 
 extern void *safe_malloc(size_t size);
 extern void *safe_calloc(size_t n);
@@ -55,8 +50,3 @@ boolean_t
 validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual, 
 	const char *where); 
 
-#ifdef	__cplusplus
-}
-#endif
-
-#endif	/* _ZSTREAM_SHARED_H */
