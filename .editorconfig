@@ -1,5 +1,10 @@
-root = false
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
 
 [*.{c,h}]
-tab_width = 4
-
+tab_width = 8
+indent_style = tab
