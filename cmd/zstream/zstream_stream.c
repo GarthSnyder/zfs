@@ -303,7 +303,7 @@ read_stream(FILE *input, int output, stream_filter_t *filters,
 			fletcher_4_incremental_native(payload, payload_size, &out_cksum);
 		}
 
-		if (output > 0) {
+		if (output >= 0) {
 			if (write(output, drr, sizeof (*drr)) == -1) {
 				fprintf(stderr, "Unable to write output record.\n");
 				exit(1);

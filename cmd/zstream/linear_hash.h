@@ -18,8 +18,8 @@
 
 /*
  * Callers are required neither to manage iterators nor to pursue iterations
- * to completion. In return, callers must limit themselves to  8 concurrent
- * iterations at once.
+ * to completion. In return, callers must limit themselves to 8 concurrent
+ * iterators.
  */
 
 #define MAX_ITERATORS_OUTSTANDING 8

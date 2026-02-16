@@ -17,37 +17,6 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
- /*
- * This is a generalized implementation of multithreaded, FIFO work queues. Even
- * though I'm calling them queues, there is no inherent order of work inside the
- * queue. The only guarantee is that completed items will emerge from the queue
- * in the same order they entered. The implementation broadly tries to work on
- * items in order, but that is not guaranteed.
- *
- * Callers define a fixed item size to be used by each queue and define a
- * thread-safe function that processes a single item. The queue treats items as
- * black boxes, so processing functions can modify them freely.
- *
- * Callers assign each incoming item an integer cost that represents the amount
- * of work needed to process it. For activities like hashing and data
- * compression, think "input buffer length."
- *
- * It's expected that only a subset of input items will require processing. If
- * an item's cost is zero, it is fast-tracked and never presented to the
- * processing function.
- *
- * Threading granularity is specified by a per-batch budget that is set for each
- * channel in the same units used for item costs. Threads claim items until the
- * budget is met or there are no more items available. When collecting items,
- * threads never wait for additional work to arrive. They start work as quickly
- * as possible even if the budget has not been reached.
- *
- * All queues share a single thread pool that is managed to avoid contention.
- * Threads are allocated to queues dynamically according to where work is
- * available. When multiple queues have work, threads are allocated among them
- * with an eye toward preventing pipeline stalls.
- */
-
 #pragma once
 
 #include <stdint.h>
@@ -56,13 +25,52 @@
 #include <sys/zfs_ioctl.h>
 #include <sys/fs/zfs.h>
 
+ /*
+  * This is a generalized implementation of multithreaded, FIFO work queues. Even
+  * though I'm calling them queues, there is no inherent order of work inside the
+  * queue. The only guarantee is that completed items will emerge from the queue in
+  * the same order they entered. The implementation broadly tries to work on items
+  * in order, but that is not guaranteed.
+  *
+  * Callers define a fixed item size to be used by each queue and define thread-safe
+  * functions that estimate individual items' processing cost and perform the actual
+  * processing. The queue treats items as black boxes, so processing functions can
+  * modify them freely.
+  *
+  * The cost estimation function assigns a size_t cost that represents the amount of
+  * work needed to process an item. For activities like hashing and data
+  * compression, the natural cost is typically input buffer length. This function is
+  * run as items enter the queue, so it's single-threaded and should return a value
+  * promptly. If cost estimation is important and expensive, use a separate queue to
+  * implement it.
+  *
+  * It's expected that only a subset of input items will require processing. If an
+  * item's cost is zero, it is fast-tracked and never presented to the processing
+  * function.
+  *
+  * Threading granularity is specified by a per-batch budget that is set for each
+  * channel in the same units used for item costs. Threads claim items until the
+  * budget is met or there are no more items available. When collecting items,
+  * threads never wait for additional work to arrive. They start work as quickly as
+  * possible even if the budget has not been reached.
+  *
+  * All queues share a single thread pool that is managed to avoid contention.
+  * Threads are allocated to queues dynamically according to where work is
+  * available. When multiple queues have work, threads are allocated among them with
+  * an eye toward preventing pipeline stalls.
+ */
+
+
 typedef void queue_item;
 
 struct zstream_queue;
-typedef struct zstream_queue *zstream_queue;
+typedef struct zstream_queue *zstream_queue_t;
 
 typedef void
-process_item_func(queue_item *item);
+zq_process_item_f(queue_item *item);
+
+typedef size_t
+zq_estimate_cost_f(queue_item *item);
 
 /*
  * Create a queue. Must be called before enqueue or dequeue.
@@ -70,29 +78,30 @@ process_item_func(queue_item *item);
  * A target budget can be set to allow threads to claim multiple items for
  * processing at once for processing, up to a maximum of 16 records. This
  * measure can be helpful when multithreading overhead is significant in
- * comparison to work time. The batch size is based on the net amount of payload
- * data. If it's zero, records are processed individually (though concurrently).
- *
- * process		function that does actual processing of work items
- * item_size	sizeof(struct work_item) where work_item is caller-defined
- * batch_budget	target cost sum per thread dispatch loop, 0 for item-by-item
- * queue_length	number of items the queue can hold at once
+ * comparison to work time. If the qp_batch_budget is zero, items are always
+ * processed individually.
  */
-zstream_queue
-zstream_queue_create(process_item_func *process, size_t item_size,
-	int batch_budget, uint64_t queue_length);
+
+typedef struct {
+	zq_process_item_f	*qp_process;
+	zq_estimate_cost_f	*qp_estimate_cost;
+	size_t			qp_item_size;
+	size_t			qp_batch_budget;
+	size_t			qp_queue_length;
+} zq_params_t;
+
+zstream_queue_t
+zstream_queue_create(zq_params_t *params);
 
 /*
  * Submit a work item. The call blocks if the input queue is full. The work item
  * struct is shallow-copied into the queue and can be reused by the caller.
  *
- * queue		queue in which to place the item
- * item			pointer to the item struct (caller-defined)
- * cost			expected amount of work to process this item (caller-defined)
- * 				  set to 0 if this item does not require processing
+ * queue	queue in which to place the item
+ * item		pointer to the item struct (caller-defined)
  */
 void
-zstream_enqueue(zstream_queue queue, queue_item *item, int cost);
+zstream_enqueue(zstream_queue_t queue, queue_item *item);
 
 /*
  * Retrieve a completed work item. The caller must provide a buffer into which
@@ -103,13 +112,13 @@ zstream_enqueue(zstream_queue queue, queue_item *item, int cost);
  * is not valid, and no further calls may be made.
  */
 boolean_t
-zstream_dequeue(zstream_queue queue, queue_item *item);
+zstream_dequeue(zstream_queue_t queue, queue_item *item);
 
 /*
- * Declare that all work items have been submitted. The queue will continue to
+ * Declare that all items have been submitted. The queue will continue to
  * function normally for dequeuers and worker threads until zstream_dequeue()
  * returns B_FALSE, at which point the queue will be destroyed.
  */
 void
-zstream_queue_fini(zstream_queue queue);
+zstream_queue_fini(zstream_queue_t queue);
 
