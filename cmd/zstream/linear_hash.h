@@ -18,11 +18,10 @@
 
 /*
  * Callers are required neither to manage iterators nor to pursue iterations
- * to completion. In return, callers must limit themselves to 8 concurrent
- * iterators.
+ * to completion. In return, callers must limit themselves to MAX_LH_ITERATORS
+ * concurrent iterators.
  */
-
-#define MAX_ITERATORS_OUTSTANDING 8
+#define MAX_LH_ITERATORS 8
 
 struct linear_hash;
 typedef struct linear_hash *linear_hash_t;
@@ -70,7 +69,7 @@ lh_initiate_retrieve(linear_hash_t lh, uint64_t hash);
  * @param buffer Buffer to receive next record (>= record_size)
  * @return true if buffer is valid, false if no more records
  */
-bool
+boolean_t
 lh_retrieve_next(lh_iterator_t iter, void *buffer);
 
 /*

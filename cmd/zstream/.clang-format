@@ -15,28 +15,19 @@ AlignOperands:   DontAlign
 AlignTrailingComments:
   Kind:            Always
   OverEmptyLines:  0
-AllowAllArgumentsOnNextLine: true
+AllowAllArgumentsOnNextLine: false
 AllowAllParametersOfDeclarationOnNextLine: true
 AllowShortBlocksOnASingleLine: Always
 AllowShortEnumsOnASingleLine: true
 AllowShortFunctionsOnASingleLine: All
 AllowShortIfStatementsOnASingleLine: WithoutElse
+BinPackArguments: true
 BracedInitializerIndentWidth: 8
 BreakAdjacentStringLiterals: true
-BreakAfterOpenBracketBracedList: false
-BreakAfterOpenBracketFunction: false
-BreakAfterOpenBracketIf: false
-BreakAfterOpenBracketLoop: false
-BreakAfterOpenBracketSwitch: false
 BreakAfterReturnType: TopLevel
 BreakArrays: false
 BreakBeforeBinaryOperators: None
 BreakBeforeBraces: WebKit
-BreakBeforeCloseBracketBracedList: true
-BreakBeforeCloseBracketFunction: false
-BreakBeforeCloseBracketIf: false
-BreakBeforeCloseBracketLoop: false
-BreakBeforeCloseBracketSwitch: false
 BreakBeforeTernaryOperators: false
 BreakFunctionDefinitionParameters: false
 BreakStringLiterals: true
@@ -65,7 +56,7 @@ IntegerLiteralSeparator:
   Binary:          0
   BinaryMinDigits: 0
   Decimal:         3
-  DecimalMinDigitsInsert: 5
+  DecimalMinDigits: 5
   Hex:             0
   HexMinDigits:    0
 KeepEmptyLines:
@@ -88,7 +79,7 @@ SpaceBeforeAssignmentOperators: true
 SpaceBeforeCaseColon: false
 SpaceBeforeParens: ControlStatements
 SpaceBeforeSquareBrackets: false
-SpaceInEmptyBlock: Never
+SpaceInEmptyBlock: false
 SpacesBeforeTrailingComments: 2
 SpacesInContainerLiterals: false
 SpacesInLineCommentPrefix:

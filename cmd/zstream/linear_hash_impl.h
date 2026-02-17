@@ -7,6 +7,13 @@
 
 #define ENTRIES_PER_BUCKET 6
 
+#define ITER_BUCKET(lh, bucket) {					\
+		.ei_lh = lh,						\
+		.ei_alloc = lh->lh_bucket_alloc,			\
+		.ei_bucket_ix = bucket,					\
+		.ei_entry_ix = -1					\
+	}
+
 /* Entry in a bucket: hash value + locator to data */
 typedef struct {
 	uint64_t  	be_hash;
@@ -54,11 +61,11 @@ struct linear_hash {
 	size_t		lh_record_size;
 	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
 	record_ix_t	lh_split_pointer;    	/* Next bucket to split */
-	bool		lh_validate;		/* Validation per operation (slow) */
+	bool		lh_validate;		/* Validation per op (slow) */
 	uint64_t	lh_max_memory;
-	int     	lh_next_memory_check;	/* Number of splits before check */
+	int     	lh_next_memory_check;	/* # of splits before check */
 	int       	lh_next_iterator;
-	lh_iterator_s	lh_iterators[MAX_ITERATORS_OUTSTANDING];
+	lh_iterator_s	lh_iterators[MAX_LH_ITERATORS];
 	lh_stats_t	lh_stats;
 	ops_tracker_t	lh_ops_tracker;
 	allocator_t	lh_data_alloc;		/* Data records */
