@@ -8,7 +8,7 @@ bool
 lh_validate(linear_hash_t lh) {
 	uint64_t total_entries = 0;
 	allocator_stats_t bucket_stats;
-	allocator_get_stats(lh->bucket_alloc, &bucket_stats);
+	allocator_get_stats(lh->lh_bucket_alloc, &bucket_stats);
 	for (uint64_t i = 0; i < bucket_stats.as_num_records; i++) {
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t full_entries = 0;
@@ -18,7 +18,7 @@ lh_validate(linear_hash_t lh) {
 			if (entry->be_record) {
 				if (empty_entries) {
 					fprintf(stderr, "validate: bucket %lu has "
-						"uncompacted entries.\nEntry %lu is the "
+						"uncompacted entries.\nEntry %ld is the "
 						"first after an empty entry.\n", i, 
 						iter.ei_entry_ix);
 					return false;
@@ -30,9 +30,9 @@ lh_validate(linear_hash_t lh) {
 		}
 		total_entries += full_entries;
 	}
-	if (total_entries != lh->stats.num_entries) {
+	if (total_entries != lh->lh_stats.lhs_num_entries) {
 		fprintf(stderr, "validate: linear hash is supposed to have %lu "
-			"entries, but actually has %lu.\n", lh->stats.num_entries,
+			"entries, but actually has %lu.\n", lh->lh_stats.lhs_num_entries,
 			total_entries);
 		return false;
 	}
@@ -46,11 +46,11 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 	memset(stats, 0, sizeof(*stats));
 	
 	allocator_stats_t bucket_stats, overflow_stats, data_stats;
-	allocator_get_stats(lh->bucket_alloc, &bucket_stats);
-	allocator_get_stats(lh->overflow_alloc, &overflow_stats);
-	allocator_get_stats(lh->data_alloc, &data_stats);
-	stats->bytes_in_data = data_stats.as_num_records * lh->record_size;
-	stats->bytes_in_buckets = 
+	allocator_get_stats(lh->lh_bucket_alloc, &bucket_stats);
+	allocator_get_stats(lh->lh_overflow_alloc, &overflow_stats);
+	allocator_get_stats(lh->lh_data_alloc, &data_stats);
+	stats->lr_bytes_in_data = data_stats.as_num_records * lh->lh_record_size;
+	stats->lr_bytes_in_buckets =
 		(bucket_stats.as_num_records + overflow_stats.as_num_records) *
 		sizeof(bucket_t);
 
@@ -66,36 +66,36 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 			}
 		}
 		uint64_t chain_length = num_entries / ENTRIES_PER_BUCKET;
-		if (chain_length >= MAX_CHAIN) {
+		if (chain_length >= MAX_BUCKET_CHAIN) {
 			continue;
 		}
-		chain_stats *chain_stats = &stats->chains_by_length[chain_length];
-		chain_stats->num_chains++;
+		bucket_stats_t *chain_stats = &stats->lr_chains_by_length[chain_length];
+		chain_stats->bs_num_chains++;
 		if (!num_filled) {
-			chain_stats->num_empty_chains++;
+			chain_stats->bs_num_empty_chains++;
 		} else {
-			chain_stats->num_slots_filled += num_filled;
+			chain_stats->bs_num_slots_filled += num_filled;
 		}
 	}
 
 	/* Summarize per-chain-length stats into rollup */
-	for (uint64_t i = 0; i < MAX_CHAIN; i++) {
-		chain_stats *cs = &stats->chains_by_length[i];
-		stats->total_entries += cs->num_slots_filled;
-		stats->total_chains += cs->num_chains;
-		cs->pct_empty = (double) cs->num_empty_chains / cs->num_chains;
-		cs->occupancy = (double) cs->num_slots_filled /
-			(i * cs->num_chains * ENTRIES_PER_BUCKET);
-		cs->nonempty_occupancy = (double) cs->num_slots_filled / 
-			(i * (cs->num_chains - cs->num_empty_chains) * ENTRIES_PER_BUCKET);
+	for (uint64_t i = 0; i < MAX_BUCKET_CHAIN; i++) {
+		bucket_stats_t *bs = &stats->lr_chains_by_length[i];
+		stats->lr_total_entries += bs->bs_num_slots_filled;
+		stats->lr_total_chains += bs->bs_num_chains;
+		bs->bs_pct_empty = (double) bs->bs_num_empty_chains / bs->bs_num_chains;
+		bs->bs_occupancy = (double) bs->bs_num_slots_filled /
+			(i * bs->bs_num_chains * ENTRIES_PER_BUCKET);
+		bs->bs_nonempty_occupancy = (double) bs->bs_num_slots_filled /
+			(i * (bs->bs_num_chains - bs->bs_num_empty_chains) * ENTRIES_PER_BUCKET);
 	}
 
-	stats->splits = lh->stats.splits;
-	stats->inserts = lh->stats.inserts;
-	stats->retrieves = lh->stats.retrieves;
-	stats->occupancy = (double)stats->total_entries / stats->total_chains;
-	stats->overall_occupancy = (double)stats->total_entries / 
-		(ENTRIES_PER_BUCKET * stats->bytes_in_buckets / sizeof(bucket_t));
+	stats->lr_splits = lh->lh_stats.lhs_splits;
+	stats->lr_inserts = lh->lh_stats.lhs_inserts;
+	stats->lr_retrieves = lh->lh_stats.lhs_retrieves;
+	stats->lr_occupancy = (double)stats->lr_total_entries / stats->lr_total_chains;
+	stats->lr_overall_occupancy = (double)stats->lr_total_entries /
+		(ENTRIES_PER_BUCKET * stats->lr_bytes_in_buckets / sizeof(bucket_t));
 }
 
 void
@@ -103,73 +103,73 @@ lh_print_stats(linear_hash_t lh) {
 	lh_report_t stats;
 	lh_get_stats(lh, &stats);
 	fprintf(stderr, "%lu entries in %lu bucket chains (occupancy %.0f%%):\n",
-		stats.total_entries, stats.total_chains, stats.occupancy);
-	for (int i = 0; i < MAX_CHAIN; i++) {
-		chain_stats *cs = &stats.chains_by_length[i];
-		if (cs->num_chains) {
+		stats.lr_total_entries, stats.lr_total_chains, stats.lr_occupancy);
+	for (int i = 0; i < MAX_BUCKET_CHAIN; i++) {
+		bucket_stats_t *cs = &stats.lr_chains_by_length[i];
+		if (cs->bs_num_chains) {
 			fprintf(stderr, "    %lu bucket chains of length %d, ",
-				cs->num_chains, i);
-			if (cs->num_empty_chains == cs->num_chains) {
+				cs->bs_num_chains, i);
+			if (cs->bs_num_empty_chains == cs->bs_num_chains) {
 				fprintf(stderr, "all empty\n");
 			} else {
-				if (!cs->num_empty_chains) {
+				if (!cs->bs_num_empty_chains) {
 					fprintf(stderr, "none empty, ");
 				} else {
 					fprintf(stderr, "%lu (%.0f%%) empty, ",
-						cs->num_empty_chains, 100 * cs->pct_empty);
+						cs->bs_num_empty_chains, 100 * cs->bs_pct_empty);
 				}
 				fprintf(stderr, "nonempty occupancy avg %.0f%%\n", 
-					cs->nonempty_occupancy * 100);
+					cs->bs_nonempty_occupancy * 100);
 			}
 		}
 	}
 	fprintf(stderr, "%lu inserts with %lu total I/O ops, %.2f ops/insert\n",
-		stats.inserts.count, stats.inserts.num_io_ops, 
-		(double)stats.inserts.num_io_ops / stats.inserts.count);
+		stats.lr_inserts.os_count, stats.lr_inserts.os_num_io_ops,
+		(double)stats.lr_inserts.os_num_io_ops / stats.lr_inserts.os_count);
 	fprintf(stderr, "%lu retrieve chains with %lu total I/O ops, %.2f "
-		"ops/retrieve\n", stats.retrieves.count, stats.retrieves.num_io_ops, 
-		(double)stats.retrieves.num_io_ops / stats.retrieves.count);
+		"ops/retrieve\n", stats.lr_retrieves.os_count, stats.lr_retrieves.os_num_io_ops,
+		(double)stats.lr_retrieves.os_num_io_ops / stats.lr_retrieves.os_count);
 	fprintf(stderr, "%lu splits with %lu total I/O ops, %.2f ops/split\n",
-		stats.splits.count, stats.splits.num_io_ops, 
-		(double)stats.splits.num_io_ops / stats.splits.count);
+		stats.lr_splits.os_count, stats.lr_splits.os_num_io_ops,
+		(double)stats.lr_splits.os_num_io_ops / stats.lr_splits.os_count);
 }
 
 uint64_t
 lh_get_mem_highwater(linear_hash_t lh) {
-	return lh->stats.mem_highwater;
+	return lh->lh_stats.lhs_mem_highwater;
 }
 
 uint64_t
 total_io_ops(linear_hash_t lh) {
 	allocator_stats_t data, bucket, over;
-	allocator_get_stats(lh->data_alloc, &data);
-	allocator_get_stats(lh->bucket_alloc, &bucket);
-	allocator_get_stats(lh->overflow_alloc, &over);
+	allocator_get_stats(lh->lh_data_alloc, &data);
+	allocator_get_stats(lh->lh_bucket_alloc, &bucket);
+	allocator_get_stats(lh->lh_overflow_alloc, &over);
 	return data.as_num_ops + bucket.as_num_ops + over.as_num_ops;
 }
 
 void
-begin_ops_tracking(linear_hash_t lh, op_stats *bin) {
-	if (lh->ops_tracker.ot_stat_bin) {
+begin_ops_tracking(linear_hash_t lh, op_stats_t *bin) {
+	if (lh->lh_ops_tracker.ot_stat_bin) {
 		complete_ops_tracking(lh);
 	}
-	lh->ops_tracker.ot_stat_bin = bin;
-	lh->ops_tracker.ot_start_ops = total_io_ops(lh);
+	lh->lh_ops_tracker.ot_stat_bin = bin;
+	lh->lh_ops_tracker.ot_start_ops = total_io_ops(lh);
 }
 
 void
 update_ops_tracking(linear_hash_t lh){
-	if (lh->ops_tracker.ot_stat_bin) {
-		lh->ops_tracker.ot_latest_ops = total_io_ops(lh);
+	if (lh->lh_ops_tracker.ot_stat_bin) {
+		lh->lh_ops_tracker.ot_latest_ops = total_io_ops(lh);
 	}
 }
 
 void
 complete_ops_tracking(linear_hash_t lh) {
-	ops_tracker_t *tracker = &lh->ops_tracker;
+	ops_tracker_t *tracker = &lh->lh_ops_tracker;
 	if (tracker->ot_stat_bin) {
 		update_ops_tracking(lh);
-		tracker->ot_stat_bin->count++;
-		tracker->ot_stat_bin->num_io_ops += tracker->ot_latest_ops - tracker->ot_start_ops;
+		tracker->ot_stat_bin->os_count++;
+		tracker->ot_stat_bin->os_num_io_ops += tracker->ot_latest_ops - tracker->ot_start_ops;
 	}
 }

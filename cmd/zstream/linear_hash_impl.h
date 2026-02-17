@@ -31,39 +31,39 @@ typedef struct {
 
 /* Iterator for retrieving records by hash */
 typedef struct lh_iterator {
-	uint64_t		hash;
-	entry_iterator_t	entry_iterator;
+	uint64_t		lhi_hash;
+	entry_iterator_t	lhi_entry_iterator;
 } lh_iterator_s;
 
 typedef struct {
-	op_stats	*ot_stat_bin;
+	op_stats_t	*ot_stat_bin;
 	uint64_t	ot_start_ops;
 	uint64_t	ot_latest_ops;
 } ops_tracker_t;
 
 typedef struct {
-	uint64_t	num_entries;	/* total entries in table */
-	uint64_t	mem_highwater;	/* Most memory used by allocators */
-	op_stats	inserts;	/* Inserts from external client */
-	op_stats	retrieves;	/* Retrieves from external client */
-	op_stats	splits;		/* Splits, generated internally */
+	uint64_t	lhs_num_entries;	/* Total entries in table */
+	uint64_t	lhs_mem_highwater;	/* Most memory used by allocs */
+	op_stats_t	lhs_inserts;		/* Inserts from caller */
+	op_stats_t	lhs_retrieves;		/* Retrieves from caller */
+	op_stats_t	lhs_splits;		/* Splits, internal */
 } lh_stats_t;
 
 /* Hash table structure */
 struct linear_hash {
-	size_t		record_size;
-	uint8_t		hash_suffix_length;	/* Granularity above split */
-	record_ix_t	split_pointer;    	/* Next bucket to split */
-	bool		validate;		/* Validation per operation (slow) */
-	uint64_t	max_memory;
-	int     	next_memory_check;	/* Number of splits before check */
-	int       	next_iterator;
-	lh_iterator_s	iterators[MAX_ITERATORS_OUTSTANDING];
-	lh_stats_t	stats;
-	ops_tracker_t	ops_tracker;
-	allocator_t	data_alloc;		/* Data records */
-	allocator_t	bucket_alloc;		/* Main buckets */
-	allocator_t	overflow_alloc;		/* Overflow buckets */
+	size_t		lh_record_size;
+	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
+	record_ix_t	lh_split_pointer;    	/* Next bucket to split */
+	bool		lh_validate;		/* Validation per operation (slow) */
+	uint64_t	lh_max_memory;
+	int     	lh_next_memory_check;	/* Number of splits before check */
+	int       	lh_next_iterator;
+	lh_iterator_s	lh_iterators[MAX_ITERATORS_OUTSTANDING];
+	lh_stats_t	lh_stats;
+	ops_tracker_t	lh_ops_tracker;
+	allocator_t	lh_data_alloc;		/* Data records */
+	allocator_t	lh_bucket_alloc;	/* Main buckets */
+	allocator_t	lh_overflow_alloc;	/* Overflow buckets */
 };
 
 #endif /* LINEAR_HASH_TYPES_H */

@@ -3,33 +3,37 @@
 
 #include "linear_hash.h"
 
-#define MAX_CHAIN 16
+/*
+ * MAX_BUCKET_CHAINS is a reporting/stats limitation, not an implementation
+ * limitation. There is no actual limit on the length of bucket chains.
+ */
+#define MAX_BUCKET_CHAIN 16
 
 typedef struct {
-  uint64_t    num_chains;
-  uint64_t    num_empty_chains;
-  uint64_t    num_slots_filled;
-  double      pct_empty;
-  double      occupancy;          /* Full slots / Total slots */
-  double      nonempty_occupancy; /* Full slots / Slots in nonempty chains */
-} chain_stats;
+	uint64_t	bs_num_chains;
+	uint64_t	bs_num_empty_chains;
+	uint64_t	bs_num_slots_filled;
+	double		bs_pct_empty;
+	double		bs_occupancy;          /* Full slots / All slots */
+	double		bs_nonempty_occupancy;
+} bucket_stats_t;
 
 typedef struct {
-  uint64_t  count;
-  uint64_t  num_io_ops;
-} op_stats;
+	uint64_t	os_count;	/* Inserts, splits, etc. */
+	uint64_t	os_num_io_ops;	/* Total # of reads/writes */
+} op_stats_t;
 
 typedef struct lh_report {
-  chain_stats   chains_by_length[MAX_CHAIN];
-  uint64_t    	total_entries;
-  uint64_t    	total_chains;
-  uint64_t    	bytes_in_data;
-  uint64_t    	bytes_in_buckets;
-  op_stats      splits;
-  op_stats      inserts;
-  op_stats      retrieves;
-  double      	occupancy;        /* Entries / number of chains */
-  double      	overall_occupancy;    /* Full slots / Total slots */
+	bucket_stats_t	lr_chains_by_length[MAX_BUCKET_CHAIN];
+	uint64_t	lr_total_entries;
+	uint64_t	lr_total_chains;
+	uint64_t	lr_bytes_in_data;
+	uint64_t	lr_bytes_in_buckets;
+	op_stats_t	lr_splits;
+	op_stats_t	lr_inserts;
+	op_stats_t	lr_retrieves;
+	double		lr_occupancy;        /* Entries / number of chains */
+	double		lr_overall_occupancy;    /* Full slots / Total slots */
 } lh_report_t;
 
 void
