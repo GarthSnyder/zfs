@@ -38,11 +38,13 @@
 #include <sys/zfs_ioctl.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
+#include "zstream_dedup.h"
 #include "linear_hash.h"
 #include "linear_hash_stats.h"
 #include "zstream_shared.h"
 #include "zstream_queue.h"
 #include "zstream_stream.h"
+#include "zstream_chain.h"
 
 #define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
 #define SMALLEST_REASONABLE_DEDUP_MB	128
@@ -56,7 +58,7 @@ typedef struct {
 	drr_write		write_block;
 	zio_cksum_t		blake3_hash;
 	uint64_t		payload_length;
-} dedup_entry;
+} dedup_entry_t;
 
 typedef struct dedup_stats {
 	uint64_t	total_records;
@@ -66,7 +68,15 @@ typedef struct dedup_stats {
 	uint64_t	bytes_saved;
 	uint64_t	disqualified_records;
 	hrtime_t	last_status_time;
-} dedup_stats;
+} dedup_stats_t;
+
+/* This is the packet passed to the feeder thread */
+typedef struct {
+	linear_hash_t	dc_table;
+	dedup_stats_t	dc_stats;
+	zstream_queue_t	dc_queue;
+	FILE			*dc_input;
+} dedup_context_t;
 
 typedef struct {
 	dmu_replay_record_t	drr;
@@ -87,7 +97,7 @@ typedef struct {
  * Print status update to stderr.
  */
 static void
-print_status(dedup_stats *stats, boolean_t force)
+print_status(dedup_stats_t *stats, boolean_t force)
 {
 	hrtime_t now = gethrtime();
 	char bytes_read_str[32];
@@ -135,8 +145,8 @@ writes_compatible(const drr_write *this, const drr_write *prev) {
 }
 
 static bool
-dedup_table_lookup(linear_hash ddt, zio_cksum_t *blake3, dedup_entry *dde) {
-	lh_iterator iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(blake3));
+dedup_table_lookup(linear_hash_t ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
+	lh_iterator_t iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(blake3));
 	/* 
 	 * linear_hash hashes are only 64 bits, so a table match does not
 	 * guarantee an actual BLAKE3 match.
@@ -150,10 +160,10 @@ dedup_table_lookup(linear_hash ddt, zio_cksum_t *blake3, dedup_entry *dde) {
 }
 
 static void
-dedup_table_insert(linear_hash ddt, zio_cksum_t *blake3,
+dedup_table_insert(linear_hash_t ddt, zio_cksum_t *blake3,
 	dmu_replay_record_t *drr)
 {
-	dedup_entry dedup = {
+	dedup_entry_t dedup = {
 		.write_block = drr->drr_u.drr_write,
 		.blake3_hash = *blake3,
 		.payload_length = DRR_WRITE_PAYLOAD_SIZE(&drr->drr_u.drr_write)
@@ -165,13 +175,13 @@ dedup_table_insert(linear_hash ddt, zio_cksum_t *blake3,
  * Deduplicate a ZFS stream.
  */
 static void
-zfs_dedup_stream(zstream_queue_t queue, int outfd, linear_hash ddt, bool verbose)
+zfs_dedup_stream(zstream_queue_t queue, int outfd, linear_hash_t ddt, bool verbose)
 {
 	blake3_queue_item		item;
 	dmu_replay_record_t		*drr = &item.drr;
 	zio_cksum_t 			stream_cksum;
-	dedup_stats 			stats;
-	dedup_entry				existing;
+	dedup_stats_t 			stats;
+	dedup_entry_t				existing;
 
 	struct drr_begin 		*drrb = &drr->drr_u.drr_begin;
 	struct drr_end			*drre = &drr->drr_u.drr_end;
@@ -296,20 +306,14 @@ enqueue_record(dmu_replay_record_t *drr, uint8_t **payload,
 	zstream_enqueue(queue, &item);
 }
 
-/* This is the packet passed to the feeder thread */
-typedef struct {
-	void	 	*queue;
-	FILE		*input;
-} dedup_context;
-
 /* This is the feeder thread function */
 static int
 enqueue_stream(void *context_in) {
-	dedup_context *context = (dedup_context *)context_in;
+	dedup_context_t *context = (dedup_context_t *)context_in;
 	stream_filter_t filter = {};
 	filter.all_records_post = enqueue_record;
-	read_stream(context->input, -1, &filter, 1, B_TRUE, context->queue);
-	zstream_queue_fini(context->queue);
+	read_stream(context->dc_input, -1, &filter, 1, B_TRUE, context->dc_queue);
+	zstream_queue_fini(context->dc_queue);
 	return 0;
 }
 
@@ -339,10 +343,10 @@ zstream_do_dedup(int argc, char *argv[])
 	const char 		*cache_dir = NULL;
 	FILE			*input;
 	int 			c;
-	dedup_context	feeder_context;
+	dedup_context_t	feeder_context;
 	zstream_queue_t	hasher_queue;
 	thrd_t			feeder_thread;
-	linear_hash		dedup_table;
+	linear_hash_t		dedup_table;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
 		switch (c) {
@@ -396,7 +400,7 @@ zstream_do_dedup(int argc, char *argv[])
 		fprintf(stderr, "The -c argument requires a directory argument\n");
 		exit(1);
 	}
-	dedup_table = lh_init(sizeof(dedup_entry), max_memory, cache_dir);
+	dedup_table = lh_init(sizeof(dedup_entry_t), max_memory, cache_dir);
 
 	if (isatty(STDOUT_FILENO)) {
 		(void) fprintf(stderr,
@@ -430,8 +434,8 @@ zstream_do_dedup(int argc, char *argv[])
 		.qp_queue_length = 256
 	};
 	hasher_queue = zstream_queue_create(&params);
-	feeder_context.queue = hasher_queue;
-	feeder_context.input = input;
+	feeder_context.dc_queue = hasher_queue;
+	feeder_context.dc_input = input;
 
 	if (thrd_create(&feeder_thread, enqueue_stream, &feeder_context)
 		!= thrd_success)
@@ -448,68 +452,128 @@ zstream_do_dedup(int argc, char *argv[])
 	return 0;
 }
 
-// static void
-// chain_dedup_writes(dedup_context_t *context, drr_with_blake3 *item)
-// {
-// 	dmu_replay_record_t	*drr = &item->drr;
-// 	struct drr_write	*drrw = &drr->drr_u.drr_write;
-// 	dedup_stats_t		*stats = &context->dd_stats;
-// 	zio_cksum_t		*blake3 = &item->blake3;
-// 	linear_hash_t		dd_table = context->dd_table;
-// 	dedup_entry		existing;
+static void
+maybe_print_update(dedup_context_t *context, boolean_t force)
+{
+	dedup_stats_t *stats = &context->dc_stats;
+	hrtime_t now = gethrtime();
+	char bytes_read_str[32];
+	char bytes_saved_str[32];
+	double saved_pct;
 
-// 	if (item == NULL) {
-// 		maybe_print_summary(context);
-// 		return;
-// 	}
+	if (!force && now - stats->last_status_time < STATUS_UPDATE_INTERVAL) {
+		return;
+	}
 
-// 	stats->total_records++;
-// 	stats->bytes_read += sizeof(*drr) + item->base.payload_size;
-// 	stats->last_status_time = gethrtime();
+	zfs_nicenum(stats->bytes_read, bytes_read_str, sizeof (bytes_read_str));
+	zfs_nicenum(stats->bytes_saved, bytes_saved_str,
+	    sizeof (bytes_saved_str));
 
-// 	if (drr->drr_type != DRR_WRITE) {
-// 		return;
-// 	}
+	if (stats->bytes_read > 0) {
+		saved_pct = (double)stats->bytes_saved * 100.0 /
+		    (double)stats->bytes_read;
+	} else {
+		saved_pct = 0.0;
+	}
 
-// 	stats->write_records++;
-// 	if (!dedup_table_lookup(dd_table, blake3, &existing)) {
-// 		dedup_table_insert(dd_table, blake3, drr);
-// 		return;
-// 	}
-// 	if (!writes_compatible(drrw, &existing.write_block)) {
-// 		stats->disqualified_records++;
-// 		return;
-// 	}
+	fprintf(stderr, "\r%lu total blocks, %llu writes, %llu deduped | "
+	    "%sB read / %sB saved (%.1f%%)    \n",
+	    stats->total_records,
+	    (unsigned long long)stats->write_records,
+	    (unsigned long long)stats->dedup_records,
+	    bytes_read_str, bytes_saved_str, saved_pct);
+	fflush(stderr);
 
-// 	struct drr_write_byref byref = {
-// 		.drr_refguid = existing.write_block.drr_toguid,
-// 		.drr_refobject = existing.write_block.drr_object,
-// 		.drr_refoffset = existing.write_block.drr_offset,
-// 		.drr_object = drrw->drr_object,
-// 		.drr_offset = drrw->drr_offset,
-// 		.drr_toguid = drrw->drr_toguid,
-// 		.drr_length = drrw->drr_logical_size,
-// 		.drr_checksumtype = drrw->drr_checksumtype,
-// 		.drr_flags = drrw->drr_flags,
-// 		.drr_key = drrw->drr_key
-// 	};
+	stats->last_status_time = now;
+}
 
-// 	memset(drr, 0, sizeof(*drr));
-// 	drr->drr_u.drr_write_byref = byref;
-// 	drr->drr_type = DRR_WRITE_BYREF;
-// 	drr->drr_payloadlen = 0;
+static void
+print_summary(dedup_context_t *context) {
+	dedup_stats_t *stats = &context->dc_stats;
+	maybe_print_update(context, true);
+	fprintf(stderr, "\n");
+	char mem_str[32];
+	zfs_nicenum(lh_get_mem_highwater(context->dc_table), mem_str,
+		sizeof (mem_str));
+	fprintf(stderr,
+	    "Processed %llu total records, including %llu write "
+	    "records.\n",
+	    (unsigned long long)stats->total_records,
+	    (unsigned long long)stats->write_records);
+	fprintf(stderr,
+	    "Deduplicated %llu blocks, using %sB memory.\n",
+	    (unsigned long long)stats->dedup_records, mem_str);
+	if (stats->disqualified_records) {
+		fprintf(stderr, "%lu write records were exempt from deduplication\n",
+			stats->disqualified_records);
+	}
+	fprintf(stderr, "\n");
+	lh_print_stats(context->dc_table);
+}
 
-// 	stats.dedup_records++;
-// 	stats.bytes_saved += item.payload_size;
+static void
+chain_dedup_writes(drr_with_blake3_t *item, dedup_context_t *context,
+	chain_attrs_t chain)
+{
+	dmu_replay_record_t	*drr = &item->dp_base.dp_drr;
+	struct drr_write	*drrw = &drr->drr_u.drr_write;
+	dedup_stats_t		*stats = &context->dc_stats;
+	zio_cksum_t		*blake3 = &item->dp_blake3_payload;
+	linear_hash_t		dd_table = context->dc_table;
+	dedup_entry_t		existing;
 
-// 	if (item->base.payload_size) {
-// 		free(item->base.payload);
-// 	}
-// 	item->base.payload = NULL;
-// 	item->base.payload_size = 0;
+	if (item == NULL && chain->ca_verbose) {
+		print_summary(context);
+		return;
+	}
 
-// 	if (context->sc_info.verbose) {
-// 		maybe_print_update(context);
-// 	}
-// }
+	stats->total_records++;
+	stats->bytes_read += sizeof(*drr) + item->dp_base.dp_payload_size;
+	stats->last_status_time = gethrtime();
+
+	if (drr->drr_type != DRR_WRITE) {
+		return;
+	}
+
+	stats->write_records++;
+	if (!dedup_table_lookup(dd_table, blake3, &existing)) {
+		dedup_table_insert(dd_table, blake3, drr);
+		return;
+	}
+	if (!writes_compatible(drrw, &existing.write_block)) {
+		stats->disqualified_records++;
+		return;
+	}
+
+	struct drr_write_byref byref = {
+		.drr_refguid = existing.write_block.drr_toguid,
+		.drr_refobject = existing.write_block.drr_object,
+		.drr_refoffset = existing.write_block.drr_offset,
+		.drr_object = drrw->drr_object,
+		.drr_offset = drrw->drr_offset,
+		.drr_toguid = drrw->drr_toguid,
+		.drr_length = drrw->drr_logical_size,
+		.drr_checksumtype = drrw->drr_checksumtype,
+		.drr_flags = drrw->drr_flags,
+		.drr_key = drrw->drr_key
+	};
+
+	memset(drr, 0, sizeof(*drr));
+	drr->drr_u.drr_write_byref = byref;
+	drr->drr_type = DRR_WRITE_BYREF;
+	drr->drr_payloadlen = 0;
+
+	stats->dedup_records++;
+	stats->bytes_saved += item->dp_base.dp_payload_size;
+
+	if (item->dp_base.dp_payload_size) {
+		free(item->dp_base.dp_payload);
+	}
+	item->dp_base.dp_payload = NULL;
+	item->dp_base.dp_payload_size = 0;
+
+	if (chain->ca_verbose) {
+		maybe_print_update(context, false);
+	}
+}
 

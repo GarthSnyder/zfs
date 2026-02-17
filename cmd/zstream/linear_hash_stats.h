@@ -19,7 +19,7 @@ typedef struct {
   uint64_t  num_io_ops;
 } op_stats;
 
-typedef struct {
+typedef struct lh_report {
   chain_stats   chains_by_length[MAX_CHAIN];
   uint64_t    	total_entries;
   uint64_t    	total_chains;
@@ -30,15 +30,15 @@ typedef struct {
   op_stats      retrieves;
   double      	occupancy;        /* Entries / number of chains */
   double      	overall_occupancy;    /* Full slots / Total slots */
-} lh_report;
+} lh_report_t;
 
 void
-lh_get_stats(linear_hash lh, lh_report *stats);
+lh_get_stats(linear_hash_t lh, lh_report_t *stats);
 
 void
-lh_print_stats(linear_hash lh);
+lh_print_stats(linear_hash_t lh);
 
 uint64_t
-lh_get_mem_highwater(linear_hash lh);
+lh_get_mem_highwater(linear_hash_t lh);
 
 #endif /* LINEAR_HASH_STATS_H */

@@ -19,6 +19,9 @@ zstream_SOURCES = \
 	%D%/zstream_stream.h \
 	%D%/zstream_queue.c \
 	%D%/zstream_queue.h \
+	%D%/zstream_chain.c \
+	%D%/zstream_chain.h \
+	%D%/zstream_chain_types.h \
 	%D%/allocator.c \
 	%D%/allocator.h \
 	%D%/linear_hash.c \

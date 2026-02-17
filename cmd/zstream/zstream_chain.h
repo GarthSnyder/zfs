@@ -1,4 +1,26 @@
-#import "zstream_queue.h"
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * CDDL HEADER START
+ *
+ * This file and its contents are supplied under the terms of the Common
+ * Development and Distribution License ("CDDL"), version 1.0. You may only use
+ * this file in accordance with the terms of version 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this source. A
+ * copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
+ */
+
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
+#pragma once
+
+#include "zstream_queue.h"
+#include "zstream_chain_types.h"
 
 /*
  * A chain is a sequence of processing steps that are run on packets of
@@ -30,15 +52,20 @@
 
 typedef enum { CS_SERIAL, CS_PARALLEL } step_type_t;
 
+typedef struct chain_attrs {
+	boolean_t	ca_verbose;
+	boolean_t	ca_byteswapped;
+} *chain_attrs_t;
+
 typedef boolean_t
-zc_process_item_f(void *item, void *context);
+zc_serial_process_f(void *item, void *context, chain_attrs_t chain);
 
 typedef struct {
 			step_type_t		cs_type;
 			size_t 			cs_out_size;
 	union {
 		struct {
-			zc_process_item_f	*css_process;
+			zc_serial_process_f	*css_process;
 			void			*css_context;
 		} serial;
 		struct {
@@ -47,7 +74,7 @@ typedef struct {
 			zq_estimate_cost_f	*csp_cost;
 			zq_process_item_f	*csp_process;
 		} parallel;
-	}
+	};
 } chain_step_t;
 
 typedef chain_step_t zstream_chain_t[];
@@ -57,6 +84,7 @@ typedef chain_step_t zstream_chain_t[];
  * individual chain steps are unmodified and may be reused.
  */
 void
-zstream_chain_exec(zstream_chain_t chain, int num_steps);
+zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs,
+	int num_steps);
 
 

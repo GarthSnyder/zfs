@@ -30,16 +30,16 @@ bool
 entry_iterator_next(entry_iterator *iter, bool extend);
 
 bool
-lh_validate(linear_hash lh);
+lh_validate(linear_hash_t lh);
 
 uint64_t
-total_io_ops(linear_hash lh);
+total_io_ops(linear_hash_t lh);
 
 void
-begin_ops_tracking(linear_hash lh, op_stats *bin);
+begin_ops_tracking(linear_hash_t lh, op_stats *bin);
 
 void
-update_ops_tracking(linear_hash lh);
+update_ops_tracking(linear_hash_t lh);
 
 void
-complete_ops_tracking(linear_hash lh);
+complete_ops_tracking(linear_hash_t lh);

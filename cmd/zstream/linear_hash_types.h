@@ -21,7 +21,7 @@ typedef struct {
 
 /* Internal iterator for bucket entries */
 typedef struct {
-	linear_hash		lh;
+	linear_hash_t		lh;
 	allocator		alloc;
 	record_ix		bucket_ix;	/* -1 == overflow not yet assigned */
 	record_ix		entry_ix;   /* -1 == bucket not yet retrieved */

@@ -25,10 +25,10 @@
 #define MAX_ITERATORS_OUTSTANDING 8
 
 struct linear_hash;
-typedef struct linear_hash *linear_hash;
+typedef struct linear_hash *linear_hash_t;
 
 struct lh_iterator;
-typedef struct lh_iterator *lh_iterator;
+typedef struct lh_iterator *lh_iterator_t;
 
 /*
  * Initialize a memory-based or convertible linear hash table.
@@ -38,7 +38,7 @@ typedef struct lh_iterator *lh_iterator;
  * @param cache_dir Directory in which to store convertible files
  * @return malloc'ed linear allocator or aborts
  */
-linear_hash
+linear_hash_t
 lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
 
 /*
@@ -49,7 +49,7 @@ lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
  * @param data Buffer containing data record
  */
 void
-lh_insert(linear_hash lh, uint64_t hash, const void* data);
+lh_insert(linear_hash_t lh, uint64_t hash, const void* data);
 
 /*
  * Set up retrieval for all data records with a given hash value.
@@ -60,8 +60,8 @@ lh_insert(linear_hash lh, uint64_t hash, const void* data);
  * @param iter Iterator to initialize
  * @return iterator pointer, aborts on error
  */
-lh_iterator
-lh_initiate_retrieve(linear_hash lh, uint64_t hash);
+lh_iterator_t
+lh_initiate_retrieve(linear_hash_t lh, uint64_t hash);
 
 /*
  * Get next data record matching the hash in the iterator.
@@ -71,7 +71,7 @@ lh_initiate_retrieve(linear_hash lh, uint64_t hash);
  * @return true if buffer is valid, false if no more records
  */
 bool
-lh_retrieve_next(lh_iterator iter, void *buffer);
+lh_retrieve_next(lh_iterator_t iter, void *buffer);
 
 /*
  * Destroy hash table and free all resources.
@@ -79,6 +79,6 @@ lh_retrieve_next(lh_iterator iter, void *buffer);
  * @param lh Hash table instance (may be NULL)
  */
 void
-lh_destroy(linear_hash lh);
+lh_destroy(linear_hash_t lh);
 
 #endif /* LINEAR_HASH_H */
