@@ -30,10 +30,10 @@ typedef struct {
 } entry_iterator_t;
 
 /* Iterator for retrieving records by hash */
-struct lh_iterator {
+typedef struct lh_iterator {
 	uint64_t		hash;
 	entry_iterator_t	entry_iterator;
-};
+} lh_iterator_s;
 
 typedef struct {
 	op_stats	*ot_stat_bin;
@@ -58,7 +58,7 @@ struct linear_hash {
 	uint64_t	max_memory;
 	int     	next_memory_check;	/* Number of splits before check */
 	int       	next_iterator;
-	lh_iterator_t	iterators[MAX_ITERATORS_OUTSTANDING];
+	lh_iterator_s	iterators[MAX_ITERATORS_OUTSTANDING];
 	lh_stats_t	stats;
 	ops_tracker_t	ops_tracker;
 	allocator_t	data_alloc;		/* Data records */

@@ -7,20 +7,20 @@
 bool
 lh_validate(linear_hash_t lh) {
 	uint64_t total_entries = 0;
-	allocator_stats bucket_stats;
+	allocator_stats_t bucket_stats;
 	allocator_get_stats(lh->bucket_alloc, &bucket_stats);
-	for (uint64_t i = 0; i < bucket_stats.num_records; i++) {
-		entry_iterator iter = ITER_BUCKET(lh, i);
+	for (uint64_t i = 0; i < bucket_stats.as_num_records; i++) {
+		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t full_entries = 0;
 		uint64_t empty_entries = 0;
 		while (entry_iterator_next(&iter, false)) {
-			bucket_entry_t *entry = &iter.bucket.b_entries[iter.entry_ix];
+			bucket_entry_t *entry = &iter.ei_bucket.b_entries[iter.ei_entry_ix];
 			if (entry->be_record) {
 				if (empty_entries) {
 					fprintf(stderr, "validate: bucket %lu has "
 						"uncompacted entries.\nEntry %lu is the "
 						"first after an empty entry.\n", i, 
-						iter.entry_ix);
+						iter.ei_entry_ix);
 					return false;
 				}
 				full_entries++;
@@ -45,21 +45,21 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 	assert(lh && stats);
 	memset(stats, 0, sizeof(*stats));
 	
-	allocator_stats bucket_stats, overflow_stats, data_stats;
+	allocator_stats_t bucket_stats, overflow_stats, data_stats;
 	allocator_get_stats(lh->bucket_alloc, &bucket_stats);
 	allocator_get_stats(lh->overflow_alloc, &overflow_stats);
 	allocator_get_stats(lh->data_alloc, &data_stats);
-	stats->bytes_in_data = data_stats.num_records * lh->record_size;
+	stats->bytes_in_data = data_stats.as_num_records * lh->record_size;
 	stats->bytes_in_buckets = 
-		(bucket_stats.num_records + overflow_stats.num_records) *
-		sizeof(bucket);
+		(bucket_stats.as_num_records + overflow_stats.as_num_records) *
+		sizeof(bucket_t);
 
-	for (uint64_t i = 0; i < bucket_stats.num_records; i++) {
-		entry_iterator iter = ITER_BUCKET(lh, i);
+	for (uint64_t i = 0; i < bucket_stats.as_num_records; i++) {
+		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t num_entries = 0;
 		uint64_t num_filled = 0;
 		while (entry_iterator_next(&iter, false)) {
-			bucket_entry_t *entry = &iter.bucket.b_entries[iter.entry_ix];
+			bucket_entry_t *entry = &iter.ei_bucket.b_entries[iter.ei_entry_ix];
 			num_entries++;
 			if (entry->be_record) {
 				num_filled++;
@@ -95,7 +95,7 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 	stats->retrieves = lh->stats.retrieves;
 	stats->occupancy = (double)stats->total_entries / stats->total_chains;
 	stats->overall_occupancy = (double)stats->total_entries / 
-		(ENTRIES_PER_BUCKET * stats->bytes_in_buckets / sizeof(bucket));
+		(ENTRIES_PER_BUCKET * stats->bytes_in_buckets / sizeof(bucket_t));
 }
 
 void
@@ -141,35 +141,35 @@ lh_get_mem_highwater(linear_hash_t lh) {
 
 uint64_t
 total_io_ops(linear_hash_t lh) {
-	allocator_stats data, bucket, over;
+	allocator_stats_t data, bucket, over;
 	allocator_get_stats(lh->data_alloc, &data);
 	allocator_get_stats(lh->bucket_alloc, &bucket);
 	allocator_get_stats(lh->overflow_alloc, &over);
-	return data.num_ops + bucket.num_ops + over.num_ops;
+	return data.as_num_ops + bucket.as_num_ops + over.as_num_ops;
 }
 
 void
 begin_ops_tracking(linear_hash_t lh, op_stats *bin) {
-	if (lh->ops_tracker.stat_bin) {
+	if (lh->ops_tracker.ot_stat_bin) {
 		complete_ops_tracking(lh);
 	}
-	lh->ops_tracker.stat_bin = bin;
-	lh->ops_tracker.start_ops = total_io_ops(lh);
+	lh->ops_tracker.ot_stat_bin = bin;
+	lh->ops_tracker.ot_start_ops = total_io_ops(lh);
 }
 
 void
 update_ops_tracking(linear_hash_t lh){
-	if (lh->ops_tracker.stat_bin) {
-		lh->ops_tracker.latest_ops = total_io_ops(lh);
+	if (lh->ops_tracker.ot_stat_bin) {
+		lh->ops_tracker.ot_latest_ops = total_io_ops(lh);
 	}
 }
 
 void
 complete_ops_tracking(linear_hash_t lh) {
-	ops_tracker *tracker = &lh->ops_tracker;
-	if (tracker->stat_bin) {
+	ops_tracker_t *tracker = &lh->ops_tracker;
+	if (tracker->ot_stat_bin) {
 		update_ops_tracking(lh);
-		tracker->stat_bin->count++;
-		tracker->stat_bin->num_io_ops += tracker->latest_ops - tracker->start_ops;
+		tracker->ot_stat_bin->count++;
+		tracker->ot_stat_bin->num_io_ops += tracker->ot_latest_ops - tracker->ot_start_ops;
 	}
 }

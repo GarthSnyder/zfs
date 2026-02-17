@@ -2,10 +2,10 @@
 #include "linear_hash_stats.h"
 
 #define ITER_BUCKET(lh, bucket) {					\
-		.lh = lh,						\
-		.alloc = lh->bucket_alloc,				\
-		.bucket_ix = bucket,					\
-		.entry_ix = -1						\
+		.ei_lh = lh,						\
+		.ei_alloc = lh->bucket_alloc,				\
+		.ei_bucket_ix = bucket,					\
+		.ei_entry_ix = -1					\
 	}
 
 #define CHECKED(type, expr, doing_what) 				\
@@ -16,7 +16,7 @@
 	}
 
 #define START_VALIDATION(lh) 						\
-	boolean_t started_ok;						\
+	boolean_t started_ok = B_TRUE;						\
 	if (lh->validate) {						\
 		started_ok = lh_validate(lh);				\
 	}
@@ -27,7 +27,7 @@
 	}
 
 bool
-entry_iterator_next(entry_iterator *iter, bool extend);
+entry_iterator_next(entry_iterator_t *iter, bool extend);
 
 bool
 lh_validate(linear_hash_t lh);
