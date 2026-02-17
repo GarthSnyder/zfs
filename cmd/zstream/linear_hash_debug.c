@@ -14,8 +14,8 @@ lh_validate(linear_hash_t lh) {
 		uint64_t full_entries = 0;
 		uint64_t empty_entries = 0;
 		while (entry_iterator_next(&iter, false)) {
-			bucket_entry *entry = &iter.bucket.entries[iter.entry_ix];
-			if (entry->record) {
+			bucket_entry_t *entry = &iter.bucket.b_entries[iter.entry_ix];
+			if (entry->be_record) {
 				if (empty_entries) {
 					fprintf(stderr, "validate: bucket %lu has "
 						"uncompacted entries.\nEntry %lu is the "
@@ -59,9 +59,9 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 		uint64_t num_entries = 0;
 		uint64_t num_filled = 0;
 		while (entry_iterator_next(&iter, false)) {
-			bucket_entry *entry = &iter.bucket.entries[iter.entry_ix];
+			bucket_entry_t *entry = &iter.bucket.b_entries[iter.entry_ix];
 			num_entries++;
-			if (entry->record) {
+			if (entry->be_record) {
 				num_filled++;
 			}
 		}
