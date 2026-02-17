@@ -5,28 +5,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include "linear_hash.h"
-#include "linear_hash_types.h"
+#include "allocator.h"
+#include "linear_hash_impl.h"
 #include "linear_hash_stats.h"
-#include "linear_hash_extras.h"
+#include "linear_hash_debug.h"
 #include "zstream_shared.h"
 
 #define MAX_OCCUPANCY 0.75
 #define INITIAL_HASH_SUFFIX_LENGTH 10
-#define INSERTIONS_BETWEEN_MEM_CHECKS 1024
+#define INSERTIONS_BETWEEN_MEM_CHECKS 4096
 
 /*
-Calculate bucket for a given hash value.
-
-Here, suffix length is defined as the hash suffix length 
-in effect at or above the split point. Below the split,
-it is one bit longer.
-E.g., if hash_suffix_length = 3, items below the split point  
-are hashed into 16 buckets. At the split point or above, they are 
-hashed into 8 buckets. Ergo, when the split pointer reaches
-index 8, 2^level, all mod 8 entries have been upgraded. The
-split pointer is reset to zero and the suffix length increases. 
-*/
-
+ * Calculate bucket for a given hash value.
+ *
+ * Here, suffix length is defined as the hash suffix length in effect at or
+ * above the split point. Below the split, it is one bit longer. E.g., if
+ * hash_suffix_length = 3, items below the split point are hashed into 16
+ * buckets. At the split point or above, they are hashed into 8 buckets.
+ * Ergo, when the split pointer reaches index 8, 2^level, all mod 8 entries
+ * have been upgraded. The split pointer is reset to zero and the suffix
+ * length increases.
+ */
 static uint64_t
 bucket_for_hash(linear_hash_t lh, uint64_t hash) {
 	uint64_t mask = (1ULL << (lh->hash_suffix_length)) - 1;
@@ -38,26 +37,29 @@ bucket_for_hash(linear_hash_t lh, uint64_t hash) {
 
 /* Send an entry iterator struct back to its allocator */
 static void
-save_entry_iterator(entry_iterator *iter) {
-	if (iter->dirty) {
-		CHECKED(record_ix, allocator_store(iter->alloc, iter->bucket_ix,
-			&iter->bucket), "saving from entry iterator");
-		iter->dirty = false;
+save_entry_iterator(entry_iterator_t *iter) {
+	if (!iter->dirty) {
+		return;
 	}
+	CHECKED(record_ix_t, allocator_store(iter->alloc,
+		iter->bucket_ix, &iter->bucket),
+		"saving from entry iterator");
+	iter->dirty = false;
 }
 
 /* Read the bucket corresponding to an entry iterator */
 static void
-read_entry_iterator(entry_iterator *iter) {
-	CHECKED(record_ix, allocator_retrieve(iter->alloc, iter->bucket_ix,
+read_entry_iterator(entry_iterator_t *iter) {
+	CHECKED(record_ix_t, allocator_retrieve(iter->alloc, iter->bucket_ix,
 		&iter->bucket), "reading from entry iterator"); 
 }
 
-/* Updates entry_iterator struct, returns false when there are no more
+/*
+ * Updates entry_iterator struct, returns false when there are no more
  * entries, or, alternately, extends the bucket chain indefinitely.
-  */
+ */
 bool
-entry_iterator_next(entry_iterator *iter, bool extend) {
+entry_iterator_next(entry_iterator_t *iter, bool extend) {
 	linear_hash_t lh = iter->lh;
 	while (true) {
 		if (iter->entry_ix < 0) {
@@ -67,23 +69,23 @@ entry_iterator_next(entry_iterator *iter, bool extend) {
 			return true;
 		} else if (iter->entry_ix == ENTRIES_PER_BUCKET - 1) {
 			save_entry_iterator(iter);
-			if (iter->bucket.overflow) {
+			if (iter->bucket.b_overflow) {
 				iter->alloc =  lh->overflow_alloc;
 				iter->entry_ix = -1;
-				iter->bucket_ix = iter->bucket.overflow;
+				iter->bucket_ix = iter->bucket.b_overflow;
 			} else if (!extend) {
 				return false;
 			} else {
-				bucket new_overflow_bucket = EMPTY_BUCKET;
-				iter->bucket.overflow = allocator_append(lh->overflow_alloc,
+				bucket_t new_overflow_bucket = {};
+				iter->bucket.b_overflow = allocator_append(lh->overflow_alloc,
 					&new_overflow_bucket);
-				assert(iter->bucket.overflow > 0);
+				assert(iter->bucket.b_overflow > 0);
 				iter->dirty = true;
 				save_entry_iterator(iter);
-				iter->bucket_ix = iter->bucket.overflow;
-				iter->bucket = new_overflow_bucket;
-				iter->alloc = lh->overflow_alloc;
-				iter->entry_ix = 0;
+				iter->ei_bucket_ix = iter->ei_bucket.b_overflow;
+				iter->ei_bucket = new_overflow_bucket;
+				iter->ei_alloc = lh->overflow_alloc;
+				iter->ei_entry_ix = 0;
 				return true;
 			}
 		} else {
@@ -93,42 +95,45 @@ entry_iterator_next(entry_iterator *iter, bool extend) {
 	}
 }
 
-/* Split a bucket, rehashing all entries according to the one-higher
-suffix length. Since only one bit is added, existing entries either
-stay where they are or go to one alternate bucket. We'll do this partition
-in two passes for clarity and reliability: one to eject relocated entries
-and one to consolidate entries now that some may have been removed. 
-
-It is an invariant that at steady state, bucket entries must be filled
-* linearly, even if there are unused entries. */
+/*
+ *
+  * Split a bucket, rehashing all entries according to the one-higher suffix
+  * length. Since only one bit is added, existing entries either stay where
+  * they are or go to one alternate bucket. We'll do this partition in two
+  * passes for clarity and reliability: one to eject relocated entries and
+  * one to consolidate entries now that some may have been removed.
+  *
+  * It is an invariant that at steady state, bucket entries must be filled
+  * linearly, even if there are unused entries.
+ */
 static void
 split_bucket(linear_hash_t lh)
 {
 	START_VALIDATION(lh);
 	begin_ops_tracking(lh, &lh->stats.splits);
 
-	record_ix bucket_being_split = (record_ix)lh->split_pointer;
-	record_ix buddy_ix = bucket_being_split | (1ULL << lh->hash_suffix_length);
+	record_ix_t bucket_being_split = (record_ix_t)lh->split_pointer;
+	record_ix_t buddy_ix = bucket_being_split | (1ULL << lh->hash_suffix_length);
 
-	entry_iterator source = ITER_BUCKET(lh, bucket_being_split);
-	entry_iterator stay = ITER_BUCKET(lh, bucket_being_split);;
-	entry_iterator move = ITER_BUCKET(lh, buddy_ix);
+	entry_iterator_t source = ITER_BUCKET(lh, bucket_being_split);
+	entry_iterator_t stay = ITER_BUCKET(lh, bucket_being_split);;
+	entry_iterator_t move = ITER_BUCKET(lh, buddy_ix);
 
 	/* Increment split pointer now so bucket_for_hash uses extended length */
 	lh->split_pointer++;
 
 	/* Partition */
 	while(entry_iterator_next(&source, false)) {
-		bucket_entry *sbe = &source.bucket.entries[source.entry_ix];
-		if (sbe->record == 0) {
+		bucket_entry_t *sbe = &source.bucket.b_entries[source.entry_ix];
+		if (sbe->be_record == 0) {
 			/* Entries must be filled in order, so we're done */
 			break;
 		}
-		entry_iterator *dest = (bucket_for_hash(lh, sbe->hash) == 
+		entry_iterator_t *dest = (bucket_for_hash(lh, sbe->be_hash) ==
 			bucket_being_split) ? &stay : &move;
 		(void) entry_iterator_next(dest, true);
-		bucket_entry *dbe = &dest->bucket.entries[dest->entry_ix];
-		if (dbe->hash != sbe->hash || dbe->record != sbe->record) {
+		bucket_entry_t *dbe = &dest->bucket.b_entries[dest->entry_ix];
+		if (dbe->be_hash != sbe->be_hash || dbe->be_record != sbe->be_record) {
 			*dbe = *sbe;
 			dest->dirty = true;			
 		}
@@ -136,7 +141,7 @@ split_bucket(linear_hash_t lh)
 
 	/* Zero out the rest of the source bucket */
 	while(entry_iterator_next(&stay, false)) {
-		stay.bucket.entries[stay.entry_ix] = (bucket_entry){};
+		stay.bucket.b_entries[stay.entry_ix] = (bucket_entry_t){};
 		stay.dirty = true;
 	}
 	save_entry_iterator(&stay);
@@ -144,7 +149,7 @@ split_bucket(linear_hash_t lh)
 
 	/* Have we completed the full hashing cycle at this suffix length? */
 	uint64_t buckets_this_cycle = (1ULL << (lh->hash_suffix_length));
-	if (lh->split_pointer >= (record_ix)buckets_this_cycle) {
+	if (lh->split_pointer >= (record_ix_t)buckets_this_cycle) {
 		lh->hash_suffix_length++;
 		lh->split_pointer = 0;
 	}
@@ -240,7 +245,7 @@ lh_init(size_t record_size, size_t max_memory, const char *cache_dir)
 		return NULL;
 	}
 	/*
-	 * Skip first overflow and data buckets to allow 0
+	 * Skip first b_overflow and data buckets to allow 0
 	 * to indicate empty or end-of-chain
 	 */
 	if ((allocator_skip(lh->data_alloc) < 0) ||
@@ -259,16 +264,16 @@ lh_insert(linear_hash_t lh, uint64_t hash, const void* data)
 	START_VALIDATION(lh);
 	begin_ops_tracking(lh, &lh->stats.inserts);
 
-	record_ix record = allocator_append(lh->data_alloc, data);
+	record_ix_t record = allocator_append(lh->data_alloc, data);
 	if (record < 0) {
 		(void) fprintf(stderr, "Error inserting new hash entry.\n");
 		exit(1);
 	}
-	entry_iterator iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
-	bucket_entry new_entry = {hash, record};
+	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
+	bucket_entry_t new_entry = {hash, record};
 	while (entry_iterator_next(&iter, true)) {
-		bucket_entry *entry = &iter.bucket.entries[iter.entry_ix];
-		if (!entry->record) {
+		bucket_entry_t *entry = &iter.bucket.b_entries[iter.entry_ix];
+		if (!entry->be_record) {
 			*entry = new_entry;
 			iter.dirty = true;
 			save_entry_iterator(&iter);
@@ -306,17 +311,17 @@ lh_initiate_retrieve(linear_hash_t lh, uint64_t hash)
 
 bool
 lh_retrieve_next(lh_iterator_t iter, void *buffer) {
-	entry_iterator *entry_iter = &iter->entry_iterator;
+	entry_iterator_t *entry_iter = &iter->entry_iterator;
 	while (entry_iterator_next(entry_iter, false)) {
-		bucket_entry *entry =
-			&entry_iter->bucket.entries[entry_iter->entry_ix];
-		if (entry->record == 0) {
+		bucket_entry_t *entry =
+			&entry_iter->bucket.b_entries[entry_iter->entry_ix];
+		if (entry->be_record == 0) {
 			complete_ops_tracking(entry_iter->lh);
 			return false;
 		}
-		if (entry->hash == iter->hash) {
-			CHECKED(record_ix, allocator_retrieve(entry_iter->lh->data_alloc,
-				entry->record, buffer), "retrieving next hash entry");
+		if (entry->be_hash == iter->hash) {
+			CHECKED(record_ix_t, allocator_retrieve(entry_iter->lh->data_alloc,
+				entry->be_record, buffer), "retrieving next hash entry");
 			update_ops_tracking(entry_iter->lh);
 			return true;
 		}

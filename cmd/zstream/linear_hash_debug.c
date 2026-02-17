@@ -1,8 +1,8 @@
 #include <assert.h>
 #include <string.h>
-#include "linear_hash_types.h"
+#include "linear_hash_impl.h"
 #include "linear_hash_stats.h"
-#include "linear_hash_extras.h"
+#include "linear_hash_debug.h"
 
 bool
 lh_validate(linear_hash_t lh) {
