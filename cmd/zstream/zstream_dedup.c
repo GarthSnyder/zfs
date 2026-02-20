@@ -129,7 +129,7 @@ print_status(dedup_stats_t *stats, boolean_t force)
 	stats->last_status_time = now;
 }
 
-static bool
+static boolean_t
 writes_compatible(const drr_write *this, const drr_write *prev) {
 	if (this->drr_type != prev->drr_type
 		|| this->drr_logical_size != prev->drr_logical_size
@@ -139,12 +139,12 @@ writes_compatible(const drr_write *this, const drr_write *prev) {
 		|| memcmp(this->drr_iv, prev->drr_iv, sizeof(this->drr_iv))
 		|| memcmp(this->drr_mac, prev->drr_mac, sizeof(this->drr_mac)))
 	{
-		return false;
+		return B_FALSE;
 	}
-	return true;
+	return B_TRUE;
 }
 
-static bool
+static boolean_t
 dedup_table_lookup(linear_hash_t ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
 	lh_iterator_t iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(blake3));
 	/* 
@@ -153,10 +153,10 @@ dedup_table_lookup(linear_hash_t ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
 	 */
 	while (lh_retrieve_next(iter, dde)) {
 		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *blake3)) {
-			return true;
+			return B_TRUE;
 		}
 	}
-	return false;
+	return B_FALSE;
 }
 
 static void
@@ -175,7 +175,7 @@ dedup_table_insert(linear_hash_t ddt, zio_cksum_t *blake3,
  * Deduplicate a ZFS stream.
  */
 static void
-zfs_dedup_stream(zstream_queue_t queue, int outfd, linear_hash_t ddt, bool verbose)
+zfs_dedup_stream(zstream_queue_t queue, int outfd, linear_hash_t ddt, boolean_t verbose)
 {
 	blake3_queue_item		item;
 	dmu_replay_record_t		*drr = &item.drr;
@@ -267,12 +267,12 @@ zfs_dedup_stream(zstream_queue_t queue, int outfd, linear_hash_t ddt, bool verbo
 			free(item.payload);
 		}
 		if (verbose) {
-			print_status(&stats, false);
+			print_status(&stats, B_FALSE);
 		}
 	}
 
 	if (verbose) {
-		print_status(&stats, true);
+		print_status(&stats, B_TRUE);
 		fprintf(stderr, "\n");
 		char mem_str[32];
 		zfs_nicenum(lh_get_mem_highwater(ddt), mem_str, sizeof (mem_str));
@@ -338,7 +338,7 @@ estimate_hashing_cost(blake3_queue_item *item)
 int
 zstream_do_dedup(int argc, char *argv[])
 {
-	bool 			verbose = false;
+	boolean_t 		verbose = B_FALSE;
 	int 			mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
 	const char 		*cache_dir = NULL;
 	FILE			*input;
@@ -351,7 +351,7 @@ zstream_do_dedup(int argc, char *argv[])
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
 		switch (c) {
 		case 'v':
-			verbose = true;
+			verbose = B_TRUE;
 			break;
 		case 'm':
 			mem_percent = atoi(optarg);
@@ -397,7 +397,7 @@ zstream_do_dedup(int argc, char *argv[])
 		fprintf(stderr, "Cache directory %s does not exist.\n", cache_dir);
 		exit(1);
 	} else if ((statbuff.st_mode & S_IFMT) != S_IFDIR) {
-		fprintf(stderr, "The -c argument requires a directory argument\n");
+		fprintf(stderr, "The -c flag requires a directory argument\n");
 		exit(1);
 	}
 	dedup_table = lh_init(sizeof(dedup_entry_t), max_memory, cache_dir);
@@ -490,7 +490,7 @@ maybe_print_update(dedup_context_t *context, boolean_t force)
 static void
 print_summary(dedup_context_t *context) {
 	dedup_stats_t *stats = &context->dc_stats;
-	maybe_print_update(context, true);
+	maybe_print_update(context, B_TRUE);
 	fprintf(stderr, "\n");
 	char mem_str[32];
 	zfs_nicenum(lh_get_mem_highwater(context->dc_table), mem_str,
@@ -573,7 +573,7 @@ chain_dedup_writes(drr_with_blake3_t *item, dedup_context_t *context,
 	item->dp_base.dp_payload_size = 0;
 
 	if (chain->ca_verbose) {
-		maybe_print_update(context, false);
+		maybe_print_update(context, B_FALSE);
 	}
 }
 

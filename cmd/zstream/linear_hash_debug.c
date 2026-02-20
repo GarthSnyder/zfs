@@ -4,7 +4,7 @@
 #include "linear_hash_stats.h"
 #include "linear_hash_debug.h"
 
-bool
+boolean_t
 lh_validate(linear_hash_t lh) {
 	uint64_t total_entries = 0;
 	allocator_stats_t bucket_stats;
@@ -13,7 +13,7 @@ lh_validate(linear_hash_t lh) {
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t full_entries = 0;
 		uint64_t empty_entries = 0;
-		while (entry_iterator_next(&iter, false)) {
+		while (entry_iterator_next(&iter, B_FALSE)) {
 			bucket_entry_t *entry = &iter.ei_bucket.b_entries[iter.ei_entry_ix];
 			if (entry->be_record) {
 				if (empty_entries) {
@@ -21,7 +21,7 @@ lh_validate(linear_hash_t lh) {
 						"uncompacted entries.\nEntry %ld is the "
 						"first after an empty entry.\n", i, 
 						iter.ei_entry_ix);
-					return false;
+					return B_FALSE;
 				}
 				full_entries++;
 			} else {
@@ -34,9 +34,9 @@ lh_validate(linear_hash_t lh) {
 		fprintf(stderr, "validate: linear hash is supposed to have %lu "
 			"entries, but actually has %lu.\n", lh->lh_stats.lhs_num_entries,
 			total_entries);
-		return false;
+		return B_FALSE;
 	}
-	return true;
+	return B_TRUE;
 }
 
 void
@@ -58,7 +58,7 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t num_entries = 0;
 		uint64_t num_filled = 0;
-		while (entry_iterator_next(&iter, false)) {
+		while (entry_iterator_next(&iter, B_FALSE)) {
 			bucket_entry_t *entry = &iter.ei_bucket.b_entries[iter.ei_entry_ix];
 			num_entries++;
 			if (entry->be_record) {

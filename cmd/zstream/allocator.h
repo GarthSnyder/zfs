@@ -1,14 +1,28 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
- * Simple, efficient linear allocator with memory or disk backing
- * Portable across Windows, macOS, and UNIX/Linux
+ * CDDL HEADER START
+ *
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
  */
 
-#ifndef ALLOCATOR_H
-#define ALLOCATOR_H
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
 
-#include <stdint.h>
+#ifndef _ALLOCATOR_H
+#define _ALLOCATOR_H
+
 #include <stddef.h>
-#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 
 typedef int64_t record_ix_t;

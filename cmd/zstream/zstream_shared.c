@@ -21,10 +21,10 @@
  */
 
 /*
- * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  * Copyright 2022 Axcient.  All rights reserved.
  * Copyright (c) 2022 by Delphix. All rights reserved.
  * Copyright (c) 2024, Klara, Inc.
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
 #include <assert.h>

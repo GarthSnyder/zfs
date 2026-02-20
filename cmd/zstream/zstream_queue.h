@@ -17,49 +17,57 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#pragma once
-
 #include <stdint.h>
 #include <sys/dmu.h>
 #include <sys/zio_checksum.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/fs/zfs.h>
 
+#ifndef _ZSTREAM_QUEUE_H
+#define _ZSTREAM_QUEUE_H
+
+#ifdef  __cplusplus
+extern "C" {
+#endif
+
  /*
-  * This is a generalized implementation of multithreaded, FIFO work queues. Even
-  * though I'm calling them queues, there is no inherent order of work inside the
-  * queue. The only guarantee is that completed items will emerge from the queue in
-  * the same order they entered. The implementation broadly tries to work on items
-  * in order, but that is not guaranteed.
+  * This is a generalized implementation of multithreaded, FIFO work queues.
+  * I'm calling them queues, but there is no inherent order of work inside
+  * the queue. The only guarantee is that completed items will emerge from
+  * the queue in the same order they entered. The implementation broadly
+  * tries to work on items in order, but that is not guaranteed.
   *
-  * Callers define a fixed item size to be used by each queue and define thread-safe
-  * functions that estimate individual items' processing cost and perform the actual
-  * processing. The queue treats items as black boxes, so processing functions can
-  * modify them freely.
+  * Callers define a fixed item size to be used by each queue and define
+  * thread-safe functions that estimate individual items' processing cost
+  * and perform the actual processing. The queue treats items as black
+  * boxes, so processing functions can modify them freely.
   *
-  * The cost estimation function assigns a size_t cost that represents the amount of
-  * work needed to process an item. For activities like hashing and data
-  * compression, the natural cost is typically input buffer length. This function is
-  * run as items enter the queue, so it's single-threaded and should return a value
-  * promptly. If cost estimation is important and expensive, use a separate queue to
-  * implement it.
+  * The cost estimation function assigns a size_t cost that represents the
+  * amount of work needed to process an item. For activities like hashing
+  * and data compression, the natural cost is typically input buffer length.
+  * This function is run as items enter the queue, so it's single-threaded
+  * and should return a value promptly. If cost estimation is important and
+  * expensive, use a separate queue to implement it.
   *
-  * It's expected that only a subset of input items will require processing. If an
-  * item's cost is zero, it is fast-tracked and never presented to the processing
-  * function.
+  * It's expected that only a subset of input items will require processing.
+  * If an item's cost is zero, it is fast-tracked and never presented to the
+  * processing function.
   *
-  * Threading granularity is specified by a per-batch budget that is set for each
-  * channel in the same units used for item costs. Threads claim items until the
-  * budget is met or there are no more items available. When collecting items,
-  * threads never wait for additional work to arrive. They start work as quickly as
-  * possible even if the budget has not been reached.
+  * Threading granularity is specified by a per-batch budget that is set for
+  * each queue in the same units used for item costs. Threads claim items
+  * until the budget is met, there are no more items available, or MAX_BATCH
+  * items have been claimed. When collecting items, threads never wait for
+  * additional work to arrive. They start work as quickly as possible even
+  * if the budget has not been reached.
   *
-  * All queues share a single thread pool that is managed to avoid contention.
-  * Threads are allocated to queues dynamically according to where work is
-  * available. When multiple queues have work, threads are allocated among them with
-  * an eye toward preventing pipeline stalls.
+  * All queues share a single thread pool that is managed to avoid
+  * contention. Threads are allocated to queues dynamically according to
+  * where work is available. When multiple queues have work, threads are
+  * allocated among them stochastically with an eye toward preventing
+  * pipeline stalls.
  */
 
+#define MAX_BATCH 16	/* Most items that can be claimed at once */
 
 typedef void queue_item;
 
@@ -122,3 +130,8 @@ zstream_dequeue(zstream_queue_t queue, queue_item *item);
 void
 zstream_queue_fini(zstream_queue_t queue);
 
+#ifdef  __cplusplus
+}
+#endif
+
+#endif  /* _ZSTREAM_QUEUE_H */

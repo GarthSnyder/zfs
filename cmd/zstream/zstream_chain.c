@@ -50,6 +50,9 @@ typedef void *pthread_worker(void *);
 static void *
 zstream_chain_worker(worker_context_t *context);
 
+size_t
+payload_size_as_cost(drr_packet_t *drr);
+
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs,
 	int num_steps)
@@ -85,6 +88,14 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs,
 				.qp_batch_budget = ci->parallel.csp_batch_budget,
 				.qp_queue_length = ci->parallel.csp_queue_length
 			};
+			/*
+			 * Add payload length as default cost metric if no
+			 * other cost function is assigned.
+			 */
+			if (!queue_params.qp_estimate_cost) {
+				queue_params.qp_estimate_cost =
+				    (zq_estimate_cost_f *)payload_size_as_cost;
+			}
 			queues[i] = zstream_queue_create(&queue_params);
 		}
 	}
@@ -151,3 +162,9 @@ zstream_chain_worker(worker_context_t *context) {
 		goto repeat;
 	}
 }
+
+size_t
+payload_size_as_cost(drr_packet_t *packet) {
+	return (size_t)packet->dp_payload_size;
+}
+

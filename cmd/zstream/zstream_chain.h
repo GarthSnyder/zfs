@@ -17,10 +17,16 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#pragma once
-
 #include "zstream_queue.h"
 #include "zstream_chain_types.h"
+#include <stdint.h>
+
+#ifndef _ZSTREAM_CHAIN_H
+#define _ZSTREAM_CHAIN_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*
  * A chain is a sequence of processing steps that are run on packets of
@@ -28,7 +34,7 @@
  * but the packet size can vary along the chain as steps add or remove data.
  *
  * Steps in a chain are defined by instances of the chain_step_t struct
- * below. Steps may be declared to execute either serially or in parallel.
+ * below. Steps can be declared to execute either serially or in parallel.
  * Parallel steps are executed concurrently as outlined in zstream_queue.h,
  * and the parameters needed to set up the queue are included in the
  * chain_step_t struct. Serial steps have the option to pass an arbitrary
@@ -50,17 +56,25 @@
  * have no concept of "end of stream" and do not receive this notification.
  */
 
-typedef enum { CS_SERIAL, CS_PARALLEL } step_type_t;
+#define CA_BYTESWAPPED		(1ULL << 0)
+#define CA_VERBOSE		(1ULL << 1)
+#define CA_VERY_VERBOSE		(1ULL << 2)
+#define CA_DUMP_OFFSETS		(1ULL << 3)
+#define CA_DUMP_DATA		(1ULL << 4)
+#define CA_IGNORE_CKSUMS	(1ULL << 5)
+#define CA_DEDUPED		(1ULL << 6)
 
 typedef struct chain_attrs {
-	boolean_t	ca_verbose;
-	boolean_t	ca_byteswapped;
+	uint64_t	ca_flags;
+	off_t		ca_offset;
 } *chain_attrs_t;
 
 typedef boolean_t
 zc_serial_process_f(void *item, void *context, chain_attrs_t chain);
 
-typedef struct {
+typedef enum { CS_SERIAL, CS_PARALLEL } step_type_t;
+
+typedef struct chain_step {
 			step_type_t		cs_type;
 			size_t 			cs_out_size;
 	union {
@@ -87,4 +101,8 @@ void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs,
 	int num_steps);
 
+#ifdef __cplusplus
+}
+#endif
 
+#endif	/* _ZSTREAM_CHAIN_H */

@@ -172,7 +172,7 @@ drr_byteswap(dmu_replay_record_t *drr, int record_type)
 		} \
 	}
 
-void
+static void
 read_stream(FILE *input, int output, stream_filter_t *filters,
 	int num_filters, boolean_t retain_payload, void *context)
 {

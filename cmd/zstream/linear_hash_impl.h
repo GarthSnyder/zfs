@@ -33,7 +33,7 @@ typedef struct {
 	record_ix_t	ei_bucket_ix;	/* -1 == overflow not yet assigned */
 	record_ix_t	ei_entry_ix;	/* -1 == bucket not yet retrieved */
 	bucket_t	ei_bucket;	/* Working copy of allocator version */
-	bool		ei_dirty;	/* Needs writeback */
+	boolean_t	ei_dirty;	/* Needs writeback */
 } entry_iterator_t;
 
 /* Iterator for retrieving records by hash */
@@ -61,7 +61,7 @@ struct linear_hash {
 	size_t		lh_record_size;
 	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
 	record_ix_t	lh_split_pointer;    	/* Next bucket to split */
-	bool		lh_validate;		/* Validation per op (slow) */
+	boolean_t	lh_validate;		/* Validation per op (slow) */
 	uint64_t	lh_max_memory;
 	int     	lh_next_memory_check;	/* # of splits before check */
 	int       	lh_next_iterator;

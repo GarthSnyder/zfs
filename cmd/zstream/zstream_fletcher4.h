@@ -17,25 +17,26 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ZSTREAM_IO_H
-#define _ZSTREAM_IO_H
+#ifndef _ZSTREAM_FLETCHER4_H
+#define _ZSTREAM_FLETCHER4_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #include "zstream_chain.h"
+#include "zstream_chain_types.h"
 
-#define MAX_IO_STREAMS 4
-
-chain_step_t
-serial_read_stream(const char *filename);
+#define MAX_FLETCHER_4 4	/* Max in one chain */
 
 chain_step_t
-serial_write_stream(const char *filename);
+parallel_calc_fletcher4();
+
+chain_step_t
+serial_validate_fletcher4();
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* _ZSTREAM_IO_H */
+#endif  /* _ZSTREAM_FLETCHER4_H */

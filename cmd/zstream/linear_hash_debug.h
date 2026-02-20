@@ -12,10 +12,10 @@
 		fprintf(stderr, "%s broke the hash table\n", __func__);	\
 	}
 
-bool
-entry_iterator_next(entry_iterator_t *iter, bool extend);
+boolean_t
+entry_iterator_next(entry_iterator_t *iter, boolean_t extend);
 
-bool
+boolean_t
 lh_validate(linear_hash_t lh);
 
 uint64_t

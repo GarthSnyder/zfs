@@ -4,11 +4,12 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include "linear_hash.h"
+
 #include "allocator.h"
+#include "linear_hash.h"
+#include "linear_hash_debug.h"
 #include "linear_hash_impl.h"
 #include "linear_hash_stats.h"
-#include "linear_hash_debug.h"
 #include "zstream_shared.h"
 
 #define MAX_OCCUPANCY 0.75
@@ -46,7 +47,7 @@ save_entry_iterator(entry_iterator_t *iter) {
 	if (!iter->ei_dirty) { return; }
 	CHECKED("saving entry iterator", allocator_store(iter->ei_alloc,
 		iter->ei_bucket_ix, &iter->ei_bucket));
-	iter->ei_dirty = false;
+	iter->ei_dirty = B_FALSE;
 }
 
 /* Read in the bucket struct corresponding to an entry iterator */
@@ -61,16 +62,16 @@ read_entry_iterator(entry_iterator_t *iter)
  * Updates entry_iterator struct, returns false when there are no more
  * entries, or, alternately, extends the bucket chain indefinitely.
  */
-bool
-entry_iterator_next(entry_iterator_t *iter, bool extend)
+boolean_t
+entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 {
 	linear_hash_t lh = iter->ei_lh;
 
 start:	if (iter->ei_entry_ix < 0) {
 		read_entry_iterator(iter);
 		iter->ei_entry_ix = 0;
-		iter->ei_dirty = false;
-		return true;
+		iter->ei_dirty = B_FALSE;
+		return B_TRUE;
 	} else if (iter->ei_entry_ix == ENTRIES_PER_BUCKET - 1) {
 		save_entry_iterator(iter);
 		if (iter->ei_bucket.b_overflow) {
@@ -79,24 +80,24 @@ start:	if (iter->ei_entry_ix < 0) {
 			iter->ei_bucket_ix = iter->ei_bucket.b_overflow;
 			goto start;
 		} else if (!extend) {
-			return false;
+			return B_FALSE;
 		} else {
 			bucket_t new_overflow_bucket = {};
 			iter->ei_bucket.b_overflow =
 				allocator_append(lh->lh_overflow_alloc,
 					&new_overflow_bucket);
 			assert(iter->ei_bucket.b_overflow > 0);
-			iter->ei_dirty = true;
+			iter->ei_dirty = B_TRUE;
 			save_entry_iterator(iter);
 			iter->ei_bucket_ix = iter->ei_bucket.b_overflow;
 			iter->ei_bucket = new_overflow_bucket;
 			iter->ei_alloc = lh->lh_overflow_alloc;
 			iter->ei_entry_ix = 0;
-			return true;
+			return B_TRUE;
 		}
 	} else {
 		iter->ei_entry_ix += 1;
-		return true;
+		return B_TRUE;
 	}
 }
 
@@ -128,7 +129,7 @@ split_bucket(linear_hash_t lh)
 	lh->lh_split_pointer++;
 
 	/* Partition */
-	while (entry_iterator_next(&source, false)) {
+	while (entry_iterator_next(&source, B_FALSE)) {
 		bucket_entry_t *sbe =
 			&source.ei_bucket.b_entries[source.ei_entry_ix];
 		if (sbe->be_record == 0) {
@@ -136,24 +137,24 @@ split_bucket(linear_hash_t lh)
 		}
 		boolean_t stays = bucket_for_hash(lh, sbe->be_hash) == bucket_ix;
 		entry_iterator_t *dest = stays ? &stay : &move;
-		(void) entry_iterator_next(dest, true);
+		(void) entry_iterator_next(dest, B_TRUE);
 		bucket_entry_t *dbe =
 			&dest->ei_bucket.b_entries[dest->ei_entry_ix];
 		if (dbe->be_hash != sbe->be_hash ||
 			dbe->be_record != sbe->be_record)
 		{
 			*dbe = *sbe;
-			dest->ei_dirty = true;
+			dest->ei_dirty = B_TRUE;
 		}
 	}
 
 	/* Zero out the rest of the source bucket */
-	while (entry_iterator_next(&stay, false)) {
+	while (entry_iterator_next(&stay, B_FALSE)) {
 		record_ix_t stay_ix = stay.ei_entry_ix;
 		bucket_entry_t *entry = &stay.ei_bucket.b_entries[stay_ix];
 		if (entry->be_record) {
 			*entry = (bucket_entry_t){};
-			stay.ei_dirty = true;
+			stay.ei_dirty = B_TRUE;
 		}
 	}
 	save_entry_iterator(&stay);
@@ -288,12 +289,12 @@ lh_insert(linear_hash_t lh, uint64_t hash, const void* data)
 	}
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
 	bucket_entry_t new_entry = {hash, record};
-	while (entry_iterator_next(&iter, true)) {
+	while (entry_iterator_next(&iter, B_TRUE)) {
 		bucket_entry_t *entry =
 			&iter.ei_bucket.b_entries[iter.ei_entry_ix];
 		if (!entry->be_record) {
 			*entry = new_entry;
-			iter.ei_dirty = true;
+			iter.ei_dirty = B_TRUE;
 			save_entry_iterator(&iter);
 			break;
 		}
@@ -334,23 +335,23 @@ lh_initiate_retrieve(linear_hash_t lh, uint64_t hash)
 boolean_t
 lh_retrieve_next(lh_iterator_t iter, void *buffer) {
 	entry_iterator_t *ei = &iter->lhi_entry_iterator;
-	while (entry_iterator_next(ei, false)) {
+	while (entry_iterator_next(ei, B_FALSE)) {
 		bucket_entry_t *entry =
 			&ei->ei_bucket.b_entries[ei->ei_entry_ix];
 		if (entry->be_record == 0) {
 			complete_ops_tracking(ei->ei_lh);
-			return false;
+			return B_FALSE;
 		}
 		if (entry->be_hash == iter->lhi_hash) {
 			CHECKED("retrieving next hash entry",
 				allocator_retrieve(ei->ei_lh->lh_data_alloc,
 					entry->be_record, buffer));
 			update_ops_tracking(ei->ei_lh);
-			return true;
+			return B_TRUE;
 		}
 	}
 	complete_ops_tracking(ei->ei_lh);
-	return false;
+	return B_FALSE;
 }
 
 void

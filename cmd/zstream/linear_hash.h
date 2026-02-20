@@ -1,20 +1,32 @@
+// SPDX-License-Identifier: CDDL-1.0
 /*
- * Simple linear hashing implementation using the linear allocator
+ * CDDL HEADER START
  *
- * Features:
- * - Dynamic growth using linear hashing algorithm
- * - No deletions (append-only)
- * - Handles collisions via chaining
- * - Iterator-based retrieval (no memory allocation during retrieval)
- * - Hash values provided by caller (64-bit)
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
  */
 
-#ifndef LINEAR_HASH_H
-#define LINEAR_HASH_H
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
+#ifndef _LINEAR_HASH_H
+#define _LINEAR_HASH_H
+
+#ifdef	__cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
-#include <stdbool.h>
 
 /*
  * Callers are required neither to manage iterators nor to pursue iterations
@@ -80,4 +92,8 @@ lh_retrieve_next(lh_iterator_t iter, void *buffer);
 void
 lh_destroy(linear_hash_t lh);
 
-#endif /* LINEAR_HASH_H */
+#ifdef	__cplusplus
+}
+#endif
+
+#endif /* _LINEAR_HASH_H */
