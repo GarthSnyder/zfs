@@ -22,6 +22,8 @@ zstream_SOURCES = \
 	%D%/zstream_chain.c \
 	%D%/zstream_chain.h \
 	%D%/zstream_chain_types.h \
+	%D%/zstream_fletcher4.c \
+	%D%/zstream_fletcher4.h \
 	%D%/allocator.c \
 	%D%/allocator.h \
 	%D%/linear_hash.c \

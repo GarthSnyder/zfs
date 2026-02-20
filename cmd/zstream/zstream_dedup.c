@@ -512,7 +512,7 @@ print_summary(dedup_context_t *context) {
 }
 
 static void
-chain_dedup_writes(drr_with_blake3_t *item, dedup_context_t *context,
+chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 	chain_attrs_t chain)
 {
 	dmu_replay_record_t	*drr = &item->dp_base.dp_drr;
@@ -522,7 +522,7 @@ chain_dedup_writes(drr_with_blake3_t *item, dedup_context_t *context,
 	linear_hash_t		dd_table = context->dc_table;
 	dedup_entry_t		existing;
 
-	if (item == NULL && chain->ca_verbose) {
+	if (item == NULL && (chain->ca_flags & CA_VERBOSE)) {
 		print_summary(context);
 		return;
 	}
@@ -572,7 +572,7 @@ chain_dedup_writes(drr_with_blake3_t *item, dedup_context_t *context,
 	item->dp_base.dp_payload = NULL;
 	item->dp_base.dp_payload_size = 0;
 
-	if (chain->ca_verbose) {
+	if (chain->ca_flags & CA_VERBOSE) {
 		maybe_print_update(context, B_FALSE);
 	}
 }

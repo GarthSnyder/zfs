@@ -23,6 +23,7 @@
 
 #include "zstream_chain.h"
 #include "stream_fletcher4.h"
+#include "zstream_shared.h"
 
 /*
  * Copied from zfs_fletcher.c. See comments below regarding the
@@ -34,30 +35,20 @@ void
 chain_calc_fletcher4(drr_fletcher4_t *item);
 
 boolean_t
-chain_validate_fletcher4(drr_fletcher4_t *item);
+chain_fletcher4(drr_fletcher4_t *item);
 
 boolean_t
 chain_finalize_fletcher4(drr_fletcher4_t *item);
 
-static zio_cksum_t	fletcher4_contexts[MAX_FLETCHER_4];
-static int		next_context = 0;
+typedef enum { F4_SET, F4_VALIDATE } fletcher4_op_t;
 
-typedef struct chain_step {
-			step_type_t		cs_type;
-			size_t 			cs_out_size;
-	union {
-		struct {
-			zc_serial_process_f	*css_process;
-			void			*css_context;
-		} serial;
-		struct {
-			size_t 			csp_queue_length;
-			size_t 			csp_batch_budget;
-			zq_estimate_cost_f	*csp_cost;
-			zq_process_item_f	*csp_process;
-		} parallel;
-	};
-} chain_step_t;
+typedef struct {
+	zio_cksum_t	fc_stream_cksum;
+	fletcher4_op_t	fc_operation;
+} fletcher4_context_t;
+
+static fletcher4_context_t	fletcher4_contexts[MAX_FLETCHER_4];
+static int			next_context = 0;
 
 chain_step_t
 parallel_calc_fletcher4() {
@@ -72,28 +63,32 @@ parallel_calc_fletcher4() {
 	}
 }
 
-chain_step_t
-serial_validate_fletcher4() {
+static chain_step_t
+fletcher4_serial_step(fletcher4_op_t operation) {
 	fletcher4_context_t *context = &fletcher4_contexts[next_context];
-	ZIO_SET_CHECKSUM(context, 0, 0, 0, 0);
+	context->fc_operation = operation;
+	ZIO_SET_CHECKSUM(&context->fc_stream_cksum, 0, 0, 0, 0);
 	next_context++;
 	return (chain_step_t) {
 		.step_type_t = CS_SERIAL,
 		.cs_out_size = sizeof(drr_packet_t),
 		.serial = {
 			.css_process =
-				(zc_serial_process_f *)chain_validate_fletcher,
+				(zc_serial_process_f *)chain_fletcher4,
 			.css_context = context
 		}
 	};
 }
 
-typedef struct {
-	drr_packet_t	dp_base;
-	zio_cksum_t	dp_fletcher4_payload;
-	zio_cksum_t	*dp_fletcher4_overflow[MAX_FLETCHER_BLOCKS];
-	int		dp_num_overflows;
-} drr_fletcher4_t;
+chain_step_t
+serial_add_fletcher4() {
+	return fletcher4_serial_step(F4_SET);
+}
+
+chain_step_t
+serial_validate_fletcher4() {
+	return fletcher4_serial_step(F4_VALIDATE);
+}
 
 /*
  * fletcher_4_init() appears to run a benchmark, so make sure it's only once.
@@ -133,34 +128,55 @@ chain_calc_fletcher4(drr_fletcher4_t *item)
 	}
 }
 
+static_void
+validate_or_exit(zio_cksum_t *expected, zio_cksum_t *actual,
+	const char *where)
+{
+	if (!validate_checksum(expected, actual, where)) { exit(1); }
+}
+
 boolean_t
-chain_validate_fletcher4(drr_fletcher4_t *item, zio_cksum_t *stream_cksum,
+chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	chain_attrs_t chain)
 {
-	if (!item || (chain->ca_flags & CA_IGNORE_CKSUMS)) { return B_TRUE; }
+	if (!item || (context->fc_operation == F4_VALIDATE &&
+		chain->ca_flags & CA_IGNORE_CKSUMS)) { return B_TRUE; }
 
+	zio_cksum_t *stream_cksum = &context->fc_stream_cksum;
+	fletcher4_op_t operation = context->fc_operation;
 	dmu_replay_record_t *drr = &item->dp_base.dp_drr;
 	auto record_type = item->dp_base.dp_drr.drr_u.drr_type;
 	zio_cksum_t *record_cksum = &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum = &drr->drr_u.drr_end.drr_checksum;
+	off_t offset = offsetof(dmu_replay_record_t,
+		drr_u.drr_checksum.drr_checksum);
 	boolean_t skip_record_cksum = (record_type == DRR_BEGIN) ||
 		(record_type == DRR_END && !drr->drr_u.drr_end.drr_toguid);
 
 	fletcher_4_init_once();
 	if (record_type == DRR_END) {
-		if (!validate_checksum(stream_cksum, end_cksum,
-			"in DRR_END record")) { exit(1); }
+		if (operation == F4_SET) {
+			*end_cksum = *stream_cksum;
+		} else {
+			validate_or_exit(stream_cksum, end_cksum,
+				"in DRR_END record");
+		}
 	}
 	if (record_type == DRR_BEGIN) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	}
 	fletcher_4_incremental_native(drr, offset, stream_cksum);
-	if (!skip_record_cksum && !validate_checksum(stream_cksum,
-		record_cksum, "at end of DRR record")) { exit(1); }
+	if (!skip_record_cksum) {
+		if (operation == F4_SET) {
+			*record_cksum = *stream_cksum;
+		} else {
+			validate_or_exit(stream_cksum, record_cksum,
+				"at end of DRR record");
+		}
 	assemble_payload_cksum(item, stream_cksum);
 }
 
-void
+static void
 assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
 {
 	ssize_t remaining = item->dp_base.dp_payload_size;
@@ -176,11 +192,6 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
 		fragment++;
 	}
 }
-
-boolean_t
-chain_add_fletcher4(drr_fletcher4_t *item, zio_cksum_t *stream_cksum,
-	chain_attrs_t chain)
-
 
 /*
  * The function below (and the MAX_FLETCHER_BLOCK define) are
@@ -224,164 +235,3 @@ fletcher_4_incremental_combine(zio_cksum_t *zcp, const uint64_t size,
 	zcp->zc_word[1] += nzcp->zc_word[1] + c1 * zcp->zc_word[0];
 	zcp->zc_word[0] += nzcp->zc_word[0];
 }
-
-
-
-/* Init only the filename, chain_read_stream will prepare the FILE *. */
-typedef struct {
-	const char	*ic_filename;
-	FILE		*ic_fp;
-	boolean_t	ic_for_reading;
-	off_t		ic_offset;
-} io_context_t;
-
-static chain_step_t
-setup_io(const char *filename, boolean_t for_reading);
-
-static boolean_t
-chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain);
-
-static boolean_t
-chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain);
-
-static io_context_t io_contexts[MAX_IO_STREAMS];
-static int next_io_context = 0;
-
-chain_step_t
-read_stream(const char *filename) {
-	return (setup_io(filename, B_TRUE));
-}
-
-chain_step_t
-write_stream(const char *filename) {
-	return (setup_io(filename, B_FALSE));
-}
-
-static chain_step_t
-setup_io(const char *filename, boolean_t for_reading) {
-	int context = next_io_context % MAX_IO_STREAMS;
-	next_io_context++;
-	io_contexts[context] = (io_context_t) {
-		.ic_filename = filename,
-		.ic_for_reading
-	};
-	return (chain_step_t) {
-		.cs_type = CS_SERIAL,
-		.cs_out_size = sizeof(drr_packet_t),
-		.serial = {
-			.css_process = (zc_serial_process_f *)(for_reading ?
-				chain_read : chain_write),
-			.css_context = &io_contexts[context]
-		},
-	};
-}
-
-static void
-open_file(io_context_t *context) {
-	if (context->ic_filename) {
-		context->ic_fp = fopen(context->ic_filename,
-			context->ic_for_reading ? "r" : "w+");
-		if (!context->ic_fp) {
-			perror(context->rc_filename);
-			exit(1);
-		}
-	} else if (context->ic_for_reading && isatty(STDIN_FILENO)) {
-		(void) fprintf(stderr,
-		    "Error: Stream cannot be read from a terminal.\n"
-		    "Name a file or take input from a pipe.\n");
-		exit(1);
-	} else if (context->ic_for_reading) {
-		context->ic_fp = stdin;
-	} else if (isatty(STDOUT_FILENO)) {
-		(void) fprintf(stderr,
-		    "Error: Stream cannot be written to a terminal.\n"
-		    "Name a file or pipe to another command.\n");
-		exit(1);
-	} else {
-		context->ic_fp = stdout;
-	}
-}
-
-static boolean_t
-chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
-{
-	struct dmu_replay_record_t *drr = &item->dp_drr;
-
-	if (!ctxt->rc_fp) {
-		open_file(ctxt);
-	}
-	if (fread(drr, sizeof(dmu_replay_record_t), 1,
-		ctxt->ic_fp) == 0)
-	{
-		if (ferror(ctxt->rc_fp)) {
-			fprintf(stderr, "Error reading stream: %s\n",
-			    strerror(errno));
-			exit(1);
-		} else {
-			return B_FALSE;
-		}
-	}
-	if (ctxt->ic_offset == 0) {
-		uint64_t magic = drr->drr_u.drr_begin.drr_magic;
-		if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
-			chain->ca_flags |= CA_BYTESWAPPED;
-		} else if (magic != DMU_BACKUP_MAGIC) {
-			fprintf(stderr, "Invalid ZFS stream, bad magic "
-				"number %lx\n", magic);
-			exit(1);
-		}
-	}
-	payload_size =(chain->ca_flags & CA_BYTESWAPPED) ?
-		BSWAP_32(drr->drr_payloadlen) : drr->drr_payloadlen;
-	if (payload_size) {
-		item->dp_payload = safe_malloc(payload_size);
-		size_t items_read = fread(item->dp_payload,
-			payload_size, 1, context->rc_fp);
-		if (items_read != 1) {
-			fprintf(stderr, "Error reading record payload "
-				" at offset %lu", ctxt->ic_offset);
-			exit(1);
-		}
-	} else {
-		item->dp_payload = NULL;
-	}
-	item->dp_payload_size = payload_size;
-	item->dp_stream_offset = ctxt->ic_offset;
-	context->ic_offset += sizeof(*drr) + payload_size;
-	return B_TRUE;
-}
-
-static boolean_t
-chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
-{
-	struct dmu_replay_record_t *drr = &item->dp_drr;
-
-	if (!ctxt->rc_fp) {
-		open_file(ctxt);
-	}
-	if (!item) {
-		fclose(ctxt->ic_fp);
-		return B_TRUE;
-	}
-	if (fwrite(drr, sizeof(dmu_replay_record_t), 1,
-		ctxt->ic_fp) != 1)
-	{
-		fprintf(stderr, "Error writing record: %s\n",
-		    strerror(errno));
-		exit(1);
-	} else if (item->payload_size > 0) {
-		if (fwrite(item->dp_payload, item->dp_payload_size,
-			1, ctxt->ic_fp) != 1)
-		{
-			fprintf(stderr, "Error writing payload: %s\n",
-			    strerror(errno));
-			exit(1);
-		} else {
-			free(item->dp_payload);
-			item->dp_payload = NULL;
-			item->dp_payload_size = 0;
-		}
-	}
-	return B_TRUE;
-}
-

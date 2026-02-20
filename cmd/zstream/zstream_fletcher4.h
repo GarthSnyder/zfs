@@ -27,13 +27,16 @@ extern "C" {
 #include "zstream_chain.h"
 #include "zstream_chain_types.h"
 
-#define MAX_FLETCHER_4 4	/* Max in one chain */
+#define MAX_FLETCHER_4 8	/* Max cksum ops in one chain */
 
 chain_step_t
 parallel_calc_fletcher4();
 
 chain_step_t
 serial_validate_fletcher4();
+
+chain_step_t
+serial_add_fletcher4();
 
 #ifdef __cplusplus
 }
