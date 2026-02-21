@@ -155,8 +155,7 @@ chain_calc_fletcher4(drr_fletcher4_t *item)
 	zio_cksum_t *fragment = &item->dp_fletcher4_payload;
 
 	fletcher4_init_once();
-	ZIO_SET_CHECKSUM(fragment, 0, 0, 0, 0);
-	fletcher_4_incremental_native(data, write_size, fragment);
+	fletcher_4_native(data, write_size, NULL, fragment);
 	if (num_overflow) {
 		fragment = safe_calloc(num_overflow * sizeof(zio_cksum_t));
 		item->dp_fletcher4_overflow = fragment;
@@ -164,8 +163,7 @@ chain_calc_fletcher4(drr_fletcher4_t *item)
 	while(remaining -= write_size) {
 		data += write_size;
 		write_size = MIN(remaining, MAX_FLETCHER_BLOCK);
-		ZIO_SET_CHECKSUM(fragment, 0, 0, 0, 0);
-		fletcher_4_incremental_native(data, write_size, fragment);
+		fletcher_4_native(data, write_size, NULL, fragment);
 		fragment++;
 	}
 }
