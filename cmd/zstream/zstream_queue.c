@@ -281,8 +281,8 @@ start:	if (pool.tp_num_queues) {
 				pthread_mutex_unlock(&pool.tp_mutex);
 				return selected_queue;
 			}
-			abort();
 		}
+		abort();
 	}
 }
 
@@ -320,7 +320,7 @@ zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last_one
 		await_condition(&queue->zq_dequeued, &queue->zq_mutex);
 	}
 	queue_slot_t *slot = &queue->zq_slots[queue->zq_enqueue % queue->zq_num_slots];
-	slot->qs_cost = queue->zq_cost(item);
+	slot->qs_cost = last_one ? 0 : queue->zq_cost(item);
 	slot->qs_completed = B_FALSE;
 	slot->qs_end_of_stream = last_one;
 	memcpy(slot->qs_item, item, queue->zq_item_size);
