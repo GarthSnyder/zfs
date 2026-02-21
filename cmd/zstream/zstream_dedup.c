@@ -41,10 +41,10 @@
 #include "zstream_dedup.h"
 #include "linear_hash.h"
 #include "linear_hash_stats.h"
+#include "zstream_fletcher4.h"
+#include "zstream_io.h"
 #include "zstream_shared.h"
-#include "zstream_queue.h"
-#include "zstream_stream.h"
-#include "zstream_chain.h"
+#include "zstream_blake3.h"
 
 #define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
 #define SMALLEST_REASONABLE_DEDUP_MB	128
@@ -52,10 +52,10 @@
 
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
-typedef struct drr_write drr_write;
+typedef struct drr_write drr_write_t;
 
 typedef struct {
-	drr_write		write_block;
+	drr_write_t		write_block;
 	zio_cksum_t		blake3_hash;
 	uint64_t		payload_length;
 } dedup_entry_t;
@@ -70,67 +70,13 @@ typedef struct dedup_stats {
 	hrtime_t	last_status_time;
 } dedup_stats_t;
 
-/* This is the packet passed to the feeder thread */
 typedef struct {
 	linear_hash_t	dc_table;
 	dedup_stats_t	dc_stats;
-	zstream_queue_t	dc_queue;
-	FILE			*dc_input;
 } dedup_context_t;
 
-typedef struct {
-	dmu_replay_record_t	drr;
-	uint8_t			*payload;
-	uint64_t		payload_size;
-	zio_cksum_t		blake3_hash;
-} blake3_queue_item;
-
-typedef struct {
-	dmu_replay_record_t	drr;
-	uint8_t			*payload;
-	uint64_t		payload_size;
-	zio_cksum_t		fletcher4_record;
-	zio_cksum_t		fletcher4_payload;
-} fletcher4_queue_item;
-
-/*
- * Print status update to stderr.
- */
-static void
-print_status(dedup_stats_t *stats, boolean_t force)
-{
-	hrtime_t now = gethrtime();
-	char bytes_read_str[32];
-	char bytes_saved_str[32];
-	double saved_pct;
-
-	if (!force && (now - stats->last_status_time) < STATUS_UPDATE_INTERVAL)
-		return;
-
-	zfs_nicenum(stats->bytes_read, bytes_read_str, sizeof (bytes_read_str));
-	zfs_nicenum(stats->bytes_saved, bytes_saved_str,
-	    sizeof (bytes_saved_str));
-
-	if (stats->bytes_read > 0) {
-		saved_pct = (double)stats->bytes_saved * 100.0 /
-		    (double)stats->bytes_read;
-	} else {
-		saved_pct = 0.0;
-	}
-
-	fprintf(stderr, "\r%lu total blocks, %llu writes, %llu deduped | "
-	    "%sB read / %sB saved (%.1f%%)    \n",
-	    stats->total_records,
-	    (unsigned long long)stats->write_records,
-	    (unsigned long long)stats->dedup_records,
-	    bytes_read_str, bytes_saved_str, saved_pct);
-	fflush(stderr);
-
-	stats->last_status_time = now;
-}
-
 static boolean_t
-writes_compatible(const drr_write *this, const drr_write *prev) {
+writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 	if (this->drr_type != prev->drr_type
 		|| this->drr_logical_size != prev->drr_logical_size
 		|| this->drr_compressiontype != prev->drr_compressiontype
@@ -171,187 +117,160 @@ dedup_table_insert(linear_hash_t ddt, zio_cksum_t *blake3,
 	lh_insert(ddt, BLAKE3_64_BIT(blake3), &dedup);
 }
 
-/*
- * Deduplicate a ZFS stream.
- */
 static void
-zfs_dedup_stream(zstream_queue_t queue, int outfd, linear_hash_t ddt, boolean_t verbose)
+maybe_print_update(dedup_context_t *context, boolean_t force)
 {
-	blake3_queue_item		item;
-	dmu_replay_record_t		*drr = &item.drr;
-	zio_cksum_t 			stream_cksum;
-	dedup_stats_t 			stats;
-	dedup_entry_t				existing;
+	dedup_stats_t *stats = &context->dc_stats;
+	hrtime_t now = gethrtime();
+	char bytes_read_str[32];
+	char bytes_saved_str[32];
+	double saved_pct;
 
-	struct drr_begin 		*drrb = &drr->drr_u.drr_begin;
-	struct drr_end			*drre = &drr->drr_u.drr_end;
-	struct drr_write		*drrw = &drr->drr_u.drr_write;
-	struct drr_checksum		*drrc = &drr->drr_u.drr_checksum;
-
-	memset(&stats, 0, sizeof (stats));
-	stats.last_status_time = gethrtime();
-
-	while (zstream_dequeue(queue, &item))
-	{
-		ZIO_SET_CHECKSUM(&drrc->drr_checksum, 0, 0, 0, 0);
-		stats.bytes_read += sizeof(*drr) + item.payload_size;
-
-		switch (drr->drr_type) {
-
-		case DRR_BEGIN:
-			uint32_t fflags;
-			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
-			fflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
-			if (fflags & DMU_BACKUP_FEATURE_DEDUP) {
-				fprintf(stderr, "Input stream is already deduplicated.\n"
-					"To re-deduplicate, pipe through zstream redup first.\n");
-				exit(1);
-			}
-			fflags |= DMU_BACKUP_FEATURE_DEDUP;
-			/* cppcheck-suppress syntaxError */
-			DMU_SET_FEATUREFLAGS(drrb->drr_versioninfo, fflags);
-			break;
-
-		case DRR_END:
-			drre->drr_checksum = stream_cksum;
-			break;
-
-		case DRR_WRITE:
-			stats.write_records++;
-			zio_cksum_t *blake3 = &item.blake3_hash;
-			if (dedup_table_lookup(ddt, blake3, &existing)) {
-				if (!writes_compatible(drrw, &existing.write_block)) {
-					stats.disqualified_records++;
-				} else {
-					struct drr_write_byref byref = {
-						.drr_refguid = existing.write_block.drr_toguid,
-						.drr_refobject = existing.write_block.drr_object,
-						.drr_refoffset = existing.write_block.drr_offset,
-						.drr_object = drrw->drr_object,
-						.drr_offset = drrw->drr_offset,
-						.drr_toguid = drrw->drr_toguid,
-						.drr_length = drrw->drr_logical_size,
-						.drr_checksumtype = drrw->drr_checksumtype,
-						.drr_flags = drrw->drr_flags,
-						.drr_key = drrw->drr_key
-					};
-
-					memset(drr, 0, sizeof(*drr));
-					drr->drr_u.drr_write_byref = byref;
-					drr->drr_type = DRR_WRITE_BYREF;
-					drr->drr_payloadlen = 0;
-
-					stats.dedup_records++;
-					stats.bytes_saved += item.payload_size;
-
-					if (item.payload_size) {
-						free(item.payload);
-					}
-					item.payload = NULL;
-					item.payload_size = 0;
-				}
-			} else {
-				/* First occurrence, insert into table and write as-is */
-				dedup_table_insert(ddt, blake3, drr);
-			}
-			break;
-
-		default:
-			/* Pass through all other record types unchanged */
-			break;
-		}
-
-		stats.total_records += 1;
-		dump_record(drr, item.payload, item.payload_size, &stream_cksum, outfd);
-		if (item.payload_size) {
-			free(item.payload);
-		}
-		if (verbose) {
-			print_status(&stats, B_FALSE);
-		}
+	if (!force && now - stats->last_status_time < STATUS_UPDATE_INTERVAL) {
+		return;
 	}
 
-	if (verbose) {
-		print_status(&stats, B_TRUE);
-		fprintf(stderr, "\n");
-		char mem_str[32];
-		zfs_nicenum(lh_get_mem_highwater(ddt), mem_str, sizeof (mem_str));
-		fprintf(stderr,
-		    "Processed %llu total records, including %llu write "
-		    "records.\n",
-		    (unsigned long long)stats.total_records,
-		    (unsigned long long)stats.write_records);
-		fprintf(stderr,
-		    "Deduplicated %llu blocks, using %sB memory.\n",
-		    (unsigned long long)stats.dedup_records, mem_str);
-		if (stats.disqualified_records) {
-			fprintf(stderr, "%lu write records were exempt from deduplication\n",
-				stats.disqualified_records);
-		}
-		fprintf(stderr, "\n");
-		lh_print_stats(ddt);
+	zfs_nicenum(stats->bytes_read, bytes_read_str, sizeof (bytes_read_str));
+	zfs_nicenum(stats->bytes_saved, bytes_saved_str,
+	    sizeof (bytes_saved_str));
+
+	if (stats->bytes_read > 0) {
+		saved_pct = (double)stats->bytes_saved * 100.0 /
+		    (double)stats->bytes_read;
+	} else {
+		saved_pct = 0.0;
 	}
+
+	fprintf(stderr, "\r%lu total blocks, %llu writes, %llu deduped | "
+	    "%sB read / %sB saved (%.1f%%)    \n",
+	    stats->total_records,
+	    (unsigned long long)stats->write_records,
+	    (unsigned long long)stats->dedup_records,
+	    bytes_read_str, bytes_saved_str, saved_pct);
+	fflush(stderr);
+
+	stats->last_status_time = now;
 }
 
-/* Callback that enqueues records on the zstream_queue */
 static void
-enqueue_record(dmu_replay_record_t *drr, uint8_t **payload,
-	uint32_t *payload_size, void *queue)
+print_summary(dedup_context_t *context) {
+	dedup_stats_t *stats = &context->dc_stats;
+	maybe_print_update(context, B_TRUE);
+	fprintf(stderr, "\n");
+	char mem_str[32];
+	zfs_nicenum(lh_get_mem_highwater(context->dc_table), mem_str,
+		sizeof (mem_str));
+	fprintf(stderr,
+	    "Processed %llu total records, including %llu write "
+	    "records.\n",
+	    (unsigned long long)stats->total_records,
+	    (unsigned long long)stats->write_records);
+	fprintf(stderr,
+	    "Deduplicated %llu blocks, using %sB memory.\n",
+	    (unsigned long long)stats->dedup_records, mem_str);
+	if (stats->disqualified_records) {
+		fprintf(stderr, "%lu write records were exempt from deduplication\n",
+			stats->disqualified_records);
+	}
+	fprintf(stderr, "\n");
+	lh_print_stats(context->dc_table);
+}
+
+static boolean_t
+chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
+	chain_attrs_t chain)
 {
-	blake3_queue_item item = {
-		.drr = *drr,
-		.payload = *payload,
-		.payload_size = *payload_size
+	dmu_replay_record_t	*drr = &item->dp_base.dp_drr;
+	struct drr_write	*drrw = &drr->drr_u.drr_write;
+	dedup_stats_t		*stats = &context->dc_stats;
+	zio_cksum_t			*blake3 = &item->dp_blake3_payload;
+	linear_hash_t		dd_table = context->dc_table;
+	dedup_entry_t		existing;
+
+	if (item == NULL && (chain->ca_flags & CA_VERBOSE)) {
+		print_summary(context);
+		return B_TRUE;
+	}
+
+	stats->total_records++;
+	stats->bytes_read += sizeof(*drr) + item->dp_base.dp_payload_size;
+	stats->last_status_time = gethrtime();
+
+	if (drr->drr_type != DRR_WRITE) {
+		return B_TRUE;
+	}
+
+	stats->write_records++;
+	if (!dedup_table_lookup(dd_table, blake3, &existing)) {
+		dedup_table_insert(dd_table, blake3, drr);
+		return B_TRUE;
+	}
+	if (!writes_compatible(drrw, &existing.write_block)) {
+		stats->disqualified_records++;
+		return B_TRUE;
+	}
+
+	struct drr_write_byref byref = {
+		.drr_refguid = existing.write_block.drr_toguid,
+		.drr_refobject = existing.write_block.drr_object,
+		.drr_refoffset = existing.write_block.drr_offset,
+		.drr_object = drrw->drr_object,
+		.drr_offset = drrw->drr_offset,
+		.drr_toguid = drrw->drr_toguid,
+		.drr_length = drrw->drr_logical_size,
+		.drr_checksumtype = drrw->drr_checksumtype,
+		.drr_flags = drrw->drr_flags,
+		.drr_key = drrw->drr_key
 	};
-	zstream_enqueue(queue, &item);
+
+	memset(drr, 0, sizeof(*drr));
+	drr->drr_u.drr_write_byref = byref;
+	drr->drr_type = DRR_WRITE_BYREF;
+	drr->drr_payloadlen = 0;
+
+	stats->dedup_records++;
+	stats->bytes_saved += item->dp_base.dp_payload_size;
+
+	if (item->dp_base.dp_payload_size) {
+		free(item->dp_base.dp_payload);
+	}
+	item->dp_base.dp_payload = NULL;
+	item->dp_base.dp_payload_size = 0;
+
+	if (chain->ca_flags & CA_VERBOSE) {
+		maybe_print_update(context, B_FALSE);
+	}
+	return B_TRUE;
 }
 
-/* This is the feeder thread function */
-static int
-enqueue_stream(void *context_in) {
-	dedup_context_t *context = (dedup_context_t *)context_in;
-	stream_filter_t filter = {};
-	filter.all_records_post = enqueue_record;
-	read_stream(context->dc_input, -1, &filter, 1, B_TRUE, context->dc_queue);
-	zstream_queue_fini(context->dc_queue);
-	return 0;
+static chain_step_t
+serial_dedup_writes(linear_hash_t dedup_table) {
+	static dedup_context_t context = {};
+	context.dc_table = dedup_table;
+	return (chain_step_t) {
+		.cs_type = CS_SERIAL,
+		.cs_out_size = sizeof(drr_packet_t),
+		.serial = {
+			.css_process = (zc_serial_process_f *)chain_dedup_writes,
+			.css_context = &context
+		}
+	};
 }
-
-/* This is the zstream_queue worker function */
-static void
-calculate_blake3_hash(blake3_queue_item *item)
-{
-    BLAKE3_CTX ctx;
-    Blake3_Init(&ctx);
-    Blake3_Update(&ctx, item->payload, item->payload_size);
-    Blake3_Final(&ctx, (uint8_t *)&item->blake3_hash);
-}
-
-/* This is the zstream_queue cost estimate function */
-static size_t
-estimate_hashing_cost(blake3_queue_item *item)
-{
-	return (item->drr.drr_type == DRR_WRITE) ? item->payload_size : 0;
-}
-
 
 int
 zstream_do_dedup(int argc, char *argv[])
 {
-	boolean_t 		verbose = B_FALSE;
-	int 			mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
-	const char 		*cache_dir = NULL;
-	FILE			*input;
-	int 			c;
-	dedup_context_t	feeder_context;
-	zstream_queue_t	hasher_queue;
-	thrd_t			feeder_thread;
+	struct chain_attrs	attrs = {};
+	int 				mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
+	const char 			*cache_dir = NULL;
+	FILE				*input;
+	int 				c;
 	linear_hash_t		dedup_table;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
 		switch (c) {
 		case 'v':
-			verbose = B_TRUE;
+			attrs.ca_flags |= CA_VERBOSE;
 			break;
 		case 'm':
 			mem_percent = atoi(optarg);
@@ -426,154 +345,21 @@ zstream_do_dedup(int argc, char *argv[])
 		input = stdin;
 	}
 
-	zq_params_t params = {
-		.qp_process = (zq_process_item_f *)calculate_blake3_hash,
-		.qp_estimate_cost = (zq_estimate_cost_f *)estimate_hashing_cost,
-		.qp_item_size = sizeof(blake3_queue_item),
-		.qp_batch_budget = 64 * 1024,
-		.qp_queue_length = 256
+	zstream_chain_t dedup_chain = {
+		serial_read_stream((argc == 1) ? argv[0] : NULL),
+		parallel_calc_fletcher4(),
+		serial_validate_fletcher4(),
+		parallel_calc_blake3(),
+		serial_dedup_writes(dedup_table),
+		parallel_calc_fletcher4(),
+		serial_add_fletcher4(),
+		serial_write_stream(NULL)
 	};
-	hasher_queue = zstream_queue_create(&params);
-	feeder_context.dc_queue = hasher_queue;
-	feeder_context.dc_input = input;
 
-	if (thrd_create(&feeder_thread, enqueue_stream, &feeder_context)
-		!= thrd_success)
-	{
-		fprintf(stderr, "Error creating feeder thread\n");
-		exit(1);
-	}
-
-	fletcher_4_init();
-	zfs_dedup_stream(hasher_queue, STDOUT_FILENO, dedup_table, verbose);
-	thrd_join(feeder_thread, NULL);
-	fletcher_4_fini();
+	zstream_chain_exec(dedup_chain, &attrs,
+		sizeof(dedup_chain) / sizeof(chain_step_t));
 	lh_destroy(dedup_table);
 	return 0;
 }
 
-static void
-maybe_print_update(dedup_context_t *context, boolean_t force)
-{
-	dedup_stats_t *stats = &context->dc_stats;
-	hrtime_t now = gethrtime();
-	char bytes_read_str[32];
-	char bytes_saved_str[32];
-	double saved_pct;
-
-	if (!force && now - stats->last_status_time < STATUS_UPDATE_INTERVAL) {
-		return;
-	}
-
-	zfs_nicenum(stats->bytes_read, bytes_read_str, sizeof (bytes_read_str));
-	zfs_nicenum(stats->bytes_saved, bytes_saved_str,
-	    sizeof (bytes_saved_str));
-
-	if (stats->bytes_read > 0) {
-		saved_pct = (double)stats->bytes_saved * 100.0 /
-		    (double)stats->bytes_read;
-	} else {
-		saved_pct = 0.0;
-	}
-
-	fprintf(stderr, "\r%lu total blocks, %llu writes, %llu deduped | "
-	    "%sB read / %sB saved (%.1f%%)    \n",
-	    stats->total_records,
-	    (unsigned long long)stats->write_records,
-	    (unsigned long long)stats->dedup_records,
-	    bytes_read_str, bytes_saved_str, saved_pct);
-	fflush(stderr);
-
-	stats->last_status_time = now;
-}
-
-static void
-print_summary(dedup_context_t *context) {
-	dedup_stats_t *stats = &context->dc_stats;
-	maybe_print_update(context, B_TRUE);
-	fprintf(stderr, "\n");
-	char mem_str[32];
-	zfs_nicenum(lh_get_mem_highwater(context->dc_table), mem_str,
-		sizeof (mem_str));
-	fprintf(stderr,
-	    "Processed %llu total records, including %llu write "
-	    "records.\n",
-	    (unsigned long long)stats->total_records,
-	    (unsigned long long)stats->write_records);
-	fprintf(stderr,
-	    "Deduplicated %llu blocks, using %sB memory.\n",
-	    (unsigned long long)stats->dedup_records, mem_str);
-	if (stats->disqualified_records) {
-		fprintf(stderr, "%lu write records were exempt from deduplication\n",
-			stats->disqualified_records);
-	}
-	fprintf(stderr, "\n");
-	lh_print_stats(context->dc_table);
-}
-
-static void
-chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
-	chain_attrs_t chain)
-{
-	dmu_replay_record_t	*drr = &item->dp_base.dp_drr;
-	struct drr_write	*drrw = &drr->drr_u.drr_write;
-	dedup_stats_t		*stats = &context->dc_stats;
-	zio_cksum_t		*blake3 = &item->dp_blake3_payload;
-	linear_hash_t		dd_table = context->dc_table;
-	dedup_entry_t		existing;
-
-	if (item == NULL && (chain->ca_flags & CA_VERBOSE)) {
-		print_summary(context);
-		return;
-	}
-
-	stats->total_records++;
-	stats->bytes_read += sizeof(*drr) + item->dp_base.dp_payload_size;
-	stats->last_status_time = gethrtime();
-
-	if (drr->drr_type != DRR_WRITE) {
-		return;
-	}
-
-	stats->write_records++;
-	if (!dedup_table_lookup(dd_table, blake3, &existing)) {
-		dedup_table_insert(dd_table, blake3, drr);
-		return;
-	}
-	if (!writes_compatible(drrw, &existing.write_block)) {
-		stats->disqualified_records++;
-		return;
-	}
-
-	struct drr_write_byref byref = {
-		.drr_refguid = existing.write_block.drr_toguid,
-		.drr_refobject = existing.write_block.drr_object,
-		.drr_refoffset = existing.write_block.drr_offset,
-		.drr_object = drrw->drr_object,
-		.drr_offset = drrw->drr_offset,
-		.drr_toguid = drrw->drr_toguid,
-		.drr_length = drrw->drr_logical_size,
-		.drr_checksumtype = drrw->drr_checksumtype,
-		.drr_flags = drrw->drr_flags,
-		.drr_key = drrw->drr_key
-	};
-
-	memset(drr, 0, sizeof(*drr));
-	drr->drr_u.drr_write_byref = byref;
-	drr->drr_type = DRR_WRITE_BYREF;
-	drr->drr_payloadlen = 0;
-
-	stats->dedup_records++;
-	stats->bytes_saved += item->dp_base.dp_payload_size;
-
-	if (item->dp_base.dp_payload_size) {
-		free(item->dp_base.dp_payload);
-	}
-	item->dp_base.dp_payload = NULL;
-	item->dp_base.dp_payload_size = 0;
-
-	if (chain->ca_flags & CA_VERBOSE) {
-		maybe_print_update(context, B_FALSE);
-	}
-}
 

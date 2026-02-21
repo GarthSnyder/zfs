@@ -23,6 +23,7 @@
 
 #include "zstream_io.h"
 #include "zstream_chain.h"
+#include "zstream_shared.h"
 
 /* Init only the filename, chain_read_stream will prepare the FILE *. */
 typedef struct {
@@ -60,7 +61,7 @@ setup_io(const char *filename, boolean_t for_reading) {
 	next_io_context++;
 	io_contexts[context] = (io_context_t) {
 		.ic_filename = filename,
-		.ic_for_reading
+		.ic_for_reading = for_reading
 	};
 	return (chain_step_t) {
 		.cs_type = CS_SERIAL,
@@ -79,7 +80,7 @@ open_file(io_context_t *context) {
 		context->ic_fp = fopen(context->ic_filename,
 			context->ic_for_reading ? "r" : "w+");
 		if (!context->ic_fp) {
-			perror(context->rc_filename);
+			perror(context->ic_filename);
 			exit(1);
 		}
 	} else if (context->ic_for_reading && isatty(STDIN_FILENO)) {
@@ -102,15 +103,15 @@ open_file(io_context_t *context) {
 static boolean_t
 chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 {
-	struct dmu_replay_record_t *drr = &item->dp_drr;
+	dmu_replay_record_t *drr = &item->dp_drr;
 
-	if (!ctxt->rc_fp) {
+	if (!ctxt->ic_fp) {
 		open_file(ctxt);
 	}
 	if (fread(drr, sizeof(dmu_replay_record_t), 1,
 		ctxt->ic_fp) == 0)
 	{
-		if (ferror(ctxt->rc_fp)) {
+		if (ferror(ctxt->ic_fp)) {
 			fprintf(stderr, "Error reading stream: %s\n",
 			    strerror(errno));
 			exit(1);
@@ -128,12 +129,12 @@ chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 			exit(1);
 		}
 	}
-	payload_size =(chain->ca_flags & CA_BYTESWAPPED) ?
+	size_t payload_size =(chain->ca_flags & CA_BYTESWAPPED) ?
 		BSWAP_32(drr->drr_payloadlen) : drr->drr_payloadlen;
 	if (payload_size) {
 		item->dp_payload = safe_malloc(payload_size);
 		size_t items_read = fread(item->dp_payload,
-			payload_size, 1, context->rc_fp);
+			payload_size, 1, ctxt->ic_fp);
 		if (items_read != 1) {
 			fprintf(stderr, "Error reading record payload "
 				" at offset %lu", ctxt->ic_offset);
@@ -144,16 +145,17 @@ chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 	}
 	item->dp_payload_size = payload_size;
 	item->dp_stream_offset = ctxt->ic_offset;
-	context->ic_offset += sizeof(*drr) + payload_size;
+	ctxt->ic_offset += sizeof(*drr) + payload_size;
 	return B_TRUE;
 }
 
 static boolean_t
-chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
+chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t attrs)
 {
-	struct dmu_replay_record_t *drr = &item->dp_drr;
+	(void) attrs;
+	dmu_replay_record_t *drr = &item->dp_drr;
 
-	if (!ctxt->rc_fp) {
+	if (!ctxt->ic_fp) {
 		open_file(ctxt);
 	}
 	if (!item) {
@@ -166,7 +168,7 @@ chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 		fprintf(stderr, "Error writing record: %s\n",
 		    strerror(errno));
 		exit(1);
-	} else if (item->payload_size > 0) {
+	} else if (item->dp_payload_size > 0) {
 		if (fwrite(item->dp_payload, item->dp_payload_size,
 			1, ctxt->ic_fp) != 1)
 		{

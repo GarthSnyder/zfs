@@ -24,19 +24,35 @@
 extern "C" {
 #endif
 
-#include "zstream_chain.h"
-#include "zstream_chain_types.h"
+#include "zstream_io.h"
 
 #define MAX_FLETCHER_4 8	/* Max cksum ops in one chain */
 
-chain_step_t
-parallel_calc_fletcher4();
+/*
+ * Fletcher 4 incremental blocks are limited to 8MB in size, and some ZFS
+ * payloads can be significantly larger than this, notably DRR_WRITE blocks
+ * and DRR_BEGIN blocks with long nvlists. The single preallocated checksum
+ * block will capture the majority of cases. If more checksum blocks are
+ * needed, they must be allocated dynamically.
+ *
+ * It's likely pointless to precalculate the header checksum since the
+ * amount of data involved is small. This allows payloadless records to
+ * circumvent multithreaded dispatching altogether.
+ */
+typedef struct {
+	drr_packet_t	dp_base;
+	zio_cksum_t	dp_fletcher4_payload;
+	zio_cksum_t	*dp_fletcher4_overflow;
+} drr_fletcher4_t;
 
 chain_step_t
-serial_validate_fletcher4();
+parallel_calc_fletcher4(void);
 
 chain_step_t
-serial_add_fletcher4();
+serial_validate_fletcher4(void);
+
+chain_step_t
+serial_add_fletcher4(void);
 
 #ifdef __cplusplus
 }

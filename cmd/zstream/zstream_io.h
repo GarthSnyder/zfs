@@ -24,9 +24,18 @@
 extern "C" {
 #endif
 
+#include <sys/types.h>
 #include "zstream_chain.h"
 
 #define MAX_IO_STREAMS 4
+
+typedef struct {
+	dmu_replay_record_t	dp_drr;
+	uint8_t			*dp_payload;
+	uint32_t		dp_payload_size;
+	off_t			dp_stream_offset;
+} drr_packet_t;
+
 
 chain_step_t
 serial_read_stream(const char *filename);

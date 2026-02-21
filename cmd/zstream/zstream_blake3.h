@@ -17,16 +17,26 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ZSTREAM_CHAIN_TYPES_H
-#define _ZSTREAM_CHAIN_TYPES_H
+#ifndef _ZSTREAM_BLAKE3_H
+#define _ZSTREAM_BLAKE3_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#include <sys/zfs_ioctl.h>
+#include "zstream_io.h"
+
+typedef struct {
+	drr_packet_t	dp_base;
+	zio_cksum_t	dp_blake3_payload;
+} drr_blake3_t;
+
+chain_step_t
+parallel_calc_blake3(void);
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* _ZSTREAM_CHAIN_TYPES_H */
-
+#endif  /* _ZSTREAM_BLAKE3_H */

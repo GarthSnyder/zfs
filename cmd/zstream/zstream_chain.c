@@ -1,4 +1,5 @@
 #include "zstream_chain.h"
+#include "zstream_io.h"
 
 /*
  * Execute a chain
@@ -144,7 +145,7 @@ zstream_chain_worker(worker_context_t *context) {
 	repeat: for (int i = context->wc_first; i <= context->wc_last; i++) {
 		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
 			uint8_t *arg = done ? NULL : buffer;
-			done = done || ci->ci_chain[i].serial.css_process(arg,
+			done = done || !ci->ci_chain[i].serial.css_process(arg,
 				ci->ci_chain[i].serial.css_context,
 				ci->ci_attrs);
 		} else if (i == context->wc_first) {

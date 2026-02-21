@@ -15,8 +15,6 @@ zstream_SOURCES = \
 	%D%/zstream_token.c \
 	%D%/zstream_shared.c \
 	%D%/zstream_shared.h \
-	%D%/zstream_stream.c \
-	%D%/zstream_stream.h \
 	%D%/zstream_queue.c \
 	%D%/zstream_queue.h \
 	%D%/zstream_chain.c \
@@ -24,6 +22,10 @@ zstream_SOURCES = \
 	%D%/zstream_chain_types.h \
 	%D%/zstream_fletcher4.c \
 	%D%/zstream_fletcher4.h \
+	%D%/zstream_blake3.c \
+	%D%/zstream_blake3.h \
+	%D%/zstream_io.c \
+	%D%/zstream_io.h \
 	%D%/allocator.c \
 	%D%/allocator.h \
 	%D%/linear_hash.c \
