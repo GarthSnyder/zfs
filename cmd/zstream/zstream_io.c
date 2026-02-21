@@ -104,6 +104,7 @@ static boolean_t
 chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
+	size_t payload_size;
 
 	if (!ctxt->ic_fp) {
 		open_file(ctxt);
@@ -129,8 +130,25 @@ chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 			exit(1);
 		}
 	}
-	size_t payload_size =(chain->ca_flags & CA_BYTESWAPPED) ?
-		BSWAP_32(drr->drr_payloadlen) : drr->drr_payloadlen;
+	/* TODO: This code probably needs byteswapping */
+	switch (drr->drr_type) {
+	case DRR_OBJECT:
+		payload_size = DRR_OBJECT_PAYLOAD_SIZE(&drr->drr_u.drr_object);
+		break;
+	case DRR_WRITE:
+		payload_size = DRR_WRITE_PAYLOAD_SIZE(&drr->drr_u.drr_write);
+		break;
+	case DRR_SPILL:
+		payload_size = DRR_SPILL_PAYLOAD_SIZE(&drr->drr_u.drr_spill);
+		break;
+	case DRR_WRITE_EMBEDDED:
+		payload_size =
+			P2ROUNDUP(drr->drr_u.drr_write_embedded.drr_psize, 8);
+		break;
+	default:
+		payload_size =(chain->ca_flags & CA_BYTESWAPPED) ?
+			BSWAP_32(drr->drr_payloadlen) : drr->drr_payloadlen;
+	}
 	if (payload_size) {
 		item->dp_payload = safe_malloc(payload_size);
 		size_t items_read = fread(item->dp_payload,

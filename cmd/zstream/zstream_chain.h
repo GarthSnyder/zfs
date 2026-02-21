@@ -94,6 +94,17 @@ typedef struct chain_step {
 typedef chain_step_t zstream_chain_t[];
 
 /*
+ * Serialize chain execution for debugging. This option forces all chains to
+ * execute in a completely nonconcurrent and record-sequential fashion.
+ * There are no worker threads, and each record traverses the entire chain
+ * before execution returns to the head of the chain.
+ *
+ * Serialized execution should be logically identical to normal execution.
+ * If it does not yield identical results, there's a bug somewhere.
+ */
+extern boolean_t serialize_chains;
+
+/*
  * Execute a chain. This function returns once execution is complete. The
  * individual chain steps are unmodified and may be reused.
  */

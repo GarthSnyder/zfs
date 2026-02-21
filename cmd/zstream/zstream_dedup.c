@@ -356,6 +356,7 @@ zstream_do_dedup(int argc, char *argv[])
 		serial_write_stream(NULL)
 	};
 
+	// serialize_chains = B_TRUE;
 	zstream_chain_exec(dedup_chain, &attrs,
 		sizeof(dedup_chain) / sizeof(chain_step_t));
 	lh_destroy(dedup_table);

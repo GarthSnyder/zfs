@@ -218,10 +218,10 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 		(drr->drr_type == DRR_END && !drr->drr_u.drr_end.drr_toguid);
 
 	fletcher4_init_once();
-	if (drr->drr_type == DRR_END) {
+	if (drr->drr_type == DRR_END && !skip_record_cksum) {
 		if (operation == F4_SET) {
 			*end_cksum = *stream_cksum;
-		} else {
+		} else if (!skip_record_cksum) {
 			validate_or_exit(stream_cksum, end_cksum,
 				"in DRR_END record");
 		}
@@ -238,6 +238,8 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 				"at end of DRR record");
 		}
 	}
+	fletcher_4_incremental_native(&drr->drr_u.drr_checksum.drr_checksum,
+		sizeof(drr->drr_u.drr_checksum.drr_checksum), stream_cksum);
 	assemble_payload_cksum(item, stream_cksum);
 	return B_TRUE;
 }

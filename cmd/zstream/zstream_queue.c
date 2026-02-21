@@ -136,13 +136,13 @@ thread_pool_spindown(void) {
 }
 
 static void
-unlock_mutex(pthread_mutex_t *mutex) {
+auto_unlock_mutex(pthread_mutex_t *mutex) {
 	pthread_mutex_unlock(mutex);
 }
 
 static void
 await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex) {
-	pthread_cleanup_push((pthread_cleanup_f *)unlock_mutex, mutex);
+	pthread_cleanup_push((pthread_cleanup_f *)auto_unlock_mutex, mutex);
 	pthread_cond_wait(cond, mutex);
 	pthread_cleanup_pop(0);
 }
@@ -220,8 +220,10 @@ claim_batch(zstream_queue_t queue, queue_slot_t **batch)
 
 	pthread_mutex_lock(&queue->zq_mutex);
 
-	while (queue->zq_claim < queue->zq_enqueue && count < MAX_BATCH &&
-		(!queue->zq_batch_budget || (cost_claimed < queue->zq_batch_budget)))
+	while (queue->zq_claim < queue->zq_enqueue &&
+		count < MAX_BATCH &&
+		((!queue->zq_batch_budget && !count) ||
+		    	cost_claimed < queue->zq_batch_budget))
 	{
 		uint64_t slot_num = queue->zq_claim % queue->zq_num_slots;
 		queue_slot_t *slot = &queue->zq_slots[slot_num];
@@ -249,37 +251,37 @@ claim_batch(zstream_queue_t queue, queue_slot_t **batch)
  * is attempting to pick a queue. See note in zstream_enqueue_impl().
  */
 static zstream_queue_t
-assign_thread_to_queue(void) {
+assign_thread_to_queue(void)
+{
 	pthread_mutex_lock(&pool.tp_mutex);
-	while (B_TRUE) {
-		double scale = 0.0;
-		double cum_weights[MAX_QUEUES];
-		if (pool.tp_num_queues) {
-			for (int i = 0; i < pool.tp_num_queues; i++) {
-				zstream_queue_t queue = pool.tp_queues[i];
-				int claimable_est = queue->zq_enqueue - queue->zq_claim;
-				int in_queue_est = queue->zq_enqueue - queue->zq_dequeue;
-				int open_slots_est = queue->zq_num_slots - in_queue_est;
-				double claim_factor = (double)claimable_est / CLAIM_FACTOR;
-				double slot_factor = (open_slots_est > 0) ?
-					(1.0 / open_slots_est) : 2.0;
-				double weight = fmin(1.0, slot_factor) * claim_factor;
-				cum_weights[i] = weight + ((i == 0) ? 0.0 : cum_weights[i-1]);
-			}
-			scale = cum_weights[pool.tp_num_queues - 1];
+	double scale, cum_weights[MAX_QUEUES];
+
+start:	if (pool.tp_num_queues) {
+		for (int i = 0; i < pool.tp_num_queues; i++) {
+			zstream_queue_t queue = pool.tp_queues[i];
+			int claimable_est = queue->zq_enqueue - queue->zq_claim;
+			int in_queue_est = queue->zq_enqueue - queue->zq_dequeue;
+			int open_slots_est = queue->zq_num_slots - in_queue_est;
+			double claim_factor = (double)claimable_est / CLAIM_FACTOR;
+			double slot_factor = (open_slots_est > 0) ?
+				(1.0 / open_slots_est) : 2.0;
+			double weight = fmin(1.0, slot_factor) * claim_factor;
+			cum_weights[i] = weight + ((i == 0) ? 0.0 : cum_weights[i-1]);
 		}
-		if (scale < 0.0001) {
-			await_condition(&pool.tp_enqueued, &pool.tp_mutex);
-			continue;
-		} else {
-			double select_val = drand48() * scale;
-			for (int i = 0; i < pool.tp_num_queues; i++) {
-				if (select_val <= cum_weights[i]) {
-					zstream_queue_t selected_queue = pool.tp_queues[i];
-					pthread_mutex_unlock(&pool.tp_mutex);
-					return selected_queue;
-				}
+		scale = cum_weights[pool.tp_num_queues - 1];
+	}
+	if (scale < 0.0001) {
+		await_condition(&pool.tp_enqueued, &pool.tp_mutex);
+		goto start;
+	} else {
+		double select_val = drand48() * scale;
+		for (int i = 0; i < pool.tp_num_queues; i++) {
+			if (select_val <= cum_weights[i]) {
+				zstream_queue_t selected_queue = pool.tp_queues[i];
+				pthread_mutex_unlock(&pool.tp_mutex);
+				return selected_queue;
 			}
+			abort();
 		}
 	}
 }
@@ -332,8 +334,8 @@ zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last_one
 	 * subject to skew among queues. It's possible for that function to conclude
 	 * that no work is available in any queue even though something has been
 	 * recently enqueued. If no one is listening when the enqueue signal is
-	 * sent, the signal would be dropped. So, the sender must ensure that no
-	 * thread is in the queue assignment step when the signal is sent.
+	 * sent, the signal can potentially be dropped. So, the sender must ensure
+	 * that no thread is in the queue assignment step when the signal is sent.
 	 */
 	pthread_mutex_lock(&pool.tp_mutex);
 	pthread_cond_signal(&pool.tp_enqueued);
@@ -360,6 +362,7 @@ zstream_queue_destroy(zstream_queue_t queue) {
 	pthread_cond_destroy(&queue->zq_completed);
 	pthread_cond_destroy(&queue->zq_dequeued);
 	free(queue->zq_slots);
+	queue->zq_slots = NULL;
 	free(queue);
 	if (pool.tp_num_queues == 1) {
 		thread_pool_spindown();
