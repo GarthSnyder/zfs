@@ -150,22 +150,20 @@ zstream_chain_worker(worker_context_t *context)
 	chain_info_t ci = context->wc_chain_info;
 	uint8_t buffer[ci->ci_item_size];
 	boolean_t done = B_FALSE;
-	boolean_t more;
 
 	while (!done) {
 	    for (int i = context->wc_first; i <= context->wc_last; i++) {
-		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
-			uint8_t *arg = done ? NULL : buffer;
-			done = done || !ci->ci_chain[i].serial.css_process(arg,
-				ci->ci_chain[i].serial.css_context,
-				ci->ci_attrs);
+	    	chain_step_t *step = &ci->ci_chain[i];
+	    	zstream_queue_t queue = ci->ci_queues[i];
+		if (step->cs_type == CS_SERIAL) {
+			done = !step->serial.css_process(done ? NULL : buffer,
+				step->serial.css_context, ci->ci_attrs) || done;
 		} else if (i == context->wc_first) {
-			more = zstream_dequeue(ci->ci_queues[i], buffer);
-			done = done || !more;
+			done = done || !zstream_dequeue(queue, buffer);
 		} else if (done) {
-			zstream_queue_fini(ci->ci_queues[i]);
+			zstream_queue_fini(queue);
 		} else {
-			zstream_enqueue(ci->ci_queues[i], buffer);
+			zstream_enqueue(queue, buffer);
 		}
 	    }
 	}

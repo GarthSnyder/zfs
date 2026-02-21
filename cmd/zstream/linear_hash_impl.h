@@ -1,9 +1,29 @@
-#include "allocator.h"
-#include "linear_hash.h"
-#include "linear_hash_stats.h"
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * CDDL HEADER START
+ *
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
+ */
+
+/*
+ * Copyright (c) 2020 by Delphix. All rights reserved.
+ */
 
 #ifndef LINEAR_HASH_TYPES_H
 #define LINEAR_HASH_TYPES_H
+
+#include "allocator.h"
+#include "linear_hash.h"
+#include "linear_hash_stats.h"
 
 #define ENTRIES_PER_BUCKET 6
 
@@ -72,5 +92,7 @@ struct linear_hash {
 	allocator_t	lh_bucket_alloc;	/* Main buckets */
 	allocator_t	lh_overflow_alloc;	/* Overflow buckets */
 };
+
+typedef long long unsigned int llu;
 
 #endif /* LINEAR_HASH_TYPES_H */

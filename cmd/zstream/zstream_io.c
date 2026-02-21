@@ -17,6 +17,7 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+#include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
@@ -25,10 +26,13 @@
 #include "zstream_chain.h"
 #include "zstream_shared.h"
 
+#define STDIO_BUFSIZE 1024 * 1024
+
 /* Init only the filename, chain_read_stream will prepare the FILE *. */
 typedef struct {
 	const char	*ic_filename;
 	FILE		*ic_fp;
+	char		*ic_stdio_buffer;
 	boolean_t	ic_for_reading;
 	off_t		ic_offset;
 } io_context_t;
@@ -98,6 +102,8 @@ open_file(io_context_t *context) {
 	} else {
 		context->ic_fp = stdout;
 	}
+	context->ic_stdio_buffer = safe_malloc(STDIO_BUFSIZE);
+	setbuffer(context->ic_fp, context->ic_stdio_buffer, STDIO_BUFSIZE);
 }
 
 static boolean_t
@@ -109,14 +115,14 @@ chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 	if (!ctxt->ic_fp) {
 		open_file(ctxt);
 	}
-	if (fread(drr, sizeof(dmu_replay_record_t), 1,
-		ctxt->ic_fp) == 0)
-	{
+	if (fread(drr, sizeof(dmu_replay_record_t), 1, ctxt->ic_fp) == 0) {
 		if (ferror(ctxt->ic_fp)) {
 			fprintf(stderr, "Error reading stream: %s\n",
 			    strerror(errno));
 			exit(1);
 		} else {
+			fclose(ctxt->ic_fp);
+			free(ctxt->ic_stdio_buffer);
 			return B_FALSE;
 		}
 	}
@@ -178,6 +184,7 @@ chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t attrs)
 	}
 	if (!item) {
 		fclose(ctxt->ic_fp);
+		free(ctxt->ic_stdio_buffer);
 		return B_TRUE;
 	}
 	if (fwrite(drr, sizeof(dmu_replay_record_t), 1,

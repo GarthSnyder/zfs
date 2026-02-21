@@ -18,37 +18,19 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <assert.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <libzfs.h>
 #include <libzutil.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <umem.h>
-#include <unistd.h>
-#include <threads.h>
-#include <sys/blake3.h>
-#include <sys/ddt.h>
-#include <sys/debug.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/zfs_ioctl.h>
-#include "zfs_fletcher.h"
-#include "zstream.h"
-#include "zstream_dedup.h"
-#include "linear_hash.h"
+
 #include "linear_hash_stats.h"
+#include "zstream.h"
+#include "zstream_blake3.h"
 #include "zstream_fletcher4.h"
 #include "zstream_io.h"
 #include "zstream_shared.h"
-#include "zstream_blake3.h"
 
 #define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
 #define SMALLEST_REASONABLE_DEDUP_MB	128
-#define	STATUS_UPDATE_INTERVAL			(5ULL * NANOSEC)
+#define	STATUS_UPDATE_INTERVAL		(5ULL * NANOSEC)
 
 #define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
 
@@ -75,6 +57,8 @@ typedef struct {
 	dedup_stats_t	dc_stats;
 } dedup_context_t;
 
+typedef long long unsigned int llu;
+
 static boolean_t
 writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 	if (this->drr_type != prev->drr_type
@@ -93,7 +77,7 @@ writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
 static boolean_t
 dedup_table_lookup(linear_hash_t ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
 	lh_iterator_t iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(blake3));
-	/* 
+	/*
 	 * linear_hash hashes are only 64 bits, so a table match does not
 	 * guarantee an actual BLAKE3 match.
 	 */
@@ -121,33 +105,35 @@ static void
 maybe_print_update(dedup_context_t *context, boolean_t force)
 {
 	dedup_stats_t *stats = &context->dc_stats;
-	hrtime_t now = gethrtime();
+	hrtime_t now;
 	char bytes_read_str[32];
 	char bytes_saved_str[32];
 	double saved_pct;
 
+	if (!force && (stats->write_records & 0XFF) != 0) {
+		return;
+	}
+	now = getlrtime();
 	if (!force && now - stats->last_status_time < STATUS_UPDATE_INTERVAL) {
 		return;
 	}
 
 	zfs_nicenum(stats->bytes_read, bytes_read_str, sizeof (bytes_read_str));
 	zfs_nicenum(stats->bytes_saved, bytes_saved_str,
-	    sizeof (bytes_saved_str));
+		sizeof (bytes_saved_str));
 
 	if (stats->bytes_read > 0) {
 		saved_pct = (double)stats->bytes_saved * 100.0 /
-		    (double)stats->bytes_read;
+			(double)stats->bytes_read;
 	} else {
 		saved_pct = 0.0;
 	}
 
-	fprintf(stderr, "\r%lu total blocks, %llu writes, %llu deduped | "
-	    "%sB read / %sB saved (%.1f%%)    \n",
-	    stats->total_records,
-	    (unsigned long long)stats->write_records,
-	    (unsigned long long)stats->dedup_records,
-	    bytes_read_str, bytes_saved_str, saved_pct);
-	fflush(stderr);
+	fprintf(stderr, "\r%llu total blocks, %llu writes, %llu deduped | "
+		"%sB read / %sB saved (%.1f%%)    \n",
+		(llu)stats->total_records, (llu)stats->write_records,
+		(llu)stats->dedup_records, bytes_read_str, bytes_saved_str,
+		saved_pct);
 
 	stats->last_status_time = now;
 }
@@ -161,16 +147,13 @@ print_summary(dedup_context_t *context) {
 	zfs_nicenum(lh_get_mem_highwater(context->dc_table), mem_str,
 		sizeof (mem_str));
 	fprintf(stderr,
-	    "Processed %llu total records, including %llu write "
-	    "records.\n",
-	    (unsigned long long)stats->total_records,
-	    (unsigned long long)stats->write_records);
-	fprintf(stderr,
-	    "Deduplicated %llu blocks, using %sB memory.\n",
-	    (unsigned long long)stats->dedup_records, mem_str);
+		"Processed %llu total records, including %llu write "
+		"records (%llu deduped).\n", (llu)stats->total_records,
+		(llu)stats->write_records, (llu)stats->dedup_records);
+	fprintf(stderr, "Used %sB of hash table memory.\n", mem_str);
 	if (stats->disqualified_records) {
-		fprintf(stderr, "%lu write records were exempt from deduplication\n",
-			stats->disqualified_records);
+		fprintf(stderr, "%llu write records were exempt from deduplication\n",
+			(llu)stats->disqualified_records);
 	}
 	fprintf(stderr, "\n");
 	lh_print_stats(context->dc_table);
@@ -194,7 +177,6 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 
 	stats->total_records++;
 	stats->bytes_read += sizeof(*drr) + item->dp_base.dp_payload_size;
-	stats->last_status_time = gethrtime();
 
 	if (drr->drr_type != DRR_WRITE) {
 		return B_TRUE;
@@ -247,6 +229,7 @@ static chain_step_t
 serial_dedup_writes(linear_hash_t dedup_table) {
 	static dedup_context_t context = {};
 	context.dc_table = dedup_table;
+	context.dc_stats.last_status_time = getlrtime();
 	return (chain_step_t) {
 		.cs_type = CS_SERIAL,
 		.cs_out_size = sizeof(drr_packet_t),
@@ -276,7 +259,7 @@ zstream_do_dedup(int argc, char *argv[])
 			mem_percent = atoi(optarg);
 			if (mem_percent < 0 || mem_percent > 100) {
 				fprintf(stderr,
-				    "invalid memory percentage '%s'\n", optarg);
+					"invalid memory percentage '%s'\n", optarg);
 				exit(1);
 			}
 			break;
@@ -307,7 +290,7 @@ zstream_do_dedup(int argc, char *argv[])
 #else
 	uint64_t physbytes = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
 	max_memory = MAX((physbytes * mem_percent) / 100,
-	    SMALLEST_REASONABLE_DEDUP_MB << 20);
+		SMALLEST_REASONABLE_DEDUP_MB << 20);
 #endif
 
 	cache_dir = cache_dir ? cache_dir : "/tmp";
@@ -323,8 +306,8 @@ zstream_do_dedup(int argc, char *argv[])
 
 	if (isatty(STDOUT_FILENO)) {
 		(void) fprintf(stderr,
-		    "Error: Stream can not be written to a terminal.\n"
-		    "You must redirect standard output.\n");
+			"Error: Stream can not be written to a terminal.\n"
+			"You must redirect standard output.\n");
 		exit(1);
 	}
 
@@ -333,13 +316,13 @@ zstream_do_dedup(int argc, char *argv[])
 		input = fopen(argv[0], "r");
 		if (!input) {
 			(void) fprintf(stderr, "Error while opening file '%s': %s\n",
-			    argv[0], strerror(errno));
+				argv[0], strerror(errno));
 			exit(1);
 		}
 	} else if (isatty(STDIN_FILENO)) {
 		(void) fprintf(stderr,
-		    "Error: Stream can not be read from a terminal.\n"
-		    "You must name a file or accept input from a pipe.\n");
+			"Error: Stream can not be read from a terminal.\n"
+			"You must name a file or accept input from a pipe.\n");
 		exit(1);
 	} else {
 		input = stdin;

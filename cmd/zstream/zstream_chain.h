@@ -75,20 +75,20 @@ zc_serial_process_f(void *item, void *context, chain_attrs_t chain);
 typedef enum { CS_SERIAL, CS_PARALLEL } step_type_t;
 
 typedef struct chain_step {
-			step_type_t		cs_type;
-			size_t 			cs_out_size;
-	union {
-		struct {
-			zc_serial_process_f	*css_process;
-			void			*css_context;
-		} serial;
-		struct {
-			size_t 			csp_queue_length;
-			size_t 			csp_batch_budget;
-			zq_estimate_cost_f	*csp_cost;
-			zq_process_item_f	*csp_process;
-		} parallel;
-	};
+		step_type_t		cs_type;
+		size_t 			cs_out_size;
+    union {
+	struct serial_config {
+		zc_serial_process_f	*css_process;
+		void			*css_context;
+	} serial;
+	struct parallel_config {
+		size_t 			csp_queue_length;
+		size_t 			csp_batch_budget;
+		zq_estimate_cost_f	*csp_cost;
+		zq_process_item_f	*csp_process;
+	} parallel;
+    };
 } chain_step_t;
 
 typedef chain_step_t zstream_chain_t[];
