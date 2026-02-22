@@ -32,7 +32,7 @@ extern "C" {
 
  /*
   * This is a generalized implementation of multithreaded, FIFO work queues.
-  * I'm calling them queues, but there is no inherent order of work inside
+  * I'm calling them "queues", but there is no inherent order of work inside
   * the queue. The only guarantee is that completed items will emerge from
   * the queue in the same order they entered. The implementation broadly
   * tries to work on items in order, but that is not guaranteed.
@@ -40,25 +40,25 @@ extern "C" {
   * Callers define a fixed item size to be used by each queue and define
   * thread-safe functions that estimate individual items' processing cost
   * and perform the actual processing. The queue treats items as black
-  * boxes, so processing functions can modify them freely.
+  * boxes, so processing functions can modify them as desired.
   *
-  * The cost estimation function assigns a size_t cost that represents the
-  * amount of work needed to process an item. For activities like hashing
-  * and data compression, the natural cost is typically input buffer length.
-  * This function is run as items enter the queue, so it's single-threaded
-  * and should return a value promptly. If cost estimation is important and
+  * The cost function assigns a size_t cost that estimates the amount of
+  * work needed to process an item. For activities like hashing and data
+  * compression, the natural cost is typically input buffer length. This
+  * function is run as items enter the queue, so it's single-threaded and
+  * should return a value promptly. If cost estimation is important and
   * expensive, use a separate queue to implement it.
   *
   * It's expected that only a subset of input items will require processing.
   * If an item's cost is zero, it is fast-tracked and never presented to the
   * processing function.
   *
-  * Threading granularity is specified by a per-batch budget that is set for
+  * Threading granularity is specified as a per-batch budget that is set for
   * each queue in the same units used for item costs. Threads claim items
   * until the budget is met, there are no more items available, or MAX_BATCH
-  * items have been claimed. When collecting items, threads never wait for
-  * additional work to arrive. They start work as quickly as possible even
-  * if the budget has not been reached.
+  * items have been claimed. When claiming items to work on, threads never
+  * block waiting for additional work to arrive. They start work as quickly
+  * as possible even if the budget has not been reached.
   *
   * All queues share a single thread pool that is managed to avoid
   * contention. Threads are allocated to queues dynamically according to
@@ -83,11 +83,11 @@ zq_estimate_cost_f(queue_item *item);
 /*
  * Create a queue. Must be called before enqueue or dequeue.
  *
- * A target budget can be set to allow threads to claim multiple items for
- * processing at once for processing, up to a maximum of 16 records. This
- * measure can be helpful when multithreading overhead is significant in
- * comparison to work time. If the qp_batch_budget is zero, items are always
- * processed individually.
+ * The target budget can be helpful when multithreading overhead is
+ * significant in comparison to processing time, as in the case of Fletcher4
+ * calculations. Raise the batch budget to coarsen the granularity of work
+ * assignments. If the qp_batch_budget is zero, items are always processed
+ * individually.
  */
 
 typedef struct {
@@ -102,22 +102,21 @@ zstream_queue_t
 zstream_queue_create(zq_params_t *params);
 
 /*
- * Submit a work item. The call blocks if the input queue is full. The work item
- * struct is shallow-copied into the queue and can be reused by the caller.
- *
- * queue	queue in which to place the item
- * item		pointer to the item struct (caller-defined)
+ * Submit a work item. The call blocks if the input queue is full. The work
+ * item struct is shallow-copied into the queue and after zstream_enqueue
+ * returns may be reused by the caller.
  */
 void
 zstream_enqueue(zstream_queue_t queue, queue_item *item);
 
 /*
- * Retrieve a completed work item. The caller must provide a buffer into which
- * the dequeued item is copied. Items are returned in the same order they were
- * submitted. If the next unit is not yet ready, this call will block.
+ * Retrieve a completed work item. The caller must provide a buffer into
+ * which the dequeued item is copied. Items are returned in the same order
+ * they were submitted. If the next unit is not yet ready, this call will
+ * block.
  *
- * If zstream_dequeue returns B_FALSE, the stream is complete. The returned item
- * is not valid, and no further calls may be made.
+ * If zstream_dequeue returns B_FALSE, the stream is complete. The returned
+ * item is not valid and no further calls may be made.
  */
 boolean_t
 zstream_dequeue(zstream_queue_t queue, queue_item *item);

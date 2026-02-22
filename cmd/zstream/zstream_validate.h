@@ -17,33 +17,16 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ZSTREAM_IO_H
-#define _ZSTREAM_IO_H
+#ifndef _ZSTREAM_VALIDATE_H
+#define _ZSTREAM_VALIDATE_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include <sys/types.h>
-#include "zstream_chain.h"
-
-#define MAX_IO_STREAMS 4
-
-typedef struct {
-	dmu_replay_record_t	dp_drr;
-	uint8_t			*dp_payload;
-	uint32_t		dp_payload_size;
-	off_t			dp_stream_offset;
-} drr_packet_t;
-
-chain_step_t
-serial_read_stream(const char *filename);
-
-chain_step_t
-serial_write_stream(const char *filename);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* _ZSTREAM_IO_H */
+#endif  /* _ZSTREAM_VALIDATE_H

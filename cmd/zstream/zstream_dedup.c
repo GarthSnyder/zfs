@@ -32,14 +32,14 @@
 #define SMALLEST_REASONABLE_DEDUP_MB	128
 #define	STATUS_UPDATE_INTERVAL		(5ULL * NANOSEC)
 
-#define BLAKE3_64_BIT(full_hash) (*((uint64_t *)full_hash))
+#define BLAKE3_64_BIT(full_hash) ((full_hash)->zc_word[0])
 
 typedef struct drr_write drr_write_t;
 
 typedef struct {
-	drr_write_t		write_block;
-	zio_cksum_t		blake3_hash;
-	uint64_t		payload_length;
+	drr_write_t	write_block;
+	zio_cksum_t	blake3_hash;
+	uint64_t	payload_length;
 } dedup_entry_t;
 
 typedef struct dedup_stats {
@@ -59,30 +59,34 @@ typedef struct {
 
 typedef long long unsigned int llu;
 
+/*
+ * The goal is that "zstream dedup | zstream redup" yields an identical
+ * stream. There are a few odd cases that make this not work unless
+ * deduplication is implemented with more aggressive changes to zstream
+ * redup. That's probably possible, but it would need more intensive review.
+ * For now, punt on deduplicating any record pairs that look "weird."
+ */
 static boolean_t
-writes_compatible(const drr_write_t *this, const drr_write_t *prev) {
-	if (this->drr_type != prev->drr_type
-		|| this->drr_logical_size != prev->drr_logical_size
-		|| this->drr_compressiontype != prev->drr_compressiontype
-		|| this->drr_compressed_size != prev->drr_compressed_size
-		|| memcmp(this->drr_salt, prev->drr_salt, sizeof(this->drr_salt))
-		|| memcmp(this->drr_iv, prev->drr_iv, sizeof(this->drr_iv))
-		|| memcmp(this->drr_mac, prev->drr_mac, sizeof(this->drr_mac)))
-	{
-		return B_FALSE;
-	}
-	return B_TRUE;
+writes_compatible(const drr_write_t *cur, const drr_write_t *prev)
+{
+	return !(cur->drr_type 		 != prev->drr_type ||
+		cur->drr_logical_size 	 != prev->drr_logical_size ||
+		cur->drr_compressiontype != prev->drr_compressiontype ||
+		cur->drr_compressed_size != prev->drr_compressed_size ||
+
+		memcmp(cur->drr_salt, prev->drr_salt, sizeof(cur->drr_salt)) ||
+		memcmp(cur->drr_iv, prev->drr_iv, sizeof(cur->drr_iv)) ||
+		memcmp(cur->drr_mac, prev->drr_mac, sizeof(cur->drr_mac)));
 }
 
 static boolean_t
-dedup_table_lookup(linear_hash_t ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
-	lh_iterator_t iter = lh_initiate_retrieve(ddt, BLAKE3_64_BIT(blake3));
-	/*
-	 * linear_hash hashes are only 64 bits, so a table match does not
-	 * guarantee an actual BLAKE3 match.
-	 */
+dedup_table_lookup(linear_hash_t ddt, drr_blake3_t *item, dedup_entry_t *dde)
+{
+	zio_cksum_t *long_hash = &item->dp_blake3_payload;
+	uint64_t short_hash = BLAKE3_64_BIT(long_hash);
+	lh_iterator_t iter = lh_initiate_retrieve(ddt, short_hash);
 	while (lh_retrieve_next(iter, dde)) {
-		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *blake3)) {
+		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *long_hash)) {
 			return B_TRUE;
 		}
 	}
@@ -90,30 +94,25 @@ dedup_table_lookup(linear_hash_t ddt, zio_cksum_t *blake3, dedup_entry_t *dde) {
 }
 
 static void
-dedup_table_insert(linear_hash_t ddt, zio_cksum_t *blake3,
-	dmu_replay_record_t *drr)
+dedup_table_insert(linear_hash_t ddt, drr_blake3_t *item)
 {
 	dedup_entry_t dedup = {
-		.write_block = drr->drr_u.drr_write,
-		.blake3_hash = *blake3,
-		.payload_length = DRR_WRITE_PAYLOAD_SIZE(&drr->drr_u.drr_write)
+		.write_block = item->dp_base.dp_drr.drr_u.drr_write,
+		.blake3_hash = item->dp_blake3_payload,
+		.payload_length = item->dp_base.dp_payload_size
 	};
-	lh_insert(ddt, BLAKE3_64_BIT(blake3), &dedup);
+	lh_insert(ddt, BLAKE3_64_BIT(&item->dp_blake3_payload), &dedup);
 }
 
 static void
 maybe_print_update(dedup_context_t *context, boolean_t force)
 {
 	dedup_stats_t *stats = &context->dc_stats;
-	hrtime_t now;
+	hrtime_t now = getlrtime();
 	char bytes_read_str[32];
 	char bytes_saved_str[32];
 	double saved_pct;
 
-	if (!force && (stats->write_records & 0XFF) != 0) {
-		return;
-	}
-	now = getlrtime();
 	if (!force && now - stats->last_status_time < STATUS_UPDATE_INTERVAL) {
 		return;
 	}
@@ -121,13 +120,8 @@ maybe_print_update(dedup_context_t *context, boolean_t force)
 	zfs_nicenum(stats->bytes_read, bytes_read_str, sizeof (bytes_read_str));
 	zfs_nicenum(stats->bytes_saved, bytes_saved_str,
 		sizeof (bytes_saved_str));
-
-	if (stats->bytes_read > 0) {
-		saved_pct = (double)stats->bytes_saved * 100.0 /
-			(double)stats->bytes_read;
-	} else {
-		saved_pct = 0.0;
-	}
+	saved_pct = !stats->bytes_read ? 0 :
+		stats->bytes_saved * 100.0 / stats->bytes_read;
 
 	fprintf(stderr, "\r%llu total blocks, %llu writes, %llu deduped | "
 		"%sB read / %sB saved (%.1f%%)    \n",
@@ -138,53 +132,54 @@ maybe_print_update(dedup_context_t *context, boolean_t force)
 	stats->last_status_time = now;
 }
 
+/*
+ * The "exempt" records are those that didn't pass writes_compatible(). This
+ * probably isn't the best term, but I didn't want it to sound like a problem was
+ * being reported.
+ */
 static void
-print_summary(dedup_context_t *context) {
-	dedup_stats_t *stats = &context->dc_stats;
-	maybe_print_update(context, B_TRUE);
-	fprintf(stderr, "\n");
+print_summary(dedup_context_t *context)
+{
 	char mem_str[32];
-	zfs_nicenum(lh_get_mem_highwater(context->dc_table), mem_str,
-		sizeof (mem_str));
-	fprintf(stderr,
-		"Processed %llu total records, including %llu write "
-		"records (%llu deduped).\n", (llu)stats->total_records,
-		(llu)stats->write_records, (llu)stats->dedup_records);
-	fprintf(stderr, "Used %sB of hash table memory.\n", mem_str);
+	dedup_stats_t *stats = &context->dc_stats;
+	uint64_t mem_highwater = lh_get_mem_highwater(context->dc_table);
+
+	maybe_print_update(context, B_TRUE);
+	zfs_nicenum(mem_highwater, mem_str, sizeof (mem_str));
 	if (stats->disqualified_records) {
-		fprintf(stderr, "%llu write records were exempt from deduplication\n",
-			(llu)stats->disqualified_records);
+		fprintf(stderr, "%llu write records were exempt from "
+			"deduplication\n", (llu)stats->disqualified_records);
 	}
-	fprintf(stderr, "\n");
+#ifdef DEBUG
+	fprintf(stderr, "Used %sB of hash table memory.\n\n", mem_str);
 	lh_print_stats(context->dc_table);
+#endif
 }
 
 static boolean_t
 chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 	chain_attrs_t chain)
 {
-	dmu_replay_record_t	*drr = &item->dp_base.dp_drr;
-	struct drr_write	*drrw = &drr->drr_u.drr_write;
-	dedup_stats_t		*stats = &context->dc_stats;
-	zio_cksum_t			*blake3 = &item->dp_blake3_payload;
-	linear_hash_t		dd_table = context->dc_table;
-	dedup_entry_t		existing;
+	dmu_replay_record_t *drr = &item->dp_base.dp_drr;
+	struct drr_write *drrw   = &drr->drr_u.drr_write;
+	dedup_stats_t *stats     = &context->dc_stats;
+	linear_hash_t dd_table   = context->dc_table;
+	dedup_entry_t existing;
 
-	if (item == NULL && (chain->ca_flags & CA_VERBOSE)) {
-		print_summary(context);
+	if (item == NULL) {
+		if (chain->ca_flags & CA_VERBOSE) { print_summary(context); }
 		return B_TRUE;
 	}
 
 	stats->total_records++;
 	stats->bytes_read += sizeof(*drr) + item->dp_base.dp_payload_size;
-
 	if (drr->drr_type != DRR_WRITE) {
 		return B_TRUE;
 	}
-
 	stats->write_records++;
-	if (!dedup_table_lookup(dd_table, blake3, &existing)) {
-		dedup_table_insert(dd_table, blake3, drr);
+
+	if (!dedup_table_lookup(dd_table, item, &existing)) {
+		dedup_table_insert(dd_table, item);
 		return B_TRUE;
 	}
 	if (!writes_compatible(drrw, &existing.write_block)) {
@@ -193,16 +188,16 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 	}
 
 	struct drr_write_byref byref = {
-		.drr_refguid = existing.write_block.drr_toguid,
-		.drr_refobject = existing.write_block.drr_object,
-		.drr_refoffset = existing.write_block.drr_offset,
-		.drr_object = drrw->drr_object,
-		.drr_offset = drrw->drr_offset,
-		.drr_toguid = drrw->drr_toguid,
-		.drr_length = drrw->drr_logical_size,
+		.drr_refguid	= existing.write_block.drr_toguid,
+		.drr_refobject	= existing.write_block.drr_object,
+		.drr_refoffset	= existing.write_block.drr_offset,
+		.drr_object	= drrw->drr_object,
+		.drr_offset	= drrw->drr_offset,
+		.drr_toguid	= drrw->drr_toguid,
+		.drr_length	= drrw->drr_logical_size,
 		.drr_checksumtype = drrw->drr_checksumtype,
-		.drr_flags = drrw->drr_flags,
-		.drr_key = drrw->drr_key
+		.drr_flags	= drrw->drr_flags,
+		.drr_key	= drrw->drr_key
 	};
 
 	memset(drr, 0, sizeof(*drr));
@@ -226,7 +221,8 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 }
 
 static chain_step_t
-serial_dedup_writes(linear_hash_t dedup_table) {
+serial_dedup_writes(linear_hash_t dedup_table)
+{
 	static dedup_context_t context = {};
 	context.dc_table = dedup_table;
 	context.dc_stats.last_status_time = getlrtime();
@@ -240,15 +236,26 @@ serial_dedup_writes(linear_hash_t dedup_table) {
 	};
 }
 
+static void
+validate_cache_dir(const char *cache_dir) {
+	struct stat statbuff;
+	if (stat(cache_dir, &statbuff) < 0) {
+		fprintf(stderr, "Directory %s does not exist.\n", cache_dir);
+		exit(1);
+	} else if ((statbuff.st_mode & S_IFMT) != S_IFDIR) {
+		fprintf(stderr, "The -c flag requires a directory argument\n");
+		exit(1);
+	}
+}
+
 int
 zstream_do_dedup(int argc, char *argv[])
 {
-	struct chain_attrs	attrs = {};
-	int 				mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
-	const char 			*cache_dir = NULL;
-	FILE				*input;
-	int 				c;
-	linear_hash_t		dedup_table;
+	const char *cache_dir = NULL;
+	struct chain_attrs attrs = {};
+	int mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
+	int c;
+	linear_hash_t dedup_table;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
 		switch (c) {
@@ -265,7 +272,6 @@ zstream_do_dedup(int argc, char *argv[])
 			break;
 		case 'c':
 			cache_dir = optarg;
-			(void) cache_dir; /* TODO: implement cache_dir */
 			break;
 		case '?':
 			fprintf(stderr, "invalid option '%c'\n", optopt);
@@ -294,39 +300,10 @@ zstream_do_dedup(int argc, char *argv[])
 #endif
 
 	cache_dir = cache_dir ? cache_dir : "/tmp";
-	struct stat statbuff;
-	if (stat(cache_dir, &statbuff) < 0) {
-		fprintf(stderr, "Cache directory %s does not exist.\n", cache_dir);
-		exit(1);
-	} else if ((statbuff.st_mode & S_IFMT) != S_IFDIR) {
-		fprintf(stderr, "The -c flag requires a directory argument\n");
-		exit(1);
-	}
+	validate_cache_dir(cache_dir);
+
 	dedup_table = lh_init(sizeof(dedup_entry_t), max_memory, cache_dir);
-
-	if (isatty(STDOUT_FILENO)) {
-		(void) fprintf(stderr,
-			"Error: Stream can not be written to a terminal.\n"
-			"You must redirect standard output.\n");
-		exit(1);
-	}
-
-	/* If a filename is provided, open it; otherwise use stdin */
-	if (argc == 1) {
-		input = fopen(argv[0], "r");
-		if (!input) {
-			(void) fprintf(stderr, "Error while opening file '%s': %s\n",
-				argv[0], strerror(errno));
-			exit(1);
-		}
-	} else if (isatty(STDIN_FILENO)) {
-		(void) fprintf(stderr,
-			"Error: Stream can not be read from a terminal.\n"
-			"You must name a file or accept input from a pipe.\n");
-		exit(1);
-	} else {
-		input = stdin;
-	}
+	verify(dedup_table != NULL);
 
 	zstream_chain_t dedup_chain = {
 		serial_read_stream((argc == 1) ? argv[0] : NULL),
@@ -339,7 +316,6 @@ zstream_do_dedup(int argc, char *argv[])
 		serial_write_stream(NULL)
 	};
 
-	// serialize_chains = B_TRUE;
 	zstream_chain_exec(dedup_chain, &attrs,
 		sizeof(dedup_chain) / sizeof(chain_step_t));
 	lh_destroy(dedup_table);

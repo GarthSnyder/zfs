@@ -24,6 +24,8 @@ zstream_SOURCES = \
 	%D%/zstream_fletcher4.h \
 	%D%/zstream_blake3.c \
 	%D%/zstream_blake3.h \
+	%D%/zstream_validate.c \
+	%D%/zstream_validate.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
 	%D%/allocator.c \

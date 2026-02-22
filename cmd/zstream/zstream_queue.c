@@ -34,7 +34,7 @@
 
 #define MIN_THREADS 	6
 #define MAX_QUEUES 	16	/* Greatest # of queues simultaneously active */
-#define CLAIM_FACTOR	8	/* Weight used in thread-to-queue allocation */
+#define GOT_PLENTY	8	/* Weight used in thread-to-queue allocation */
 
 /*
  * A zstream_queue is a ring buffer with four pointers: enqueue, claim,
@@ -50,6 +50,8 @@
  * condition. In addition, the enqueued condition is at the level of the
  * thread pool because worker threads wait on it for incoming work while not
  * bound to any particular queue.
+ *
+ * Worker threads hold no locks while performing actual work.
  */
 
 typedef struct {
@@ -92,7 +94,7 @@ static void
 thread_pool_init(void) {
 	pthread_mutex_init(&pool.tp_mutex, NULL);
 	pthread_cond_init(&pool.tp_enqueued, NULL);
-	srand48(0x83b606fb0dba7627);
+	random_init();
 }
 
 /*
@@ -170,7 +172,8 @@ zstream_queue_create(zq_params_t *params)
 	};
 	void *items_base = &queue->zq_slots[params->qp_queue_length];
 	for (int i = 0; i < params->qp_queue_length; i++) {
-		queue->zq_slots[i].qs_item = items_base + i * params->qp_item_size;
+		queue->zq_slots[i].qs_item =
+			items_base + i * params->qp_item_size;
 	}
 
 	pthread_mutex_init(&queue->zq_mutex, NULL);
@@ -182,14 +185,25 @@ zstream_queue_create(zq_params_t *params)
 }
 
 /*
- * Calling thread must hold the queue lock
+ * This periodic sweep is necessary because worker threads don't claim items
+ * that require no work. They're marked as completed from claim_batch(), but
+ * the zq_complete pointer still needs to move to declare them officially done.
+ * However, the no-work items don't arrive in any particular order. Whenever
+ * we complete a batch or claim a batch, we advance the completion pointer
+ * past all zero-work items.
+ *
+ * The calling thread must hold the queue lock.
  */
 static void
 advance_completion_pointer(zstream_queue_t queue) {
 	boolean_t any_completed = B_FALSE;
-	while (queue->zq_complete < queue->zq_claim &&
-		queue->zq_slots[queue->zq_complete % queue->zq_num_slots].qs_completed)
-	{
+	while (B_TRUE) {
+		int slot = queue->zq_complete % queue->zq_num_slots;
+		boolean_t has_room = queue->zq_complete < queue->zq_claim;
+		boolean_t next_complete = queue->zq_slots[slot].qs_completed;
+		if (!has_room || !next_complete) {
+			break;
+		}
 		queue->zq_complete++;
 		any_completed = B_TRUE;
 	}
@@ -205,18 +219,12 @@ advance_completion_pointer(zstream_queue_t queue) {
  *
  * Does not block waiting to reach batch_budget; returns whatever is available
  * or awaits the any_queue_enqueued condition if nothing is available.
- *
- * If the first-available item does not require processing, scrape up all the
- * leading items of this type and return. The worker will end up doing no work
- * and coming right back here, but it simplifies the code to handle this case
- * through the normal process. We cannot just mark those items as completed
- * on entry to the queue because
  */
 static int
 claim_batch(zstream_queue_t queue, queue_slot_t **batch)
 {
-	uint64_t 	cost_claimed = 0;
-	uint64_t 	count = 0;
+	uint64_t cost_claimed = 0;
+	uint64_t count = 0;
 
 	pthread_mutex_lock(&queue->zq_mutex);
 
@@ -236,19 +244,39 @@ claim_batch(zstream_queue_t queue, queue_slot_t **batch)
 		}
 		queue->zq_claim++;
 	}
-
 	advance_completion_pointer(queue);
 	pthread_mutex_unlock(&queue->zq_mutex);
 	return count;
 }
 
 /*
- * Worker threads are assigned to queues on each loop so that they can be
- * shifted dynamically to follow work. Queue assignments are serialized through
- * the pool mutex. If there appears to be no work available, threads sleep on
- * the pool-level enqueue condition. That condition is paired with the pool
- * mutex, which guarantees that enqueue signals will not arrive while a thread
- * is attempting to pick a queue. See note in zstream_enqueue_impl().
+ * Threads are assigned to a queue on each loop so they can be shifted dynamically
+ * to follow available work. Assignments are serialized through the pool mutex. If
+ * no work is available, threads sleep on the pool-level enqueue condition.
+ *
+ * Queue-specific numbers are read without the queue mutex being held. Ergo, they
+ * may be skewed or out of date. That doesn't much matter in practice. The risk to
+ * be avoided is that a work item will be enqueued while all this calculation is
+ * going on, and that somehow a queue with late-arriving work will be overlooked,
+ * leaving all workers sleeping and unsignaled.
+ *
+ * However, that scenario is averted by locking the thread pool mutex. The pool
+ * mutex must be held to signal the arrival of new work. It must also be held for a
+ * thread to receive a queue assignment. So, we can be sure that no background
+ * enqueuing is going on while the scoring process below is running. The main risk
+ * of working with possibly-inaccurate numbers is that available work will be
+ * overestimated, which is benign.
+ *
+ * Queues are scored according to their scarcity of available slots and their
+ * availability of work. Queues that are running out of slots to accommodate new
+ * work and queues that have no completed work available to dequeue receive higher
+ * scores. After each queue is scored, an assignment is made stochastically.
+ *
+ * To be specific, queues are scored as 1/N, where N is the number of empty slots in
+ * the queue. This value is further refined by a factor reflecting the number of
+ * work items available; no point sending threads to queues with no work. The claim
+ * factor is a value between 0.0 and 1.0, so it can only reduce a queue's score.
+ * GOT_PLENTY specifies the threshold for 1.0.
  */
 static zstream_queue_t
 assign_thread_to_queue(void)
@@ -256,19 +284,21 @@ assign_thread_to_queue(void)
 	pthread_mutex_lock(&pool.tp_mutex);
 	double scale, cum_weights[MAX_QUEUES];
 
-start:	if (pool.tp_num_queues) {
-		for (int i = 0; i < pool.tp_num_queues; i++) {
-			zstream_queue_t queue = pool.tp_queues[i];
-			int claimable_est = queue->zq_enqueue - queue->zq_claim;
-			int in_queue_est = queue->zq_enqueue - queue->zq_dequeue;
-			int open_slots_est = queue->zq_num_slots - in_queue_est;
-			double claim_factor = (double)claimable_est / CLAIM_FACTOR;
-			double slot_factor = (open_slots_est > 0) ?
-				(1.0 / open_slots_est) : 2.0;
-			double weight = fmin(1.0, slot_factor) * claim_factor;
-			cum_weights[i] = weight + ((i == 0) ? 0.0 : cum_weights[i-1]);
-		}
-		scale = cum_weights[pool.tp_num_queues - 1];
+start:	scale = 0.0;
+	if (pool.tp_num_queues) {
+	    for (int i = 0; i < pool.tp_num_queues; i++) {
+		zstream_queue_t queue = pool.tp_queues[i];
+		int claimable = queue->zq_enqueue - queue->zq_claim;
+		int in_queue = queue->zq_enqueue - queue->zq_dequeue;
+		int open_slots = queue->zq_num_slots - in_queue;
+		double claim_factor = MIN(claimable, GOT_PLENTY) /
+			(double)GOT_PLENTY;
+		double slot_factor = (open_slots > 0) ?
+			(1.0 / open_slots) : 2.0;
+		double weight = slot_factor * claim_factor;
+		cum_weights[i] = weight + ((i == 0) ? 0.0 : cum_weights[i-1]);
+	    }
+	    scale = cum_weights[pool.tp_num_queues - 1];
 	}
 	if (scale < 0.0001) {
 		await_condition(&pool.tp_enqueued, &pool.tp_mutex);
@@ -309,7 +339,7 @@ queue_worker(void *dummy)
 }
 
 static void
-zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last_one)
+zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
 	if (queue->zq_finalized) {
@@ -319,12 +349,13 @@ zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last_one
 	while (queue->zq_enqueue - queue->zq_dequeue >= queue->zq_num_slots) {
 		await_condition(&queue->zq_dequeued, &queue->zq_mutex);
 	}
-	queue_slot_t *slot = &queue->zq_slots[queue->zq_enqueue % queue->zq_num_slots];
-	slot->qs_cost = last_one ? 0 : queue->zq_cost(item);
+	int slot_num = queue->zq_enqueue % queue->zq_num_slots;
+	queue_slot_t *slot = &queue->zq_slots[slot_num];
+	slot->qs_cost = last ? 0 : queue->zq_cost(item);
 	slot->qs_completed = B_FALSE;
-	slot->qs_end_of_stream = last_one;
+	slot->qs_end_of_stream = last;
 	memcpy(slot->qs_item, item, queue->zq_item_size);
-	queue->zq_finalized = queue->zq_finalized || last_one;
+	queue->zq_finalized = queue->zq_finalized || last;
 	queue->zq_enqueue++;
 	pthread_mutex_unlock(&queue->zq_mutex);
 
@@ -385,13 +416,14 @@ zstream_dequeue(zstream_queue_t queue, queue_item *item) {
 	while (queue->zq_dequeue >= queue->zq_complete) {
 		await_condition(&queue->zq_completed, &queue->zq_mutex);
 	}
-	uint64_t slot = queue->zq_dequeue % queue->zq_num_slots;
+	int slot_num = queue->zq_dequeue % queue->zq_num_slots;
+	queue_slot_t *slot = &queue->zq_slots[slot_num];
 	queue->zq_dequeue++;
-	if (queue->zq_slots[slot].qs_end_of_stream) {
+	if (slot->qs_end_of_stream) {
 		zstream_queue_destroy(queue);
 		return B_FALSE;
 	} else {
-		memcpy(item, queue->zq_slots[slot].qs_item, queue->zq_item_size);
+		memcpy(item, slot->qs_item, queue->zq_item_size);
 		pthread_mutex_unlock(&queue->zq_mutex);
 		pthread_cond_signal(&queue->zq_dequeued);
 		return B_TRUE;
