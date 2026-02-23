@@ -24,10 +24,7 @@
 
 #include "linear_hash_stats.h"
 #include "zstream.h"
-#include "zstream_blake3.h"
-#include "zstream_fletcher4.h"
-#include "zstream_io.h"
-#include "zstream_shared.h"
+#include "zstream_modules.h"
 
 #define	DEFAULT_DEDUP_PHYSMEM_PERCENT	30
 #define SMALLEST_REASONABLE_DEDUP_MB	128
@@ -163,6 +160,7 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 {
 	dmu_replay_record_t *drr = &item->dp_base.dp_drr;
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
+	struct drr_write *drrb   = &drr->drr_u.drr_begin;
 	dedup_stats_t *stats     = &context->dc_stats;
 	linear_hash_t dd_table   = context->dc_table;
 	dedup_entry_t existing;
@@ -174,6 +172,16 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 
 	stats->total_records++;
 	stats->bytes_read += sizeof(*drr) + item->dp_base.dp_payload_size;
+
+	if (drr->drr_type == DRR_BEGIN) {
+		/* Set the DEDUP feature flag for this stream */
+		int fflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
+		fflags |= DMU_BACKUP_FEATURE_DEDUP;
+		fflags |= DMU_BACKUP_FEATURE_DEDUPPROPS;
+		/* cppcheck-suppress syntaxError */
+		DMU_SET_FEATUREFLAGS(drrb->drr_versioninfo, fflags);
+	}
+
 	if (drr->drr_type != DRR_WRITE) {
 		return B_TRUE;
 	}
@@ -313,6 +321,8 @@ zstream_do_dedup(int argc, char *argv[])
 		serial_read_stream((argc == 1) ? argv[0] : NULL),
 		parallel_calc_fletcher4(),
 		serial_validate_fletcher4(),
+		serial_byteswap(),
+		serial_validate_records(),
 		parallel_calc_blake3(),
 		serial_dedup_writes(dedup_table),
 		parallel_calc_fletcher4(),

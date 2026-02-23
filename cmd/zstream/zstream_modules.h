@@ -17,20 +17,26 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ZSTREAM_VALIDATE_H
-#define _ZSTREAM_VALIDATE_H
+#ifndef _ZSTREAM_MODULES_H
+#define _ZSTREAM_MODULES_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#include "zstream_blake3.h"
+#include "zstream_byteswap.h"
+#include "zstream_chain.h"
+#include "zstream_fletcher4.h"
 #include "zstream_io.h"
-
-chain_step_t
-serial_validate_records(void);
+#include "zstream_shared.h"
+#include "zstream_validate.h"
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* _ZSTREAM_VALIDATE_H */
+#endif  /* _ZSTREAM_MODULES_H */
+
+
+

@@ -91,96 +91,51 @@ zstream_do_recompress(int argc, char *argv[])
 		}
 	}
 
-	if (isatty(STDIN_FILENO)) {
-		(void) fprintf(stderr,
-		    "Error: The send stream is a binary format "
-		    "and can not be read from a\n"
-		    "terminal.  Standard input must be redirected.\n");
-		exit(1);
-	}
-
 	abd_init();
-	fletcher_4_init();
 	zio_init();
 	zstd_init();
-	int begin = 0;
-	boolean_t seen = B_FALSE;
-	while (sfread(drr, sizeof (*drr), stdin) != 0) {
-		struct drr_write *drrw;
-		uint64_t payload_size = 0;
 
-		/*
-		 * We need to regenerate the checksum.
-		 */
-		if (drr->drr_type != DRR_BEGIN) {
-			memset(&drr->drr_u.drr_checksum.drr_checksum, 0,
-			    sizeof (drr->drr_u.drr_checksum.drr_checksum));
-		}
+	zstream_chain_t recompress_chain = {
+		serial_read_stream((argc == 1) ? argv[0] : NULL),
+		parallel_calc_fletcher4(),
+		serial_validate_fletcher4(),
+		serial_byteswap(),
+		serial_validate_records(),
+		parallel_recompress_writes(dedup_table),
+		parallel_calc_fletcher4(),
+		serial_add_fletcher4(),
+		serial_write_stream(NULL)
+	};
 
+	zstream_chain_exec(recompress_chain, &attrs,
+		sizeof(recompress_chain) / sizeof(chain_step_t));
 
-		switch (drr->drr_type) {
-		case DRR_BEGIN:
-		{
-			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
-			VERIFY0(begin++);
-			seen = B_TRUE;
+	fletcher_4_fini();
+	zio_fini();
+	zstd_fini();
+	abd_fini();
+	return 0;
+}
 
-			uint32_t sz = drr->drr_payloadlen;
+tatic boolean_t
+chain_recompress_writes(drr_packet_t *item, recompress_context_t *context,
+	chain_attrs_t chain)
+{
+	dmu_replay_record_t *drr = &item->dp_base.dp_drr;
+	struct drr_write *drrw   = &drr->drr_u.drr_write;
+	dedup_stats_t *stats     = &context->dc_stats;
+	linear_hash_t dd_table   = context->dc_table;
+	dedup_entry_t existing;
 
-			VERIFY3U(sz, <=, 1U << 28);
+	if (item == NULL) {
+		return B_TRUE;
+	}
+	if (drr->drr_type == DRR_WRITE_BYREF) {
+		fprintf(stderr, "Deduplicated streams are not supported\n");
+		exit(1);
 
-			if (sz != 0) {
-				if (sz > bufsz) {
-					buf = realloc(buf, sz);
-					if (buf == NULL)
-						err(1, "realloc");
-					bufsz = sz;
-				}
-				(void) sfread(buf, sz, stdin);
-			}
-			payload_size = sz;
-			break;
-		}
-		case DRR_END:
-		{
-			struct drr_end *drre = &drr->drr_u.drr_end;
-			/*
-			 * We would prefer to just check --begin == 0, but
-			 * replication streams have an end of stream END
-			 * record, so we must avoid tripping it.
-			 */
-			VERIFY3B(seen, ==, B_TRUE);
-			begin--;
-			/*
-			 * Use the recalculated checksum, unless this is
-			 * the END record of a stream package, which has
-			 * no checksum.
-			 */
-			if (!ZIO_CHECKSUM_IS_ZERO(&drre->drr_checksum))
-				drre->drr_checksum = stream_cksum;
-			break;
-		}
+	}
 
-		case DRR_OBJECT:
-		{
-			struct drr_object *drro = &drr->drr_u.drr_object;
-			VERIFY3S(begin, ==, 1);
-
-			if (drro->drr_bonuslen > 0) {
-				payload_size = DRR_OBJECT_PAYLOAD_SIZE(drro);
-				(void) sfread(buf, payload_size, stdin);
-			}
-			break;
-		}
-
-		case DRR_SPILL:
-		{
-			struct drr_spill *drrs = &drr->drr_u.drr_spill;
-			VERIFY3S(begin, ==, 1);
-			payload_size = DRR_SPILL_PAYLOAD_SIZE(drrs);
-			(void) sfread(buf, payload_size, stdin);
-			break;
-		}
 
 		case DRR_WRITE_BYREF:
 			VERIFY3S(begin, ==, 1);
@@ -191,9 +146,6 @@ zstream_do_recompress(int argc, char *argv[])
 
 		case DRR_WRITE:
 		{
-			VERIFY3S(begin, ==, 1);
-			drrw = &thedrr.drr_u.drr_write;
-			payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
 			/*
 			 * In order to recompress an encrypted block, you have
 			 * to decrypt, decompress, recompress, and

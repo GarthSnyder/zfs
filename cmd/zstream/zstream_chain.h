@@ -57,12 +57,13 @@ extern "C" {
  */
 
 #define CA_BYTESWAPPED		(1ULL << 0)
-#define CA_VERBOSE		(1ULL << 1)
-#define CA_VERY_VERBOSE		(1ULL << 2)
-#define CA_DUMP_OFFSETS		(1ULL << 3)
-#define CA_DUMP_DATA		(1ULL << 4)
-#define CA_IGNORE_CKSUMS	(1ULL << 5)
-#define CA_DEDUPED		(1ULL << 6)
+#define CA_DEDUPED		(1ULL << 1)
+
+#define CA_VERBOSE		(1ULL << 11)
+#define CA_VERY_VERBOSE		(1ULL << 12)
+#define CA_DUMP_OFFSETS		(1ULL << 13)
+#define CA_DUMP_DATA		(1ULL << 14)
+#define CA_IGNORE_CKSUMS	(1ULL << 15)
 
 typedef struct chain_attrs {
 	uint64_t	ca_flags;
