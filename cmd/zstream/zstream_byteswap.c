@@ -21,27 +21,15 @@
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
 
-#include "zstream_io.h"
+#include "zstream.h"
+#include "zstream_byteswap.h"
 #include "zstream_shared.h"
-
-static chain_step_t
-serial_byteswap(void)
-{
-	return (chain_step_t) {
-		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_packet_t),
-		.serial = {
-			.css_process = (zc_serial_process_f *)chain_dedup_writes,
-			.css_context = &context
-		}
-	};
-}
 
 static boolean_t
 chain_btyeswap(drr_packet_t *item, void *context, chain_attrs_t chain)
 {
-	struct dmu_replay_record_t drr	 = &item->dp_drr;
+	(void) context;
+	struct dmu_replay_record *drr	 = &item->dp_drr;
 	struct drr_begin *drrb		 = &drr->drr_u.drr_begin;
 	struct drr_end *drre 		 = &drr->drr_u.drr_end;
 	struct drr_object *drro 	 = &drr->drr_u.drr_object;
@@ -157,4 +145,18 @@ chain_btyeswap(drr_packet_t *item, void *context, chain_attrs_t chain)
 		(void) fprintf(stderr, "Unknown record type, aborting...\n");
 		exit(1);
 	}
+	return B_TRUE;
+}
+
+chain_step_t
+serial_byteswap(void)
+{
+	return (chain_step_t) {
+		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof(drr_packet_t),
+		.cs_out_size = sizeof(drr_packet_t),
+		.serial = {
+			.css_process = (zc_serial_process_f *)chain_btyeswap,
+		}
+	};
 }

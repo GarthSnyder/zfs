@@ -41,6 +41,7 @@ chain_step_t
 parallel_calc_blake3(void) {
 	return (chain_step_t) {
 		.cs_type = CS_PARALLEL,
+		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_blake3_t),
 		.parallel = {
 			.csp_queue_length = 256,

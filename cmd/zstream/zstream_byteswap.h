@@ -24,9 +24,13 @@
 extern "C" {
 #endif
 
+#include "zstream_io.h"
+
+chain_step_t
+serial_byteswap(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* _ZSTREAM_BYTESWAP_H
+#endif  /* _ZSTREAM_BYTESWAP_H */

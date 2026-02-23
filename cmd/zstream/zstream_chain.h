@@ -18,7 +18,7 @@
  */
 
 #include "zstream_queue.h"
-#include "zstream_chain_types.h"
+#include <stddef.h>
 #include <stdint.h>
 
 #ifndef _ZSTREAM_CHAIN_H
@@ -76,6 +76,7 @@ typedef enum { CS_SERIAL, CS_PARALLEL } step_type_t;
 
 typedef struct chain_step {
 		step_type_t		cs_type;
+		size_t			cs_in_size;
 		size_t 			cs_out_size;
     union {
 	struct serial_config {

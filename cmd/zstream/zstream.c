@@ -29,6 +29,7 @@
 #include <libintl.h>
 #include <stddef.h>
 #include <libzfs.h>
+#include <libspl.h>
 #include "zstream.h"
 
 void

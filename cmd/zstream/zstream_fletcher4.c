@@ -52,6 +52,7 @@ chain_step_t
 parallel_calc_fletcher4(void) {
 	return (chain_step_t) {
 		.cs_type = CS_PARALLEL,
+		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_fletcher4_t),
 		.parallel = {
 			.csp_queue_length = 64,
@@ -69,6 +70,7 @@ fletcher4_serial_step(fletcher4_op_t operation) {
 	next_context++;
 	return (chain_step_t) {
 		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof(drr_fletcher4_t),
 		.cs_out_size = sizeof(drr_packet_t),
 		.serial = {
 			.css_process =

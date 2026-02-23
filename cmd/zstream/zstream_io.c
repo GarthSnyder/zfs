@@ -69,6 +69,7 @@ setup_io(const char *filename, boolean_t for_reading) {
 	};
 	return (chain_step_t) {
 		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
 		.serial = {
 			.css_process = (zc_serial_process_f *)(for_reading ?
@@ -106,11 +107,55 @@ open_file(io_context_t *context) {
 	setbuffer(context->ic_fp, context->ic_stdio_buffer, STDIO_BUFSIZE);
 }
 
+/*
+ * Extract the payload size from a replay record that is potentially byteswapped. We
+ * want to leave the bulk of byteswapping to another module, so just take a quick,
+ * nondestructive peek.
+ *
+ * Record-specific macros such as DRR_WRITE_PAYLOAD_SIZE are not byteswap-aware.
+ * However, with the exception of DRR_OBJECT_PAYLOAD_SIZE, they happen to work
+ * with post-swapping since they are switching on either a uint8_t value or 0.
+ */
+static size_t
+calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t chain)
+{
+	struct drr_object *drro 	 = &drr->drr_u.drr_object;
+	struct drr_write *drrw 		 = &drr->drr_u.drr_write;
+	struct drr_spill *drrs 		 = &drr->drr_u.drr_spill;
+	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
+
+	boolean_t swap = !!(chain->ca_flags & CA_BYTESWAPPED);
+	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
+	uint32_t size;
+
+	switch (drr_type) {
+	case DRR_OBJECT:
+		if (swap && drro->drr_raw_bonuslen) {
+			return (BSWAP_32(drro->drr_raw_bonuslen));
+		} else if (swap) {
+			return (P2ROUNDUP(BSWAP_32(drro->drr_bonuslen), 8));
+		} else {
+			return (DRR_OBJECT_PAYLOAD_SIZE(drro));
+		}
+	case DRR_WRITE:
+		size = DRR_WRITE_PAYLOAD_SIZE(drrw);
+		break;
+	case DRR_SPILL:
+		size = DRR_SPILL_PAYLOAD_SIZE(drrs);
+		break;
+	case DRR_WRITE_EMBEDDED:
+		uint32_t drr_psize = drrwe->drr_psize;
+		return (P2ROUNDUP((swap ? BSWAP_32(drr_psize) : drr_psize), 8));
+	default:
+		size = drr->drr_payloadlen;
+	}
+	return (swap ? BSWAP_32(size) : size);
+}
+
 static boolean_t
 chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
-	size_t payload_size;
 
 	if (!ctxt->ic_fp) {
 		open_file(ctxt);
@@ -136,25 +181,7 @@ chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 			exit(1);
 		}
 	}
-	/* TODO: This code probably needs byteswapping */
-	switch (drr->drr_type) {
-	case DRR_OBJECT:
-		payload_size = DRR_OBJECT_PAYLOAD_SIZE(&drr->drr_u.drr_object);
-		break;
-	case DRR_WRITE:
-		payload_size = DRR_WRITE_PAYLOAD_SIZE(&drr->drr_u.drr_write);
-		break;
-	case DRR_SPILL:
-		payload_size = DRR_SPILL_PAYLOAD_SIZE(&drr->drr_u.drr_spill);
-		break;
-	case DRR_WRITE_EMBEDDED:
-		payload_size =
-			P2ROUNDUP(drr->drr_u.drr_write_embedded.drr_psize, 8);
-		break;
-	default:
-		payload_size =(chain->ca_flags & CA_BYTESWAPPED) ?
-			BSWAP_32(drr->drr_payloadlen) : drr->drr_payloadlen;
-	}
+	uint32_t payload_size = calc_payload_size(&item->dp_drr, chain);
 	if (payload_size) {
 		item->dp_payload = safe_malloc(payload_size);
 		size_t items_read = fread(item->dp_payload,

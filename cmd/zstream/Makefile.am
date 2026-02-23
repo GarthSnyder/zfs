@@ -19,13 +19,14 @@ zstream_SOURCES = \
 	%D%/zstream_queue.h \
 	%D%/zstream_chain.c \
 	%D%/zstream_chain.h \
-	%D%/zstream_chain_types.h \
 	%D%/zstream_fletcher4.c \
 	%D%/zstream_fletcher4.h \
 	%D%/zstream_blake3.c \
 	%D%/zstream_blake3.h \
 	%D%/zstream_validate.c \
 	%D%/zstream_validate.h \
+	%D%/zstream_byteswap.c \
+	%D%/zstream_byteswap.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
 	%D%/allocator.c \

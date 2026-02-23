@@ -20,6 +20,7 @@
 
 #include <libzfs.h>
 #include <libzutil.h>
+#include <libspl.h>
 
 #include "linear_hash_stats.h"
 #include "zstream.h"
@@ -228,6 +229,7 @@ serial_dedup_writes(linear_hash_t dedup_table)
 	context.dc_stats.last_status_time = getlrtime();
 	return (chain_step_t) {
 		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof(drr_blake3_t),
 		.cs_out_size = sizeof(drr_packet_t),
 		.serial = {
 			.css_process = (zc_serial_process_f *)chain_dedup_writes,
@@ -288,6 +290,8 @@ zstream_do_dedup(int argc, char *argv[])
 		zstream_usage();
 		exit(1);
 	}
+
+	libspl_init();
 
 	/* Calculate maximum memory for dedup table */
 	uint64_t max_memory;
