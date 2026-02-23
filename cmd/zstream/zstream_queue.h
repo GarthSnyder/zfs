@@ -75,10 +75,10 @@ struct zstream_queue;
 typedef struct zstream_queue *zstream_queue_t;
 
 typedef void
-zq_process_item_f(queue_item *item);
+zq_process_item_f(queue_item *item, void *context);
 
 typedef size_t
-zq_estimate_cost_f(queue_item *item);
+zq_estimate_cost_f(queue_item *item, void *context);
 
 /*
  * Create a queue. Must be called before enqueue or dequeue.
@@ -93,6 +93,7 @@ zq_estimate_cost_f(queue_item *item);
 typedef struct {
 	zq_process_item_f	*qp_process;
 	zq_estimate_cost_f	*qp_estimate_cost;
+	void                    *qp_context;
 	size_t			qp_item_size;
 	size_t			qp_batch_budget;
 	size_t			qp_queue_length;

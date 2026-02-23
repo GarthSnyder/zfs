@@ -156,6 +156,7 @@ static boolean_t
 chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
+	struct drr_begin *drrb	 = &drr->drr_u.drr_begin;
 
 	if (!ctxt->ic_fp) {
 		open_file(ctxt);
@@ -172,13 +173,21 @@ chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 		}
 	}
 	if (ctxt->ic_offset == 0) {
-		uint64_t magic = drr->drr_u.drr_begin.drr_magic;
+		uint64_t magic = drrb->drr_magic;
+		uint64_t versioninfo = drrb->drr_versioninfo;
 		if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
 			chain->ca_flags |= CA_BYTESWAPPED;
+			versioninfo = BSWAP_64(drrb->drr_versioninfo);
 		} else if (magic != DMU_BACKUP_MAGIC) {
 			fprintf(stderr, "Invalid ZFS stream, bad magic "
 				"number %lx\n", magic);
 			exit(1);
+		}
+		uint64_t fflags = DMU_GET_FEATUREFLAGS(versioninfo);
+		if (fflags & (DMU_BACKUP_FEATURE_DEDUP |
+			DMU_BACKUP_FEATURE_DEDUPPROPS))
+		{
+			chain->ca_flags |= CA_DEDUPED;
 		}
 	}
 	uint32_t payload_size = calc_payload_size(&item->dp_drr, chain);
@@ -234,5 +243,17 @@ chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t attrs)
 		}
 	}
 	return B_TRUE;
+}
+
+size_t
+constant_cost_of_one(drr_packet_t *packet, void *context) {
+	(void) context; (void) packet;
+	return (1);
+}
+
+size_t
+payload_size_as_cost(drr_packet_t *packet, void *context) {
+	(void) context;
+	return (packet->dp_payload_size);
 }
 

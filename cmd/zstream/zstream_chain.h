@@ -89,6 +89,7 @@ typedef struct chain_step {
 		size_t 			csp_batch_budget;
 		zq_estimate_cost_f	*csp_cost;
 		zq_process_item_f	*csp_process;
+		void			*csp_context;
 	} parallel;
     };
 } chain_step_t;

@@ -72,6 +72,7 @@ struct zstream_queue {
 	size_t			zq_item_size;
 	zq_process_item_f	*zq_process;
 	zq_estimate_cost_f	*zq_cost;
+	void			*zq_context;
 	int			zq_batch_budget;
 	boolean_t		zq_finalized;
 };
@@ -167,6 +168,7 @@ zstream_queue_create(zq_params_t *params)
 		.zq_item_size = params->qp_item_size,
 		.zq_process = params->qp_process,
 		.zq_cost = params->qp_estimate_cost,
+		.zq_context = params->qp_context;
 		.zq_batch_budget = params->qp_batch_budget,
 		.zq_slots = safe_calloc(params->qp_queue_length *
 			(sizeof(queue_slot_t) + params->qp_item_size)),
@@ -335,7 +337,7 @@ queue_worker(void *dummy)
 		uint64_t count = claim_batch(queue, batch);
 		/* Complete the whole batch before returning any items */
 		for (int i = 0; i < count; i++) {
-			queue->zq_process(batch[i]->qs_item);
+			queue->zq_process(batch[i]->qs_item, queue->zq_context);
 		}
 		pthread_mutex_lock(&queue->zq_mutex);
 		for (int i = 0; i < count; i++) {
@@ -360,7 +362,7 @@ zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last)
 	}
 	int slot_num = queue->zq_enqueue % queue->zq_num_slots;
 	queue_slot_t *slot = &queue->zq_slots[slot_num];
-	slot->qs_cost = last ? 0 : queue->zq_cost(item);
+	slot->qs_cost = last ? 0 : queue->zq_cost(item, queue->zq_context);
 	slot->qs_completed = B_FALSE;
 	slot->qs_end_of_stream = last;
 	if (!last && item) {

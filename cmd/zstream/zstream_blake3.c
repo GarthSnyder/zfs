@@ -26,15 +26,16 @@
 #include "zstream_shared.h"
 
 static void
-chain_calc_blake3(drr_blake3_t *item)
+chain_calc_blake3(drr_blake3_t *item, void *context)
 {
+	(void) context;
 	drr_packet_t *base = &item->dp_base;
 	assert(base->dp_payload_size > 0);
 
-    BLAKE3_CTX ctx;
-    Blake3_Init(&ctx);
-    Blake3_Update(&ctx, base->dp_payload, base->dp_payload_size);
-    Blake3_Final(&ctx, (uint8_t *)&item->dp_blake3_payload);
+	BLAKE3_CTX ctx;
+	Blake3_Init(&ctx);
+	Blake3_Update(&ctx, base->dp_payload, base->dp_payload_size);
+	Blake3_Final(&ctx, (uint8_t *)&item->dp_blake3_payload);
 }
 
 chain_step_t
@@ -46,7 +47,8 @@ parallel_calc_blake3(void) {
 		.parallel = {
 			.csp_queue_length = 256,
 			.csp_batch_budget = 64 * 1024,
-			.csp_process = (zq_process_item_f *)chain_calc_blake3
+			.csp_process = (zq_process_item_f *)chain_calc_blake3,
+			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost;
 		}
 	};
 }

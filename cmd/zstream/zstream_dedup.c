@@ -175,11 +175,12 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 
 	if (drr->drr_type == DRR_BEGIN) {
 		/* Set the DEDUP feature flag for this stream */
-		int fflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
+		uint64_t fflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 		fflags |= DMU_BACKUP_FEATURE_DEDUP;
 		fflags |= DMU_BACKUP_FEATURE_DEDUPPROPS;
 		/* cppcheck-suppress syntaxError */
 		DMU_SET_FEATUREFLAGS(drrb->drr_versioninfo, fflags);
+		return B_TRUE;
 	}
 
 	if (drr->drr_type != DRR_WRITE) {
@@ -322,7 +323,7 @@ zstream_do_dedup(int argc, char *argv[])
 		parallel_calc_fletcher4(),
 		serial_validate_fletcher4(),
 		serial_byteswap(),
-		serial_validate_records(),
+		parallel_validate_records(),
 		parallel_calc_blake3(),
 		serial_dedup_writes(dedup_table),
 		parallel_calc_fletcher4(),

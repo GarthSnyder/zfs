@@ -26,6 +26,7 @@ extern "C" {
 
 #include <sys/types.h>
 #include "zstream_chain.h"
+#include "zstream_queue.h"
 
 #define MAX_IO_STREAMS 4
 
@@ -41,6 +42,13 @@ serial_read_stream(const char *filename);
 
 chain_step_t
 serial_write_stream(const char *filename);
+
+size_t
+constant_cost_of_one(drr_packet_t *packet);
+
+size_t
+payload_size_as_cost(drr_packet_t *packet);
+
 
 #ifdef __cplusplus
 }

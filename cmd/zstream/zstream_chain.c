@@ -57,11 +57,6 @@ chain_exec_serialized(chain_info_t chain);
 
 boolean_t serialize_chains = B_FALSE;
 
-static size_t
-payload_size_as_cost(drr_packet_t *packet) {
-	return (size_t)packet->dp_payload_size;
-}
-
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs, int num_steps)
 {
@@ -86,12 +81,6 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs, int num_steps)
 		if (i > 0 && chain[i].cs_in_size != chain[i-1].cs_out_size) {
 			fprintf(stderr, "Warning: chain items %d and %d have "
 				"mismatched packet sizes\n", i-1, i);
-		}
-		if (chain[i].cs_type == CS_PARALLEL) {
-			if (!chain[i].parallel.csp_cost) {
-				chain[i].parallel.csp_cost =
-				    (zq_estimate_cost_f *)payload_size_as_cost;
-			}
 		}
 	}
 

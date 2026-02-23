@@ -23,6 +23,7 @@
 
 #include "zstream.h"
 #include "zstream_validate.h"
+#include "zstream_io.h"
 #include "zstream_shared.h"
 
 /*
@@ -31,7 +32,7 @@
  * in general to make this module necessary.
  */
 static boolean_t
-chain_validate_records(drr_packet_t *item, void *context, chain_attrs_t chain)
+chain_validate_records(drr_packet_t *item)
 {
 	(void) context; (void) chain;
 	struct dmu_replay_record *drr	 = &item->dp_drr;
@@ -80,6 +81,10 @@ chain_validate_records(drr_packet_t *item, void *context, chain_attrs_t chain)
 	case DRR_WRITE:
 	{
 		VERIFY3U(nesting, ==, 1);
+		if (drrw->drr_compressiontype >= ZIO_COMPRESS_FUNCTIONS) {
+		    fprintf(stderr, "Invalid compression type: %d\n", dtype);
+		    exit(3);
+		}
 		break;
 	}
 
@@ -111,15 +116,20 @@ chain_validate_records(drr_packet_t *item, void *context, chain_attrs_t chain)
 	return B_TRUE;
 }
 
+zq_estimate_cost_f
+
 chain_step_t
-serial_validate_records(void)
+parallel_validate_records(void)
 {
-	return (chain_step_t) {
+    return (chain_step_t) {
 	.cs_type = CS_SERIAL,
 	.cs_in_size = sizeof(drr_packet_t),
 	.cs_out_size = sizeof(drr_packet_t),
-	.serial = {
-		.css_process = (zc_serial_process_f *)chain_validate_records,
+	.parallel = {
+		.csp_queue_length = 64,
+		.csp_batch_budget = 128 * 1024,
+		.csp_process = (zq_process_item_f *)chain_validate_records,
+		.csp_cost = (zq_estimate_cost_f *)constant_cost_of_one;
 	}
-	};
+    };
 }
