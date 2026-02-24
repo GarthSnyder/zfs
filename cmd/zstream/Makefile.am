@@ -22,6 +22,8 @@ zstream_SOURCES = \
 	%D%/zstream_fletcher4.h \
 	%D%/zstream_blake3.c \
 	%D%/zstream_blake3.h \
+	%D%/zstream_compress.c \
+	%D%/zstream_compress.h \
 	%D%/zstream_validate.c \
 	%D%/zstream_validate.h \
 	%D%/zstream_byteswap.c \
@@ -39,6 +41,7 @@ zstream_SOURCES = \
 
 zstream_LDADD = \
 	libzfs.la \
+	libzstd.la \
 	libzfs_core.la \
 	libzpool.la \
 	libnvpair.la \

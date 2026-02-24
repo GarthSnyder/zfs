@@ -39,92 +39,12 @@
 #include "zfs_fletcher.h"
 #include "zstream.h"
 #include "zstream_shared.h"
+#include "zstream_modules.h"
 
 #define MAX_COMPRESSION_STEPS  4
 
-typedef struct {
-	enum zio_compress	cs_type;
-	int 			cs_level;
-} compression_spec_t;
-
 static compression_spec_t	specs[MAX_COMPRESSION_STEPS];
 static int			next_spec = 0;
-
-int
-zstream_do_recompress(int argc, char *argv[])
-{
-	int c;
-	int level = 0;
-
-	while ((c = getopt(argc, argv, "l:")) != -1) {
-		switch (c) {
-		case 'l':
-			if (sscanf(optarg, "%d", &level) != 1) {
-				fprintf(stderr,
-				    "failed to parse level '%s'\n",
-				    optarg);
-				zstream_usage();
-			}
-			break;
-		case '?':
-			(void) fprintf(stderr, "invalid option '%c'\n",
-			    optopt);
-			zstream_usage();
-			break;
-		}
-	}
-
-	argc -= optind;
-	argv += optind;
-
-	if (argc != 1)
-		zstream_usage();
-
-	compression_spec_t spec = { .cs_level = level };
-	if (strcmp(argv[0], "off") == 0) {
-		spec->cs_type = ZIO_COMPRESS_OFF;
-	} else {
-		enum zio_compress ct;
-		for (ct = 0; ct < ZIO_COMPRESS_FUNCTIONS; ct++) {
-		    if (strcmp(argv[0], zio_compress_table[ct].ci_name) == 0)
-			break;
-		}
-		if (ct == ZIO_COMPRESS_FUNCTIONS ||
-		    zio_compress_table[ct].ci_compress == NULL)
-		{
-			fprintf(stderr, "Invalid compression type %s.\n",
-				argv[0]);
-			exit(2);
-		}
-		spec->cs_type = ct;
-	}
-
-	abd_init();
-	zio_init();
-	zstd_init();
-
-	zstream_chain_t recompress_chain = {
-		serial_read_stream((argc == 1) ? argv[0] : NULL),
-		parallel_calc_fletcher4(),
-		serial_validate_fletcher4(),
-		serial_byteswap(),
-		serial_validate_records(),
-		parallel_decompress_writes(spec),
-		parallel_compress_writes(spec),
-		parallel_calc_fletcher4(),
-		serial_add_fletcher4(),
-		serial_write_stream(NULL)
-	};
-
-	zstream_chain_exec(recompress_chain, &attrs,
-		sizeof(recompress_chain) / sizeof(chain_step_t));
-
-	fletcher_4_fini();
-	zio_fini();
-	zstd_fini();
-	abd_fini();
-	return 0;
-}
 
 /*
  * We can ignore the context here because it's already been evaluated by the
@@ -136,20 +56,19 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 {
 	(void) context;
 
-	drr_packet_t *base	 = &item->dp_base;
-	dmu_replay_record_t *drr = &base->dp_drr;
+	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
 	enum zio_compress dtype  = drrw->drr_compressiontype;
 	uint8_t *buff 		 = safe_calloc(drrw->drr_logical_size);
 	abd_t sabd, dabd;
 
 	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
-	VERIFY3U(drr->drr_compressiontype, !=, ZIO_COMPRESS_OFF);
-	abd_get_from_buf_struct(&sabd, item->dp_base.dp_payload,
-		item->dp_base.dp_payload_size);
+	VERIFY3U(drrw->drr_compressiontype, !=, ZIO_COMPRESS_OFF);
+	abd_get_from_buf_struct(&sabd, item->dp_payload,
+		item->dp_payload_size);
 	abd_get_from_buf_struct(&dabd, buff, drrw->drr_logical_size);
-	if (zio_decompress_data(dtype, &sabd, &dabd, payload_size,
-		abd_get_size(&dabd), NULL) != 0)
+	if (zio_decompress_data(dtype, &sabd, &dabd,
+		item->dp_payload_size, abd_get_size(&dabd), NULL) != 0)
 	{
 		warnx("Decompression type %d failed "
 		    "for ino %llu offset %llu",
@@ -158,12 +77,12 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 		    (u_longlong_t)drrw->drr_offset);
 		exit(4);
 	}
-	free(base->dp_payload);
-	base->dp_payload = buff;
-	base->dp_payload_size = drrw->drr_logical_size;
+	free(item->dp_payload);
+	item->dp_payload = buff;
+	item->dp_payload_size = drrw->drr_logical_size;
 	drr->drr_payloadlen = drrw->drr_logical_size;
-	drr->drr_compressed_size = 0;
-	drr->drr_compressiontype = ZIO_COMPRESS_OFF;
+	drrw->drr_compressed_size = 0;
+	drrw->drr_compressiontype = ZIO_COMPRESS_OFF;
 	abd_free(&dabd);
 	abd_free(&sabd);
 }
@@ -171,10 +90,8 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 static void
 chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 {
-	drr_packet_t *base	 = &item->dp_base;
-	dmu_replay_record_t *drr = &base->dp_drr;
+	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
-	enum zio_compress dtype  = drrw->drr_compressiontype;
 	uint8_t *buff 		 = safe_calloc(drrw->drr_logical_size);
 
 	abd_t	sabd, dabd;
@@ -207,30 +124,12 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	abd_free(&dabd);
 }
 
-size_t
-chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
-{
-	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw	 = &drr->drr_u.drr_write;
-	uint8_t zstd_level;
-
-	if (drr->drr_type != DRR_WRITE ||
-		drrw->drr_compressiontype == ZIO_COMPRESS_OFF)
-	{
-		return (0);
-	}
-	if (!context) {
-		return (item->dp_payload_size);
-	}
-	return chain_compress_cost(item, context);
-}
-
-size_t
+static size_t
 chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	 = &drr->drr_u.drr_write;
-	uint8_t zstd_level;
+	uint8_t cur_level;
 
 	if (drr->drr_type != DRR_WRITE) {
 		return (0);
@@ -248,8 +147,8 @@ chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
 	}
 	if (drrw->drr_compressiontype == context->cs_type) {
 		if (context->cs_type == ZIO_COMPRESS_ZSTD) {
-			zfs_zstd_get_level(item->dp_payload,
-				item->dp_payload_size, &cur_level);
+			cur_level = zfs_get_hdrlevel(
+				(void *)item->dp_payload);
 			if (context->cs_level != cur_level) {
 				return (item->dp_payload_size);
 			}
@@ -257,6 +156,23 @@ chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
 		return (0);
 	}
 	return (item->dp_payload_size);
+}
+
+static size_t
+chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
+{
+	dmu_replay_record_t *drr = &item->dp_drr;
+	struct drr_write *drrw	 = &drr->drr_u.drr_write;
+
+	if (drr->drr_type != DRR_WRITE ||
+		drrw->drr_compressiontype == ZIO_COMPRESS_OFF)
+	{
+		return (0);
+	}
+	if (!context) {
+		return (item->dp_payload_size);
+	}
+	return chain_compress_cost(item, context);
 }
 
 /*
@@ -267,13 +183,13 @@ chain_step_t
 parallel_decompress_writes(compression_spec_t *target)
 {
 	int this_spec = next_spec % MAX_COMPRESSION_STEPS;
-	compression_spec_t *context = &contexts[this_spec];
+	compression_spec_t *context = &specs[this_spec];
 
 	next_spec++;
 	if (!target) {
 		context = NULL;
 	} else {
-		*context = target
+		*context = *target;
 	};
 	return (chain_step_t) {
 		.cs_type = CS_PARALLEL,
@@ -293,7 +209,7 @@ chain_step_t
 parallel_compress_writes(compression_spec_t target)
 {
 	int this_spec = next_spec % MAX_COMPRESSION_STEPS;
-	compression_spec_t *context = &contexts[this_spec];
+	compression_spec_t *context = &specs[this_spec];
 
 	next_spec++;
 	*context = target;
@@ -309,4 +225,81 @@ parallel_compress_writes(compression_spec_t target)
 		    .csp_context = context
 		}
 	};
+}
+
+int
+zstream_do_recompress(int argc, char *argv[])
+{
+	int c;
+	int level = 0;
+	struct chain_attrs attrs = {};
+
+	while ((c = getopt(argc, argv, "l:")) != -1) {
+		switch (c) {
+		case 'l':
+			if (sscanf(optarg, "%d", &level) != 1) {
+				fprintf(stderr,
+				    "failed to parse level '%s'\n",
+				    optarg);
+				zstream_usage();
+			}
+			break;
+		case '?':
+			(void) fprintf(stderr, "invalid option '%c'\n",
+			    optopt);
+			zstream_usage();
+			break;
+		}
+	}
+
+	argc -= optind;
+	argv += optind;
+
+	if (argc != 1)
+		zstream_usage();
+
+	compression_spec_t spec = { .cs_level = level };
+	if (strcmp(argv[0], "off") == 0) {
+		spec.cs_type = ZIO_COMPRESS_OFF;
+	} else {
+		enum zio_compress ct;
+		for (ct = 0; ct < ZIO_COMPRESS_FUNCTIONS; ct++) {
+		    if (strcmp(argv[0], zio_compress_table[ct].ci_name) == 0)
+			break;
+		}
+		if (ct == ZIO_COMPRESS_FUNCTIONS ||
+		    zio_compress_table[ct].ci_compress == NULL)
+		{
+			fprintf(stderr, "Invalid compression type %s.\n",
+				argv[0]);
+			exit(2);
+		}
+		spec.cs_type = ct;
+	}
+
+	abd_init();
+	zio_init();
+	zstd_init();
+
+	zstream_chain_t recompress_chain = {
+		serial_read_stream((argc == 1) ? argv[0] : NULL),
+		parallel_calc_fletcher4(),
+		serial_validate_fletcher4(),
+		serial_byteswap(),
+		parallel_validate_records(),
+		parallel_decompress_writes(&spec),
+		parallel_compress_writes(spec),
+		parallel_calc_fletcher4(),
+		serial_add_fletcher4(),
+		serial_write_stream(NULL)
+	};
+
+	zstream_chain_exec(recompress_chain, &attrs,
+		sizeof(recompress_chain) / sizeof(chain_step_t));
+
+	fletcher_4_fini();
+	zio_fini();
+	zstd_fini();
+	abd_fini();
+	return 0;
 }

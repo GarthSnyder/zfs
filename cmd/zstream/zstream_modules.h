@@ -31,6 +31,7 @@ extern "C" {
 #include "zstream_io.h"
 #include "zstream_shared.h"
 #include "zstream_validate.h"
+#include "zstream_compress.h"
 
 #ifdef __cplusplus
 }

@@ -17,8 +17,8 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ZSTREAM_VALIDATE_H
-#define _ZSTREAM_VALIDATE_H
+#ifndef _ZSTREAM_COMPRESS_H
+#define _ZSTREAM_COMPRESS_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,11 +26,19 @@ extern "C" {
 
 #include "zstream_io.h"
 
+typedef struct {
+	enum zio_compress	cs_type;
+	int 			cs_level;
+} compression_spec_t;
+
 chain_step_t
-parallel_validate_records(void);
+parallel_decompress_writes(compression_spec_t *target);
+
+chain_step_t
+parallel_compress_writes(compression_spec_t target);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* _ZSTREAM_VALIDATE_H */
+#endif  /* _ZSTREAM_COMPRESS_H */

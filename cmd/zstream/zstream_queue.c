@@ -17,18 +17,7 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <assert.h>
-#include <errno.h>
-#include <math.h>
 #include <pthread.h>
-#include <sched.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <threads.h>
-#include <unistd.h>
-#include <libspl.h>
 
 #include "zstream_queue.h"
 #include "zstream_shared.h"
@@ -168,7 +157,7 @@ zstream_queue_create(zq_params_t *params)
 		.zq_item_size = params->qp_item_size,
 		.zq_process = params->qp_process,
 		.zq_cost = params->qp_estimate_cost,
-		.zq_context = params->qp_context;
+		.zq_context = params->qp_context,
 		.zq_batch_budget = params->qp_batch_budget,
 		.zq_slots = safe_calloc(params->qp_queue_length *
 			(sizeof(queue_slot_t) + params->qp_item_size)),

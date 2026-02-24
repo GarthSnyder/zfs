@@ -31,17 +31,18 @@
  * be integrated. Overall, it looks like there may not be enough validation going on
  * in general to make this module necessary.
  */
-static boolean_t
-chain_validate_records(drr_packet_t *item)
+static void
+chain_validate_records(drr_packet_t *item, void *context)
 {
-	(void) context; (void) chain;
+	(void) context;
 	struct dmu_replay_record *drr	 = &item->dp_drr;
+	struct drr_write *drrw		 = &drr->drr_u.drr_write;
 	int nesting = 0;
 
 	if (!item) {
-		return B_TRUE;
+		return;
 	}
-	if (!item->dp_payload_size && drr->drr_type != DRR_BEGIN) {
+	if (!item->dp_stream_offset && drr->drr_type != DRR_BEGIN) {
 		fprintf(stderr, "Warning: first record is not DRR_BEGIN\n");
 	}
 
@@ -82,7 +83,8 @@ chain_validate_records(drr_packet_t *item)
 	{
 		VERIFY3U(nesting, ==, 1);
 		if (drrw->drr_compressiontype >= ZIO_COMPRESS_FUNCTIONS) {
-		    fprintf(stderr, "Invalid compression type: %d\n", dtype);
+		    fprintf(stderr, "Invalid compression type: %d\n",
+		    	drrw->drr_compressiontype);
 		    exit(3);
 		}
 		break;
@@ -113,10 +115,7 @@ chain_validate_records(drr_packet_t *item)
 		fprintf(stderr, "Unknown record type: %d\n", drr->drr_type);
 		exit(1);
 	}}
-	return B_TRUE;
 }
-
-zq_estimate_cost_f
 
 chain_step_t
 parallel_validate_records(void)
@@ -129,7 +128,7 @@ parallel_validate_records(void)
 		.csp_queue_length = 64,
 		.csp_batch_budget = 128 * 1024,
 		.csp_process = (zq_process_item_f *)chain_validate_records,
-		.csp_cost = (zq_estimate_cost_f *)constant_cost_of_one;
+		.csp_cost = (zq_estimate_cost_f *)constant_cost_of_one
 	}
     };
 }

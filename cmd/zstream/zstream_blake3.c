@@ -48,7 +48,7 @@ parallel_calc_blake3(void) {
 			.csp_queue_length = 256,
 			.csp_batch_budget = 64 * 1024,
 			.csp_process = (zq_process_item_f *)chain_calc_blake3,
-			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost;
+			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost
 		}
 	};
 }

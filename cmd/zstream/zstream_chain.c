@@ -184,9 +184,11 @@ chain_exec_serialized(chain_info_t ci)
 				ci->ci_chain[i].serial.css_context,
 				ci->ci_attrs);
 		} else if (!done) {
-			size_t cost = ci->ci_chain[i].parallel.csp_cost(buffer);
+			size_t cost = ci->ci_chain[i].parallel.csp_cost(buffer,
+				ci->ci_chain[i].parallel.csp_context);
 			if (cost > 0) {
-				ci->ci_chain[i].parallel.csp_process(buffer);
+				ci->ci_chain[i].parallel.csp_process(buffer,
+					ci->ci_chain[i].parallel.csp_context);
 			}
 		}
 	    }

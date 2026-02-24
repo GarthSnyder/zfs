@@ -44,10 +44,10 @@ chain_step_t
 serial_write_stream(const char *filename);
 
 size_t
-constant_cost_of_one(drr_packet_t *packet);
+constant_cost_of_one(drr_packet_t *packet, void *context);
 
 size_t
-payload_size_as_cost(drr_packet_t *packet);
+payload_size_as_cost(drr_packet_t *packet, void *context);
 
 
 #ifdef __cplusplus

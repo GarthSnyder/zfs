@@ -160,7 +160,7 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 {
 	dmu_replay_record_t *drr = &item->dp_base.dp_drr;
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
-	struct drr_write *drrb   = &drr->drr_u.drr_begin;
+	struct drr_begin *drrb   = &drr->drr_u.drr_begin;
 	dedup_stats_t *stats     = &context->dc_stats;
 	linear_hash_t dd_table   = context->dc_table;
 	dedup_entry_t existing;

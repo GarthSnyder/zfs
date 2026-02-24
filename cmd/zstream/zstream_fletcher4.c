@@ -40,7 +40,7 @@ typedef struct {
 } fletcher4_context_t;
 
 void
-chain_calc_fletcher4(drr_fletcher4_t *item);
+chain_calc_fletcher4(drr_fletcher4_t *item, void *context);
 
 boolean_t
 chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
@@ -58,8 +58,8 @@ parallel_calc_fletcher4(void) {
 		.parallel = {
 			.csp_queue_length = 64,
 			.csp_batch_budget = 128 * 1024,
-			.csp_process = (zq_process_item_f *)chain_calc_fletcher4
-			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost;
+			.csp_process = (zq_process_item_f *)chain_calc_fletcher4,
+			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost
 		}		
 	};
 }
@@ -148,8 +148,9 @@ fletcher4_incremental_combine(zio_cksum_t *zcp, const uint64_t size,
 }
 
 void
-chain_calc_fletcher4(drr_fletcher4_t *item)
+chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
 {
+	(void) context;
 	assert(item->dp_base.dp_payload_size > 0);
 
 	ssize_t remaining = item->dp_base.dp_payload_size;
