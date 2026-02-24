@@ -323,7 +323,7 @@ zstream_do_dedup(int argc, char *argv[])
 		parallel_calc_fletcher4(),
 		serial_validate_fletcher4(),
 		serial_byteswap(),
-		parallel_validate_records(),
+		serial_validate_records(),
 		parallel_calc_blake3(),
 		serial_dedup_writes(dedup_table),
 		parallel_calc_fletcher4(),

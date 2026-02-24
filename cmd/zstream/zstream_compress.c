@@ -286,7 +286,7 @@ zstream_do_recompress(int argc, char *argv[])
 		parallel_calc_fletcher4(),
 		serial_validate_fletcher4(),
 		serial_byteswap(),
-		parallel_validate_records(),
+		serial_validate_records(),
 		parallel_decompress_writes(&spec),
 		parallel_compress_writes(spec),
 		parallel_calc_fletcher4(),

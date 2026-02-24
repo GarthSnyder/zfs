@@ -98,7 +98,7 @@ open_file(io_context_t *context) {
 	} else if (isatty(STDOUT_FILENO)) {
 		(void) fprintf(stderr,
 		    "Error: Stream cannot be written to a terminal.\n"
-		    "Name a file or pipe to another command.\n");
+		    "Capture output to a file or pipe to another command.\n");
 		exit(1);
 	} else {
 		context->ic_fp = stdout;

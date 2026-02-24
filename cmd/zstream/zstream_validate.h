@@ -27,7 +27,7 @@ extern "C" {
 #include "zstream_io.h"
 
 chain_step_t
-parallel_validate_records(void);
+serial_validate_records(void);
 
 #ifdef __cplusplus
 }
