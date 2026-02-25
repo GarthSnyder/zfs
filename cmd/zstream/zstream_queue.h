@@ -123,6 +123,16 @@ boolean_t
 zstream_dequeue(zstream_queue_t queue, queue_item *item);
 
 /*
+ * Connect two queues so that items completed by the first are forwarded
+ * automatically to the second. The advantage over just looping through
+ * "dequeue from A, enqueue on B" is that it avoids two copies. It's also
+ * potentially cheaper in terms of locking and synchronization activity
+ * since multiple items can be forwarded at once.
+ */
+void
+zstream_queue_forward(zstream_queue_t from, zstream_queue_t to);
+
+/*
  * Declare that all items have been submitted. The queue will continue to
  * function normally for dequeuers and worker threads until zstream_dequeue()
  * returns B_FALSE, at which point the queue will be destroyed.

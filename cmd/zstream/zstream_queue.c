@@ -64,6 +64,8 @@ struct zstream_queue {
 	zq_estimate_cost_f	*zq_cost;
 	void			*zq_context;
 	int			zq_batch_budget;
+	zstream_queue_t		zq_forward_to;
+	boolean_t		zq_is_forwarded_to;
 	boolean_t		zq_finalized;
 };
 
@@ -76,12 +78,14 @@ typedef struct {
 	int			tp_num_threads;
 } thread_pool_t;
 
-typedef void pthread_cleanup_f(void *);
+typedef void cleanup_f(void *);
+typedef void *thread_f(void *);
 
 static thread_pool_t pool = {};
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
 
 static void *queue_worker(void *);
+static void *forwarding_worker(zstream_queue_t from);
 
 static void
 thread_pool_init(void) {
@@ -136,7 +140,7 @@ auto_unlock_mutex(pthread_mutex_t *mutex) {
 
 static void
 await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex) {
-	pthread_cleanup_push((pthread_cleanup_f *)auto_unlock_mutex, mutex);
+	pthread_cleanup_push((cleanup_f *)auto_unlock_mutex, mutex);
 	pthread_cond_wait(cond, mutex);
 	pthread_cleanup_pop(0);
 }
@@ -359,6 +363,7 @@ zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last)
 		pthread_mutex_unlock(&queue->zq_mutex);
 		return;
 	}
+	VERIFY3U(queue->zq_is_forwarded_to, ==, B_FALSE);
 	while (queue->zq_enqueue - queue->zq_dequeue >= queue->zq_num_slots) {
 		await_condition(&queue->zq_dequeued, &queue->zq_mutex);
 	}
@@ -395,6 +400,40 @@ zstream_queue_fini(zstream_queue_t queue) {
 }
 
 /*
+ * Connect two queues so that items completed by the first are forwarded
+ * automatically to the second. The advantage over just looping through
+ * "dequeue from A, enqueue on B" is that it avoids two copies. It's also
+ * potentially cheaper in terms of locking and synchronization activity
+ * since multiple items can be forwarded at once.
+ */
+void
+zstream_queue_forward(zstream_queue_t from, zstream_queue_t to)
+{
+	pthread_t 	forward_thread;
+	static int	forwarder_number = 0;
+	char	  	buff[32];
+
+	if (from->zq_item_size != to->zq_item_size) {
+		fprintf(stderr, "Cannot forward between two queues "
+			"with different item sizes.\n");
+		exit(1);
+	}
+	if (to->zq_is_forwarded_to) {
+		fprintf(stderr, "It is not currently possible to forward "
+			"items from multiple queues to the same destination.\n");
+		exit(1);
+	}
+	pthread_mutex_lock(&from->zq_mutex);
+	VERIFY0(from->zq_forward_to);
+	from->zq_forward_to = to;
+	pthread_mutex_unlock(&from->zq_mutex);
+	pthread_create(&forward_thread, NULL, (thread_f *)forwarding_worker, from);
+	sprintf(buff, "forwarder-%d", forwarder_number++);
+	pthread_setname_np(forward_thread, buff);
+	pthread_detach(forward_thread);
+}
+
+/*
  * Must be called with the pool mutex held.
  */
 static void
@@ -404,7 +443,7 @@ zstream_queue_destroy(zstream_queue_t queue)
 	pthread_cond_destroy(&queue->zq_completed);
 	pthread_cond_destroy(&queue->zq_dequeued);
 
-	free(queue->zq_slots);
+	// free(queue->zq_slots);
 	queue->zq_slots = NULL;
 	free(queue);
 
@@ -445,4 +484,94 @@ zstream_dequeue(zstream_queue_t queue, queue_item *item)
 		return B_TRUE;
 	}
 }
+
+/*
+ * Forward as many items as possible from one queue to another. Returns
+ * B_TRUE if the source queue reaches end-of-stream.
+ *
+ * Must be called with both queues locked.
+ */
+static boolean_t
+forward_items(zstream_queue_t from, zstream_queue_t to)
+{
+	int from_slots = from->zq_complete - from->zq_dequeue;
+	int to_occupied = to->zq_enqueue - to->zq_dequeue;
+	int to_slots = to->zq_num_slots - to_occupied;
+	int batch = MIN(from_slots, to_slots);
+
+	for (int i = 0; i < batch; i++) {
+		int from_ix = from->zq_dequeue++ % from->zq_num_slots;
+		int to_ix = to->zq_enqueue++ % to->zq_num_slots;
+		queue_slot_t *from_slot = &from->zq_slots[from_ix];
+		queue_slot_t *to_slot = &to->zq_slots[to_ix];
+		void *temp = to_slot->qs_item;
+
+		to_slot->qs_item = from_slot->qs_item;
+		from_slot->qs_item = temp;
+		to_slot->qs_end_of_stream = from_slot->qs_end_of_stream;
+
+		if (from_slot->qs_end_of_stream) {
+			to->zq_finalized = B_TRUE;
+			to_slot->qs_cost = 0;
+			to_slot->qs_completed = B_TRUE;
+			return B_TRUE;
+		}
+
+		to_slot->qs_end_of_stream = B_FALSE;
+		to_slot->qs_cost = to->zq_cost(to_slot->qs_item, to->zq_context);
+		to_slot->qs_completed = to_slot->qs_cost == 0;
+	}
+	return B_FALSE;
+}
+
+/*
+ * A forwarder thread is the only dequeuer on the "from" queue, and it is
+ * also the only enqueuer on the "to" queue. So we can independently check
+ * the number of items available to be forwarded and the number of slots
+ * available to receive them. From this, we calculate a floor on the number
+ * of transferrable items. Only when we're sure we can do a transfer without
+ * blocking on either side do we secure both locks.
+ *
+ * Lock ordering: the "to" queue lock is always secured first, followed by
+ * the "from" queue. The thread pool mutex is acquired last of all.
+ *
+ * This is the only case in this queue implementation in which multiple
+ * locks are held simultaneously by a single thread.
+ */
+static void *
+forwarding_worker(zstream_queue_t from)
+{
+	zstream_queue_t to = from->zq_forward_to;
+
+start:	pthread_mutex_lock(&from->zq_mutex);
+	while (from->zq_complete - from->zq_dequeue == 0) {
+		pthread_cond_wait(&from->zq_completed, &from->zq_mutex);
+	}
+	pthread_mutex_unlock(&from->zq_mutex);
+	pthread_mutex_lock(&to->zq_mutex);
+	while (to->zq_num_slots - (to->zq_enqueue - to->zq_dequeue) == 0) {
+		pthread_cond_wait(&to->zq_dequeued, &to->zq_mutex);
+	}
+	pthread_mutex_lock(&from->zq_mutex);
+
+	boolean_t from_at_eos = forward_items(from, to);
+
+	pthread_mutex_unlock(&to->zq_mutex);
+	pthread_mutex_lock(&pool.tp_mutex);
+	pthread_cond_signal(&pool.tp_enqueued);
+
+	if (from_at_eos) {
+		pthread_mutex_unlock(&from->zq_mutex);
+		zstream_queue_destroy(from);
+		pthread_mutex_unlock(&pool.tp_mutex);
+		return NULL;
+	}
+
+	pthread_mutex_unlock(&pool.tp_mutex);
+	pthread_cond_signal(&from->zq_dequeued);
+	pthread_mutex_unlock(&from->zq_mutex);
+
+	goto start;
+}
+
 
