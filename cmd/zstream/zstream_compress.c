@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <libspl.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
 #include <sys/zstd/zstd.h>
@@ -93,12 +94,13 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
 	uint8_t *buff 		 = safe_calloc(drrw->drr_logical_size);
+	enum zio_compress ctype	 = drrw->drr_compressiontype;
 
 	abd_t	sabd, dabd;
 	size_t	csize, rounded;
 
 	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
-	VERIFY3U(drrw->drr_compressiontype, ==, ZIO_COMPRESS_OFF);
+	VERIFY0P(zio_compress_table[ctype].ci_decompress);
 	abd_t *pabd = abd_get_from_buf_struct(&dabd, buff,
 		drrw->drr_logical_size);
 	abd_get_from_buf_struct(&sabd, item->dp_payload,
@@ -163,9 +165,10 @@ chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	 = &drr->drr_u.drr_write;
+	enum zio_compress ctype = drrw->drr_compressiontype;
 
 	if (drr->drr_type != DRR_WRITE ||
-		drrw->drr_compressiontype == ZIO_COMPRESS_OFF)
+		zio_compress_table[ctype].ci_decompress == NULL)
 	{
 		return (0);
 	}
@@ -280,9 +283,10 @@ zstream_do_recompress(int argc, char *argv[])
 	abd_init();
 	zio_init();
 	zstd_init();
+	libspl_init();
 
 	zstream_chain_t recompress_chain = {
-		serial_read_stream((argc == 1) ? argv[0] : NULL),
+		serial_read_stream(NULL),
 		parallel_calc_fletcher4(),
 		serial_validate_fletcher4(),
 		serial_byteswap(),
@@ -298,6 +302,7 @@ zstream_do_recompress(int argc, char *argv[])
 		sizeof(recompress_chain) / sizeof(chain_step_t));
 
 	fletcher_4_fini();
+	libspl_fini();
 	zio_fini();
 	zstd_fini();
 	abd_fini();

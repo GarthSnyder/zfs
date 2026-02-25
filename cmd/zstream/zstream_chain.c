@@ -105,7 +105,8 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs, int num_steps)
 				.qp_estimate_cost = ci->parallel.csp_cost,
 				.qp_item_size = max_size,
 				.qp_batch_budget = ci->parallel.csp_batch_budget,
-				.qp_queue_length = ci->parallel.csp_queue_length
+				.qp_queue_length = ci->parallel.csp_queue_length,
+				.qp_context = ci->parallel.csp_context
 			};
 			queues[i] = zstream_queue_create(&queue_params);
 		}

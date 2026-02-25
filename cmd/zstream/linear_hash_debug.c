@@ -103,7 +103,7 @@ lh_print_stats(linear_hash_t lh) {
 	lh_report_t stats;
 	lh_get_stats(lh, &stats);
 	fprintf(stderr, "%lu entries in %lu bucket chains (occupancy %.0f%%):\n",
-		stats.lr_total_entries, stats.lr_total_chains, stats.lr_occupancy);
+		stats.lr_total_entries, stats.lr_total_chains, 100 * stats.lr_occupancy);
 	for (int i = 0; i < MAX_BUCKET_CHAIN; i++) {
 		bucket_stats_t *cs = &stats.lr_chains_by_length[i];
 		if (cs->bs_num_chains) {

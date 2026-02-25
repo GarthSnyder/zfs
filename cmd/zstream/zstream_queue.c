@@ -282,14 +282,11 @@ select_stochastic(double weights[], int num_values)
 	for (int i = 0; i < num_values; i++) {
 		total += weights[i];
 	}
-	random_get_bytes((uint8_t *)&numerator, sizeof(uint32_t));
+	random_get_pseudo_bytes((uint8_t *)&numerator, sizeof(uint32_t));
 	double select_val = total * numerator / denominator;
 	for (int i = 0; i < num_values; i++) {
-		if (select_val <= weights[i]) {
-			return i;
-		} else {
-			select_val -= weights[i];
-		}
+		if (select_val <= weights[i]) { return i; }
+		select_val -= weights[i];
 	}
 	abort();
 }
@@ -312,7 +309,6 @@ assign_thread_to_queue(void)
 		double weights[MAX_QUEUES];
 		int queues_with_work = 0;
 
-		forward_completed_items();
 		for (int i = 0; i < num_queues; i++) {
 			weights[i] = score_queue(pool.tp_queues[i]);
 			if (weights[i] > NO_WORK) {
@@ -399,7 +395,7 @@ zstream_queue_fini(zstream_queue_t queue) {
 }
 
 /*
- * Must be called with the pool mutex held. Releases the mutex.
+ * Must be called with the pool mutex held.
  */
 static void
 zstream_queue_destroy(zstream_queue_t queue)

@@ -77,7 +77,7 @@ writes_compatible(const drr_write_t *cur, const drr_write_t *prev)
 		memcmp(cur->drr_mac, prev->drr_mac, sizeof(cur->drr_mac)));
 }
 
-static boolean_t
+static inline boolean_t
 dedup_table_lookup(linear_hash_t ddt, drr_blake3_t *item, dedup_entry_t *dde)
 {
 	zio_cksum_t *long_hash = &item->dp_blake3_payload;
@@ -91,7 +91,7 @@ dedup_table_lookup(linear_hash_t ddt, drr_blake3_t *item, dedup_entry_t *dde)
 	return B_FALSE;
 }
 
-static void
+static inline void
 dedup_table_insert(linear_hash_t ddt, drr_blake3_t *item)
 {
 	dedup_entry_t dedup = {
@@ -102,7 +102,7 @@ dedup_table_insert(linear_hash_t ddt, drr_blake3_t *item)
 	lh_insert(ddt, BLAKE3_64_BIT(&item->dp_blake3_payload), &dedup);
 }
 
-static void
+static inline void
 maybe_print_update(dedup_context_t *context, boolean_t force)
 {
 	dedup_stats_t *stats = &context->dc_stats;
@@ -149,7 +149,7 @@ print_summary(dedup_context_t *context)
 			"deduplication\n", (llu)stats->disqualified_records);
 	}
 #ifdef DEBUG
-	fprintf(stderr, "Used %sB of hash table memory.\n\n", mem_str);
+	fprintf(stderr, "\nUsed %sB of hash table memory.\n\n", mem_str);
 	lh_print_stats(context->dc_table);
 #endif
 }
