@@ -115,15 +115,16 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs, int num_steps)
 	/* Create worker context bundles and assign step ranges */
 	int last = 0;
 	for (int first = 0; first < num_steps; first = last) {
-		contexts[num_workers].wc_chain_info = &chain_info;
-		contexts[num_workers].wc_first = first;
 		for (last = first + 1; last < num_steps &&
 			chain[last].cs_type != CS_PARALLEL; last++) {}
-		if (last >= num_steps) {
-			contexts[num_workers].wc_last = last - 1;
-		} else {
-			contexts[num_workers].wc_last = last;
+		last = MIN(last, num_steps - 1);
+		if (last == first + 1 && queues[first] && queues[last]) {
+			zstream_queue_forward(queues[first], queues[last]);
+			continue;
 		}
+		contexts[num_workers].wc_chain_info = &chain_info;
+		contexts[num_workers].wc_first = first;
+		contexts[num_workers].wc_last = last;
 		num_workers++;
 	}
 
