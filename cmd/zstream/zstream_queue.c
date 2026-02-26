@@ -64,7 +64,7 @@ struct zstream_queue {
 	zq_estimate_cost_f	*zq_cost;
 	void			*zq_context;
 	int			zq_batch_budget;
-	zstream_queue_t		zq_forward_to;
+	zstream_queue_t		*zq_forward_to;
 	boolean_t		zq_is_forwarded_to;
 	boolean_t		zq_finalized;
 };
@@ -72,7 +72,7 @@ struct zstream_queue {
 typedef struct {
 	pthread_mutex_t		tp_mutex;
 	pthread_cond_t		tp_enqueued;
-	zstream_queue_t		tp_queues[MAX_QUEUES];
+	zstream_queue_t		*tp_queues[MAX_QUEUES];
 	int			tp_num_queues;
 	pthread_t		*tp_threads;
 	int			tp_num_threads;
@@ -85,7 +85,7 @@ static thread_pool_t pool = {};
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
 
 static void *queue_worker(void *);
-static void *forwarding_worker(zstream_queue_t from);
+static void *forwarding_worker(zstream_queue_t *from);
 
 static void
 thread_pool_init(void) {
@@ -145,7 +145,7 @@ await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex) {
 	pthread_cleanup_pop(0);
 }
 
-zstream_queue_t
+zstream_queue_t *
 zstream_queue_create(zq_params_t *params)
 {
 	pthread_once(&once_control, thread_pool_init);
@@ -153,7 +153,7 @@ zstream_queue_create(zq_params_t *params)
 	if (!pool.tp_num_threads) {
 		thread_pool_spinup();
 	}
-	zstream_queue_t queue = safe_malloc(sizeof(struct zstream_queue));
+	zstream_queue_t *queue = safe_malloc(sizeof(struct zstream_queue));
 	pool.tp_queues[pool.tp_num_queues] = queue;
 	pool.tp_num_queues++;
 
@@ -192,7 +192,7 @@ zstream_queue_create(zq_params_t *params)
  * The calling thread must hold the queue lock.
  */
 static void
-advance_completion_pointer(zstream_queue_t queue) {
+advance_completion_pointer(zstream_queue_t *queue) {
 	boolean_t any_completed = B_FALSE;
 	while (queue->zq_complete < queue->zq_claim) {
 		int slot = queue->zq_complete % queue->zq_num_slots;
@@ -219,7 +219,7 @@ advance_completion_pointer(zstream_queue_t queue) {
  * available.
  */
 static int
-claim_batch(zstream_queue_t queue, queue_slot_t **batch)
+claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 {
 	uint64_t cost_claimed = 0;
 	uint64_t count = 0;
@@ -260,7 +260,7 @@ claim_batch(zstream_queue_t queue, queue_slot_t **batch)
  * without work.
  */
 static inline double
-score_queue(zstream_queue_t queue)
+score_queue(zstream_queue_t *queue)
 {
 	uint64_t claimable = queue->zq_enqueue - queue->zq_claim;
 	uint64_t dequeueable = queue->zq_complete - queue->zq_dequeue;
@@ -303,7 +303,7 @@ select_stochastic(double weights[], int num_values)
  * may be skewed or out of date. However, the pool mutex prevents new work
  * from being enqueued while scoring is going on.
  */
-static zstream_queue_t
+static zstream_queue_t *
 assign_thread_to_queue(void)
 {
 	pthread_mutex_lock(&pool.tp_mutex);
@@ -323,7 +323,7 @@ assign_thread_to_queue(void)
 			await_condition(&pool.tp_enqueued, &pool.tp_mutex);
 		} else {
 			int q = select_stochastic(weights, num_queues);
-			zstream_queue_t queue = pool.tp_queues[q];
+			zstream_queue_t *queue = pool.tp_queues[q];
 			if (queues_with_work > 1) {
 				pthread_cond_signal(&pool.tp_enqueued);
 			}
@@ -338,7 +338,7 @@ queue_worker(void *dummy)
 {
 	(void) dummy;
 	while (B_TRUE) {
-		zstream_queue_t queue = assign_thread_to_queue();
+		zstream_queue_t *queue = assign_thread_to_queue();
 		queue_slot_t *batch[MAX_BATCH];
 		uint64_t count = claim_batch(queue, batch);
 		/* Complete the whole batch before returning any items */
@@ -356,7 +356,7 @@ queue_worker(void *dummy)
 }
 
 static void
-zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last)
+zstream_enqueue_impl(zstream_queue_t *queue, queue_item *item, boolean_t last)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
 	if (queue->zq_finalized) {
@@ -390,12 +390,12 @@ zstream_enqueue_impl(zstream_queue_t queue, queue_item *item, boolean_t last)
 }
 
 void
-zstream_enqueue(zstream_queue_t queue, queue_item *item) {
+zstream_enqueue(zstream_queue_t *queue, queue_item *item) {
 	zstream_enqueue_impl(queue, item, B_FALSE);
 }
 
 void
-zstream_queue_fini(zstream_queue_t queue) {
+zstream_queue_fini(zstream_queue_t *queue) {
 	zstream_enqueue_impl(queue, NULL, B_TRUE);
 }
 
@@ -407,7 +407,7 @@ zstream_queue_fini(zstream_queue_t queue) {
  * since multiple items can be forwarded at once.
  */
 void
-zstream_queue_forward(zstream_queue_t from, zstream_queue_t to)
+zstream_queue_forward(zstream_queue_t *from, zstream_queue_t *to)
 {
 	pthread_t 	forward_thread;
 	static int	forwarder_number = 0;
@@ -437,7 +437,7 @@ zstream_queue_forward(zstream_queue_t from, zstream_queue_t to)
  * Must be called with the pool mutex held.
  */
 static void
-zstream_queue_destroy(zstream_queue_t queue)
+zstream_queue_destroy(zstream_queue_t *queue)
 {
 	pthread_mutex_destroy(&queue->zq_mutex);
 	pthread_cond_destroy(&queue->zq_completed);
@@ -462,7 +462,7 @@ zstream_queue_destroy(zstream_queue_t queue)
 }
 
 boolean_t
-zstream_dequeue(zstream_queue_t queue, queue_item *item)
+zstream_dequeue(zstream_queue_t *queue, queue_item *item)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
 	while (queue->zq_dequeue >= queue->zq_complete) {
@@ -492,7 +492,7 @@ zstream_dequeue(zstream_queue_t queue, queue_item *item)
  * Must be called with both queues locked.
  */
 static boolean_t
-forward_items(zstream_queue_t from, zstream_queue_t to)
+forward_items(zstream_queue_t *from, zstream_queue_t *to)
 {
 	int from_slots = from->zq_complete - from->zq_dequeue;
 	int to_occupied = to->zq_enqueue - to->zq_dequeue;
@@ -539,9 +539,9 @@ forward_items(zstream_queue_t from, zstream_queue_t to)
  * locks are held simultaneously by a single thread.
  */
 static void *
-forwarding_worker(zstream_queue_t from)
+forwarding_worker(zstream_queue_t *from)
 {
-	zstream_queue_t to = from->zq_forward_to;
+	zstream_queue_t *to = from->zq_forward_to;
 
 start:	pthread_mutex_lock(&from->zq_mutex);
 	while (from->zq_complete - from->zq_dequeue == 0) {

@@ -72,7 +72,7 @@ extern "C" {
 typedef void queue_item;
 
 struct zstream_queue;
-typedef struct zstream_queue *zstream_queue_t;
+typedef struct zstream_queue zstream_queue_t;
 
 typedef void
 zq_process_item_f(queue_item *item, void *context);
@@ -99,7 +99,7 @@ typedef struct {
 	size_t			qp_queue_length;
 } zq_params_t;
 
-zstream_queue_t
+zstream_queue_t *
 zstream_queue_create(zq_params_t *params);
 
 /*
@@ -108,7 +108,7 @@ zstream_queue_create(zq_params_t *params);
  * returns may be reused by the caller.
  */
 void
-zstream_enqueue(zstream_queue_t queue, queue_item *item);
+zstream_enqueue(zstream_queue_t *queue, queue_item *item);
 
 /*
  * Retrieve a completed work item. The caller must provide a buffer into
@@ -120,7 +120,7 @@ zstream_enqueue(zstream_queue_t queue, queue_item *item);
  * item is not valid and no further calls may be made.
  */
 boolean_t
-zstream_dequeue(zstream_queue_t queue, queue_item *item);
+zstream_dequeue(zstream_queue_t *queue, queue_item *item);
 
 /*
  * Connect two queues so that items completed by the first are forwarded
@@ -130,7 +130,7 @@ zstream_dequeue(zstream_queue_t queue, queue_item *item);
  * since multiple items can be forwarded at once.
  */
 void
-zstream_queue_forward(zstream_queue_t from, zstream_queue_t to);
+zstream_queue_forward(zstream_queue_t *from, zstream_queue_t *to);
 
 /*
  * Declare that all items have been submitted. The queue will continue to
@@ -138,7 +138,7 @@ zstream_queue_forward(zstream_queue_t from, zstream_queue_t to);
  * returns B_FALSE, at which point the queue will be destroyed.
  */
 void
-zstream_queue_fini(zstream_queue_t queue);
+zstream_queue_fini(zstream_queue_t *queue);
 
 #ifdef  __cplusplus
 }

@@ -36,7 +36,7 @@
 typedef struct chain_info {
 	chain_step_t	*ci_chain;
 	int		ci_num_steps;
-	zstream_queue_t	*ci_queues;	/* Sparse */
+	zstream_queue_t	**ci_queues;	/* Sparse */
 	size_t		ci_item_size;
 	chain_attrs_t	ci_attrs;
 } *chain_info_t;
@@ -60,7 +60,7 @@ boolean_t serialize_chains = B_FALSE;
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs, int num_steps)
 {
-	zstream_queue_t		queues[num_steps] = {};
+	zstream_queue_t		*queues[num_steps] = {};
 	size_t			max_size = 0;
 	worker_context_t	contexts[num_steps] = {};
 	pthread_t		worker_threads[num_steps] = {};
@@ -152,7 +152,7 @@ zstream_chain_worker(worker_context_t *context)
 	while (!done) {
 	    for (int i = context->wc_first; i <= context->wc_last; i++) {
 	    	chain_step_t *step = &ci->ci_chain[i];
-	    	zstream_queue_t queue = ci->ci_queues[i];
+	    	zstream_queue_t *queue = ci->ci_queues[i];
 		if (step->cs_type == CS_SERIAL) {
 			done = !step->serial.css_process(done ? NULL : buffer,
 				step->serial.css_context, ci->ci_attrs) || done;
