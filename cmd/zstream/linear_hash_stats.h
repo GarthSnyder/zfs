@@ -37,12 +37,12 @@ typedef struct lh_report {
 } lh_report_t;
 
 void
-lh_get_stats(linear_hash_t lh, lh_report_t *stats);
+lh_get_stats(linear_hash_t *lh, lh_report_t *stats);
 
 void
-lh_print_stats(linear_hash_t lh);
+lh_print_stats(linear_hash_t *lh);
 
 uint64_t
-lh_get_mem_highwater(linear_hash_t lh);
+lh_get_mem_highwater(linear_hash_t *lh);
 
 #endif /* LINEAR_HASH_STATS_H */

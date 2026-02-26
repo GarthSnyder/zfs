@@ -48,7 +48,7 @@ typedef struct {
 
 /* Internal iterator for bucket entries */
 typedef struct {
-	linear_hash_t	ei_lh;
+	linear_hash_t	*ei_lh;
 	allocator_t	ei_alloc;
 	record_ix_t	ei_bucket_ix;	/* -1 == overflow not yet assigned */
 	record_ix_t	ei_entry_ix;	/* -1 == bucket not yet retrieved */
@@ -60,7 +60,7 @@ typedef struct {
 typedef struct lh_iterator {
 	uint64_t		lhi_hash;
 	entry_iterator_t	lhi_entry_iterator;
-} lh_iterator_s;
+} lh_iterator_t;
 
 typedef struct {
 	op_stats_t	*ot_stat_bin;
@@ -85,7 +85,7 @@ struct linear_hash {
 	uint64_t	lh_max_memory;
 	int     	lh_next_memory_check;	/* # of splits before check */
 	int       	lh_next_iterator;
-	lh_iterator_s	lh_iterators[MAX_LH_ITERATORS];
+	lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
 	lh_stats_t	lh_stats;
 	ops_tracker_t	lh_ops_tracker;
 	allocator_t	lh_data_alloc;		/* Data records */

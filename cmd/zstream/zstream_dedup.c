@@ -51,7 +51,7 @@ typedef struct dedup_stats {
 } dedup_stats_t;
 
 typedef struct {
-	linear_hash_t	dc_table;
+	linear_hash_t	*dc_table;
 	dedup_stats_t	dc_stats;
 } dedup_context_t;
 
@@ -78,11 +78,11 @@ writes_compatible(const drr_write_t *cur, const drr_write_t *prev)
 }
 
 static inline boolean_t
-dedup_table_lookup(linear_hash_t ddt, drr_blake3_t *item, dedup_entry_t *dde)
+dedup_table_lookup(linear_hash_t *ddt, drr_blake3_t *item, dedup_entry_t *dde)
 {
 	zio_cksum_t *long_hash = &item->dp_blake3_payload;
 	uint64_t short_hash = BLAKE3_64_BIT(long_hash);
-	lh_iterator_t iter = lh_initiate_retrieve(ddt, short_hash);
+	lh_iterator_t *iter = lh_initiate_retrieve(ddt, short_hash);
 	while (lh_retrieve_next(iter, dde)) {
 		if (ZIO_CHECKSUM_EQUAL(dde->blake3_hash, *long_hash)) {
 			return B_TRUE;
@@ -92,7 +92,7 @@ dedup_table_lookup(linear_hash_t ddt, drr_blake3_t *item, dedup_entry_t *dde)
 }
 
 static inline void
-dedup_table_insert(linear_hash_t ddt, drr_blake3_t *item)
+dedup_table_insert(linear_hash_t *ddt, drr_blake3_t *item)
 {
 	dedup_entry_t dedup = {
 		.write_block = item->dp_base.dp_drr.drr_u.drr_write,
@@ -162,7 +162,7 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
 	struct drr_begin *drrb   = &drr->drr_u.drr_begin;
 	dedup_stats_t *stats     = &context->dc_stats;
-	linear_hash_t dd_table   = context->dc_table;
+	linear_hash_t *dd_table   = context->dc_table;
 	dedup_entry_t existing;
 
 	if (item == NULL) {
@@ -231,7 +231,7 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 }
 
 static chain_step_t
-serial_dedup_writes(linear_hash_t dedup_table)
+serial_dedup_writes(linear_hash_t *dedup_table)
 {
 	static dedup_context_t context = {};
 	context.dc_table = dedup_table;
@@ -266,7 +266,7 @@ zstream_do_dedup(int argc, char *argv[])
 	struct chain_attrs attrs = {};
 	int mem_percent = DEFAULT_DEDUP_PHYSMEM_PERCENT;
 	int c;
-	linear_hash_t dedup_table;
+	linear_hash_t *dedup_table;
 
 	while ((c = getopt(argc, argv, "vm:c:")) != -1) {
 		switch (c) {

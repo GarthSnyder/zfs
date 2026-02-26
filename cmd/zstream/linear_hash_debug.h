@@ -16,16 +16,16 @@ boolean_t
 entry_iterator_next(entry_iterator_t *iter, boolean_t extend);
 
 boolean_t
-lh_validate(linear_hash_t lh);
+lh_validate(linear_hash_t *lh);
 
 uint64_t
-total_io_ops(linear_hash_t lh);
+total_io_ops(linear_hash_t *lh);
 
 void
-begin_ops_tracking(linear_hash_t lh, op_stats_t *bin);
+begin_ops_tracking(linear_hash_t *lh, op_stats_t *bin);
 
 void
-update_ops_tracking(linear_hash_t lh);
+update_ops_tracking(linear_hash_t *lh);
 
 void
-complete_ops_tracking(linear_hash_t lh);
+complete_ops_tracking(linear_hash_t *lh);

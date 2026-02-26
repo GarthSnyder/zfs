@@ -34,7 +34,7 @@
  * length increases.
  */
 static uint64_t
-bucket_for_hash(linear_hash_t lh, uint64_t hash)
+bucket_for_hash(linear_hash_t *lh, uint64_t hash)
 {
 	uint64_t mask = (1ULL << (lh->lh_hash_suffix_length)) - 1;
 	if ((hash & mask) < lh->lh_split_pointer) { mask = (mask << 1) | 1; }
@@ -65,7 +65,7 @@ read_entry_iterator(entry_iterator_t *iter)
 boolean_t
 entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 {
-	linear_hash_t lh = iter->ei_lh;
+	linear_hash_t *lh = iter->ei_lh;
 
 start:	if (iter->ei_entry_ix < 0) {
 		read_entry_iterator(iter);
@@ -113,7 +113,7 @@ start:	if (iter->ei_entry_ix < 0) {
   * linearly, even if there are unused entries.
  */
 static void
-split_bucket(linear_hash_t lh)
+split_bucket(linear_hash_t *lh)
 {
 	START_VALIDATION(lh);
 	begin_ops_tracking(lh, &lh->lh_stats.lhs_splits);
@@ -172,7 +172,7 @@ split_bucket(linear_hash_t lh)
 }
 
 static void
-check_split(linear_hash_t lh) {
+check_split(linear_hash_t *lh) {
 	double occupancy = (double)lh->lh_stats.lhs_num_entries /
 		((1ULL << lh->lh_hash_suffix_length) * ENTRIES_PER_BUCKET);
 	if (occupancy > MAX_OCCUPANCY) {
@@ -181,7 +181,7 @@ check_split(linear_hash_t lh) {
 }
 
 static void
-check_memory_use(linear_hash_t lh) {
+check_memory_use(linear_hash_t *lh) {
 	allocator_stats_t bucket, over, data;
 	allocator_get_stats(lh->lh_bucket_alloc, &bucket);
 	allocator_get_stats(lh->lh_overflow_alloc, &over);
@@ -223,13 +223,13 @@ create_temp_file(const char *dir, char *pathbuff) {
 	}
 }
 
-linear_hash_t
+linear_hash_t *
 lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 {
 	assert(record_size);
 	size_t bkt = sizeof(bucket_t);
 
-	linear_hash_t lh = safe_malloc(sizeof(struct linear_hash));
+	linear_hash_t *lh = safe_malloc(sizeof(struct linear_hash));
 	*lh = (struct linear_hash){
 		.lh_record_size = record_size,
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
@@ -276,7 +276,7 @@ lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 }
 
 void
-lh_insert(linear_hash_t lh, uint64_t hash, const void* data)
+lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 {
 	assert(lh && data);
 	START_VALIDATION(lh);
@@ -312,13 +312,13 @@ lh_insert(linear_hash_t lh, uint64_t hash, const void* data)
 	}
 }
 
-lh_iterator_t
-lh_initiate_retrieve(linear_hash_t lh, uint64_t hash)
+lh_iterator_t *
+lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 {
 	assert(lh);
 	begin_ops_tracking(lh, &lh->lh_stats.lhs_retrieves);
 
-	lh_iterator_t iter = &lh->lh_iterators[lh->lh_next_iterator];
+	lh_iterator_t *iter = &lh->lh_iterators[lh->lh_next_iterator];
 	lh->lh_next_iterator = (lh->lh_next_iterator + 1) % MAX_LH_ITERATORS;
 	*iter = (struct lh_iterator){
 		.lhi_hash = hash,
@@ -333,7 +333,7 @@ lh_initiate_retrieve(linear_hash_t lh, uint64_t hash)
 }
 
 boolean_t
-lh_retrieve_next(lh_iterator_t iter, void *buffer) {
+lh_retrieve_next(lh_iterator_t *iter, void *buffer) {
 	entry_iterator_t *ei = &iter->lhi_entry_iterator;
 	while (entry_iterator_next(ei, B_FALSE)) {
 		bucket_entry_t *entry =
@@ -355,7 +355,7 @@ lh_retrieve_next(lh_iterator_t iter, void *buffer) {
 }
 
 void
-lh_destroy(linear_hash_t lh) {
+lh_destroy(linear_hash_t *lh) {
 	assert(lh);
 	if (lh->lh_validate) {
 		lh_validate(lh);

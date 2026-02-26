@@ -5,7 +5,7 @@
 #include "linear_hash_debug.h"
 
 boolean_t
-lh_validate(linear_hash_t lh) {
+lh_validate(linear_hash_t *lh) {
 	uint64_t total_entries = 0;
 	allocator_stats_t bucket_stats;
 	allocator_get_stats(lh->lh_bucket_alloc, &bucket_stats);
@@ -40,7 +40,7 @@ lh_validate(linear_hash_t lh) {
 }
 
 void
-lh_get_stats(linear_hash_t lh, lh_report_t *stats)
+lh_get_stats(linear_hash_t *lh, lh_report_t *stats)
 {
 	assert(lh && stats);
 	memset(stats, 0, sizeof(*stats));
@@ -99,7 +99,7 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 }
 
 void
-lh_print_stats(linear_hash_t lh) {
+lh_print_stats(linear_hash_t *lh) {
 	lh_report_t stats;
 	lh_get_stats(lh, &stats);
 	fprintf(stderr, "%lu entries in %lu bucket chains (occupancy %.0f%%):\n",
@@ -135,12 +135,12 @@ lh_print_stats(linear_hash_t lh) {
 }
 
 uint64_t
-lh_get_mem_highwater(linear_hash_t lh) {
+lh_get_mem_highwater(linear_hash_t *lh) {
 	return lh->lh_stats.lhs_mem_highwater;
 }
 
 uint64_t
-total_io_ops(linear_hash_t lh) {
+total_io_ops(linear_hash_t *lh) {
 	allocator_stats_t data, bucket, over;
 	allocator_get_stats(lh->lh_data_alloc, &data);
 	allocator_get_stats(lh->lh_bucket_alloc, &bucket);
@@ -149,7 +149,7 @@ total_io_ops(linear_hash_t lh) {
 }
 
 void
-begin_ops_tracking(linear_hash_t lh, op_stats_t *bin) {
+begin_ops_tracking(linear_hash_t *lh, op_stats_t *bin) {
 	if (lh->lh_ops_tracker.ot_stat_bin) {
 		complete_ops_tracking(lh);
 	}
@@ -158,14 +158,14 @@ begin_ops_tracking(linear_hash_t lh, op_stats_t *bin) {
 }
 
 void
-update_ops_tracking(linear_hash_t lh){
+update_ops_tracking(linear_hash_t *lh){
 	if (lh->lh_ops_tracker.ot_stat_bin) {
 		lh->lh_ops_tracker.ot_latest_ops = total_io_ops(lh);
 	}
 }
 
 void
-complete_ops_tracking(linear_hash_t lh) {
+complete_ops_tracking(linear_hash_t *lh) {
 	ops_tracker_t *tracker = &lh->lh_ops_tracker;
 	if (tracker->ot_stat_bin) {
 		update_ops_tracking(lh);
