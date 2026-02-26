@@ -18,8 +18,8 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _LINEAR_HASH_H
-#define _LINEAR_HASH_H
+#ifndef _ZSTREAM_HASH_H
+#define _ZSTREAM_HASH_H
 
 #ifdef	__cplusplus
 extern "C" {
@@ -96,4 +96,4 @@ lh_destroy(linear_hash_t *lh);
 }
 #endif
 
-#endif /* _LINEAR_HASH_H */
+#endif /* _ZSTREAM_HASH_H */

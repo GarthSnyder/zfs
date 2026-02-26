@@ -177,7 +177,9 @@ static void
 validate_or_exit(zio_cksum_t *expected, zio_cksum_t *actual,
 	const char *where)
 {
-	if (!validate_checksum(expected, actual, where)) { exit(1); }
+	if (!validate_checksum(expected, actual, where)) {
+		exit(1);
+	}
 }
 
 static void

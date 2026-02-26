@@ -1,7 +1,36 @@
-#ifndef LINEAR_HASH_STATS_H
-#define LINEAR_HASH_STATS_H
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * CDDL HEADER START
+ *
+ * This file and its contents are supplied under the terms of the Common
+ * Development and Distribution License ("CDDL"), version 1.0. You may only use
+ * this file in accordance with the terms of version 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this source. A
+ * copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
+ */
 
-#include "linear_hash.h"
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
+#include <stdint.h>
+#include <sys/dmu.h>
+#include <sys/zio_checksum.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/fs/zfs.h>
+
+#ifndef _ZSTREAM_HASH_STATS_H
+#define _ZSTREAM_HASH_STATS_H
+
+#ifdef  __cplusplus
+extern "C" {
+#endif
+
+#include "zstream_hash.h"
 
 /*
  * MAX_BUCKET_CHAINS is a reporting/stats limitation, not an implementation
@@ -45,4 +74,8 @@ lh_print_stats(linear_hash_t *lh);
 uint64_t
 lh_get_mem_highwater(linear_hash_t *lh);
 
-#endif /* LINEAR_HASH_STATS_H */
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _ZSTREAM_HASH_STATS_H */

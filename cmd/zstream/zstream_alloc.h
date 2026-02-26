@@ -18,8 +18,8 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ALLOCATOR_H
-#define _ALLOCATOR_H
+#ifndef _ZSTREAM_ALLOC_H
+#define _ZSTREAM_ALLOC_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -97,4 +97,4 @@ allocator_get_stats(allocator_t *alloc, allocator_stats_t *stats);
 void
 allocator_destroy(allocator_t *alloc);
 
-#endif /* ALLOCATOR_H */
+#endif /* _ZSTREAM_ALLOC_H */

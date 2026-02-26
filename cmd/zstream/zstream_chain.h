@@ -115,6 +115,9 @@ void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs,
 	int num_steps);
 
+chain_step_t
+serial_null_step(void);
+
 #ifdef __cplusplus
 }
 #endif

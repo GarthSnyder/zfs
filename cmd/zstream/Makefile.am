@@ -7,37 +7,37 @@ CPPCHECKTARGETS += zstream
 zstream_SOURCES = \
 	%D%/zstream.c \
 	%D%/zstream.h \
+	%D%/zstream_alloc.c \
+	%D%/zstream_alloc.h \
+	%D%/zstream_blake3.c \
+	%D%/zstream_blake3.h \
+	%D%/zstream_byteswap.c \
+	%D%/zstream_byteswap.h \
+	%D%/zstream_chain.c \
+	%D%/zstream_chain.h \
+	%D%/zstream_compress.c \
+	%D%/zstream_compress.h \
 	%D%/zstream_decompress.c \
 	%D%/zstream_dedup.c \
 	%D%/zstream_dump.c \
-	%D%/zstream_redup.c \
-	%D%/zstream_token.c \
-	%D%/zstream_shared.c \
-	%D%/zstream_shared.h \
-	%D%/zstream_queue.c \
-	%D%/zstream_queue.h \
-	%D%/zstream_chain.c \
-	%D%/zstream_chain.h \
 	%D%/zstream_fletcher4.c \
 	%D%/zstream_fletcher4.h \
-	%D%/zstream_blake3.c \
-	%D%/zstream_blake3.h \
-	%D%/zstream_compress.c \
-	%D%/zstream_compress.h \
-	%D%/zstream_validate.c \
-	%D%/zstream_validate.h \
-	%D%/zstream_byteswap.c \
-	%D%/zstream_byteswap.h \
+	%D%/zstream_hash.c \
+	%D%/zstream_hash.h \
+	%D%/zstream_hash_debug.c \
+	%D%/zstream_hash_debug.h \
+	%D%/zstream_hash_impl.h \
+	%D%/zstream_hash_stats.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
-	%D%/allocator.c \
-	%D%/allocator.h \
-	%D%/linear_hash.c \
-	%D%/linear_hash_debug.c \
-	%D%/linear_hash.h \
-	%D%/linear_hash_stats.h \
-	%D%/linear_hash_impl.h \
-	%D%/linear_hash_debug.h
+	%D%/zstream_queue.c \
+	%D%/zstream_queue.h \
+	%D%/zstream_redup.c \
+	%D%/zstream_shared.c \
+	%D%/zstream_shared.h \
+	%D%/zstream_token.c \
+	%D%/zstream_validate.c \
+	%D%/zstream_validate.h
 
 zstream_LDADD = \
 	libzfs.la \

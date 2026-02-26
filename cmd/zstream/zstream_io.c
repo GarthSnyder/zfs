@@ -197,7 +197,7 @@ chain_read(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain)
 			payload_size, 1, ctxt->ic_fp);
 		if (items_read != 1) {
 			fprintf(stderr, "Error reading record payload "
-				" at offset %lu", ctxt->ic_offset);
+				" at offset %lu\n", ctxt->ic_offset);
 			exit(1);
 		}
 	} else {

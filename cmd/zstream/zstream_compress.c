@@ -83,7 +83,7 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 	item->dp_payload_size = drrw->drr_logical_size;
 	drr->drr_payloadlen = drrw->drr_logical_size;
 	drrw->drr_compressed_size = 0;
-	drrw->drr_compressiontype = ZIO_COMPRESS_OFF;
+	drrw->drr_compressiontype = 0;
 	abd_free(&dabd);
 	abd_free(&sabd);
 }
@@ -119,7 +119,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 		drr->drr_payloadlen = rounded;
 	} else {
 		free(buff);
-		drrw->drr_compressiontype = ZIO_COMPRESS_OFF;
+		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
 	}
 	abd_free(&sabd);
@@ -285,6 +285,7 @@ zstream_do_recompress(int argc, char *argv[])
 	zstd_init();
 	libspl_init();
 
+	serialize_chains = B_TRUE;
 	zstream_chain_t recompress_chain = {
 		serial_read_stream(NULL),
 		parallel_calc_fletcher4(),
@@ -297,6 +298,10 @@ zstream_do_recompress(int argc, char *argv[])
 		serial_add_fletcher4(),
 		serial_write_stream(NULL)
 	};
+
+	if (spec.cs_type == ZIO_COMPRESS_OFF) {
+		recompress_chain[6] = serial_null_step();
+	}
 
 	zstream_chain_exec(recompress_chain, &attrs,
 		sizeof(recompress_chain) / sizeof(chain_step_t));

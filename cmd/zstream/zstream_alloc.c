@@ -28,7 +28,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-#include "allocator.h"
+#include "zstream_alloc.h"
 #include "zstream_shared.h"
 
 #ifndef MAP_ANONYMOUS

@@ -15,15 +15,19 @@
  */
 
 /*
- * Copyright (c) 2020 by Delphix. All rights reserved.
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef LINEAR_HASH_TYPES_H
-#define LINEAR_HASH_TYPES_H
+#ifndef _ZSTREAM_HASH_IMPL_H
+#define _ZSTREAM_HASH_IMPL_H
 
-#include "allocator.h"
-#include "linear_hash.h"
-#include "linear_hash_stats.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "zstream_alloc.h"
+#include "zstream_hash.h"
+#include "zstream_hash_stats.h"
 
 #define ENTRIES_PER_BUCKET 6
 
@@ -95,4 +99,8 @@ struct linear_hash {
 
 typedef long long unsigned int llu;
 
-#endif /* LINEAR_HASH_TYPES_H */
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _ZSTREAM_HASH_IMPL_H */

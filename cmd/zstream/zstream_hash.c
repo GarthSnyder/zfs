@@ -5,11 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "allocator.h"
-#include "linear_hash.h"
-#include "linear_hash_debug.h"
-#include "linear_hash_impl.h"
-#include "linear_hash_stats.h"
+#include "zstream_alloc.h"
+#include "zstream_hash.h"
+#include "zstream_hash_debug.h"
+#include "zstream_hash_impl.h"
+#include "zstream_hash_stats.h"
 #include "zstream_shared.h"
 
 #define MAX_OCCUPANCY 0.75

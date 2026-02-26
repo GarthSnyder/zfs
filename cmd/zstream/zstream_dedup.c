@@ -22,7 +22,7 @@
 #include <libzutil.h>
 #include <libspl.h>
 
-#include "linear_hash_stats.h"
+#include "zstream_hash_stats.h"
 #include "zstream.h"
 #include "zstream_modules.h"
 

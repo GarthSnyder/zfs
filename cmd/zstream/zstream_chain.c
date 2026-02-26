@@ -57,6 +57,19 @@ chain_exec_serialized(chain_info_t chain);
 
 boolean_t serialize_chains = B_FALSE;
 
+chain_step_t
+serial_null_step() {
+	return (chain_step_t) {
+		.cs_type = CS_SERIAL,
+		.cs_in_size = 0,
+		.cs_out_size = 0,
+		.serial = {
+			.css_process = NULL,
+			.css_context = NULL
+		}
+	};
+}
+
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs, int num_steps)
 {
@@ -78,7 +91,9 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs, int num_steps)
 		if (chain[i].cs_out_size > max_size) {
 			max_size = chain[i].cs_out_size;
 		}
-		if (i > 0 && chain[i].cs_in_size != chain[i-1].cs_out_size) {
+		if (i > 0 && chain[i].cs_in_size && chain[i-1].cs_out_size &&
+			chain[i].cs_in_size != chain[i-1].cs_out_size)
+		{
 			fprintf(stderr, "Warning: chain items %d and %d have "
 				"mismatched packet sizes\n", i-1, i);
 		}
@@ -154,8 +169,10 @@ zstream_chain_worker(worker_context_t *context)
 	    	chain_step_t *step = &ci->ci_chain[i];
 	    	zstream_queue_t *queue = ci->ci_queues[i];
 		if (step->cs_type == CS_SERIAL) {
-			done = !step->serial.css_process(done ? NULL : buffer,
-				step->serial.css_context, ci->ci_attrs) || done;
+			if (step->serial.css_process) {
+				done = !step->serial.css_process(done ? NULL : buffer,
+					step->serial.css_context, ci->ci_attrs) || done;
+			}
 		} else if (i == context->wc_first) {
 			done = done || !zstream_dequeue(queue, buffer);
 		} else if (done) {
@@ -181,10 +198,12 @@ chain_exec_serialized(chain_info_t ci)
 	while (!done) {
 	    for (int i = 0; i < ci->ci_num_steps; i++) {
 		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
-			uint8_t *arg = done ? NULL : buffer;
-			done = done || !ci->ci_chain[i].serial.css_process(arg,
-				ci->ci_chain[i].serial.css_context,
-				ci->ci_attrs);
+			if (ci->ci_chain[i].serial.css_process) {
+				uint8_t *arg = done ? NULL : buffer;
+				done = done || !ci->ci_chain[i].serial.css_process(arg,
+					ci->ci_chain[i].serial.css_context,
+					ci->ci_attrs);
+			}
 		} else if (!done) {
 			size_t cost = ci->ci_chain[i].parallel.csp_cost(buffer,
 				ci->ci_chain[i].parallel.csp_context);
