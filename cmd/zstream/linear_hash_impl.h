@@ -49,7 +49,7 @@ typedef struct {
 /* Internal iterator for bucket entries */
 typedef struct {
 	linear_hash_t	*ei_lh;
-	allocator_t	ei_alloc;
+	allocator_t	*ei_alloc;
 	record_ix_t	ei_bucket_ix;	/* -1 == overflow not yet assigned */
 	record_ix_t	ei_entry_ix;	/* -1 == bucket not yet retrieved */
 	bucket_t	ei_bucket;	/* Working copy of allocator version */
@@ -88,9 +88,9 @@ struct linear_hash {
 	lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
 	lh_stats_t	lh_stats;
 	ops_tracker_t	lh_ops_tracker;
-	allocator_t	lh_data_alloc;		/* Data records */
-	allocator_t	lh_bucket_alloc;	/* Main buckets */
-	allocator_t	lh_overflow_alloc;	/* Overflow buckets */
+	allocator_t	*lh_data_alloc;		/* Data records */
+	allocator_t	*lh_bucket_alloc;	/* Main buckets */
+	allocator_t	*lh_overflow_alloc;	/* Overflow buckets */
 };
 
 typedef long long unsigned int llu;

@@ -27,7 +27,7 @@
 
 typedef int64_t record_ix_t;
 struct allocator;
-typedef struct allocator *allocator_t;
+typedef struct allocator allocator_t;
 
 typedef struct {
 	uint64_t    as_num_ops;        /* Number of stores and retrieves */
@@ -46,7 +46,7 @@ typedef struct {
  * If no file handle is supplied, the allocator will be memory-only. 
  * max_memory must be specified and nonzero.
  */
-allocator_t
+allocator_t *
 allocator_init(size_t record_size, size_t max_memory, FILE *file);
 
 /*
@@ -55,37 +55,37 @@ allocator_init(size_t record_size, size_t max_memory, FILE *file);
  * A negative return value indicates an error.
  */
 int
-allocator_convert_to_disk(allocator_t alloc);
+allocator_convert_to_disk(allocator_t *alloc);
 
 /*
  * Append a new data record. A negative return value indicates
  * an error.
  */
 record_ix_t
-allocator_append(allocator_t alloc, const void* data);
+allocator_append(allocator_t *alloc, const void* data);
 
 /*
  * Skip a record (allocate space but leave it zero-filled). A 
  * negative return value indicates an error.
  */
 record_ix_t
-allocator_skip(allocator_t alloc);
+allocator_skip(allocator_t *alloc);
 
 /*
  * Store data at a specific record index (can skip records). A
  * negative return value indicates an error.
  */
 record_ix_t
-allocator_store(allocator_t alloc, record_ix_t record, const void *data);
+allocator_store(allocator_t *alloc, record_ix_t record, const void *data);
 
 /*
  * Retrieve a data record. A negative value indicates an error.
  */
 record_ix_t
-allocator_retrieve(allocator_t alloc, record_ix_t record, void *buffer);
+allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buffer);
 
 void
-allocator_get_stats(allocator_t alloc, allocator_stats_t *stats);
+allocator_get_stats(allocator_t *alloc, allocator_stats_t *stats);
 
 /*
  * Destroy allocator and free all resources.
@@ -95,6 +95,6 @@ allocator_get_stats(allocator_t alloc, allocator_stats_t *stats);
  * @param alloc Allocator instance (may be NULL)
  */
 void
-allocator_destroy(allocator_t alloc);
+allocator_destroy(allocator_t *alloc);
 
 #endif /* ALLOCATOR_H */

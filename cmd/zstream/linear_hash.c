@@ -192,7 +192,7 @@ check_memory_use(linear_hash_t *lh) {
 		lh->lh_stats.lhs_mem_highwater = total_mem;
 	}
 	if (total_mem > lh->lh_max_memory) {
-		allocator_t allocator_to_convert;
+		allocator_t *allocator_to_convert;
 		if (data.as_mem_used) {
 			allocator_to_convert = lh->lh_data_alloc;
 		} else if (over.as_mem_used) {
