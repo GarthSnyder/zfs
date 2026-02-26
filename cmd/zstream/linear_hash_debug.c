@@ -93,7 +93,7 @@ lh_get_stats(linear_hash_t lh, lh_report_t *stats)
 	stats->lr_splits = lh->lh_stats.lhs_splits;
 	stats->lr_inserts = lh->lh_stats.lhs_inserts;
 	stats->lr_retrieves = lh->lh_stats.lhs_retrieves;
-	stats->lr_occupancy = (double)stats->lr_total_entries / stats->lr_total_chains;
+	stats->lr_occupancy = (double)stats->lr_total_entries / (stats->lr_total_chains * ENTRIES_PER_BUCKET);
 	stats->lr_overall_occupancy = (double)stats->lr_total_entries /
 		(ENTRIES_PER_BUCKET * stats->lr_bytes_in_buckets / sizeof(bucket_t));
 }
