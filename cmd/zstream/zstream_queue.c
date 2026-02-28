@@ -88,6 +88,9 @@ static void *queue_worker(void *);
 static void *forwarding_worker(zstream_queue_t *from);
 
 static void
+start_monitor_thread(void);
+
+static void
 thread_pool_init(void) {
 	pthread_mutex_init(&pool.tp_mutex, NULL);
 	pthread_cond_init(&pool.tp_enqueued, NULL);
@@ -118,6 +121,7 @@ thread_pool_spinup(void) {
 		pthread_create(&pool.tp_threads[i], NULL, queue_worker, NULL);
 		pthread_detach(pool.tp_threads[i]);
 	}
+	start_monitor_thread();
 }
 
 /*
@@ -575,3 +579,61 @@ start:	pthread_mutex_lock(&from->zq_mutex);
 }
 
 
+#define JIFFIES_PER_SEC 100
+#define SAMPLE_DURATION_US 1000000
+
+static void *
+cpu_utilization_monitor(void *dummy)
+{
+	(void) dummy;
+	uint64_t period = SAMPLE_DURATION_US;
+	long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+	struct timespec clock = {};
+	uint64_t start_us, end_us, delta_jif;
+	long unsigned int time_base = 0;
+	long unsigned int utime, stime;
+	long unsigned int delta_stat;
+	char buff[1024];
+
+	usleep(10 * 1000 * 1000);
+	while (B_TRUE) {
+		usleep(period);
+		FILE *fp = fopen("/proc/self/stat", "r");
+		VERIFY3P(fp, !=, NULL);
+		VERIFY3P(fgets(buff, sizeof(buff), fp), !=, NULL);
+		fclose(fp);
+		char *p = strrchr(buff, ')');
+		if (p == NULL) abort();
+		p += 2;  /* skip ") " */
+		/* skip fields 3-13 (11 fields) */
+		for (int i = 0; i < 11; i++) {
+		    p = strchr(p, ' ');
+		    if (p == NULL)
+		        abort();
+		    p++;
+		}
+		if (sscanf(p, "%lu %lu", &utime, &stime) != 2)
+		    abort();
+		if (time_base) {
+			delta_stat = utime + stime - time_base;
+			clock_gettime(CLOCK_MONOTONIC, &clock);
+			end_us = clock.tv_sec * 1000000 + clock.tv_nsec / 1000;
+			delta_jif = (end_us - start_us) / 10000;
+			double cpu_pct = (double)delta_stat / delta_jif;
+			fprintf(stderr, "CPU utilization: %.0f%%\n", 100*cpu_pct);
+			if (cpu_pct < 16.0 && cpu_pct > 1.0) {
+				kill(getpid(), SIGSTOP);
+			}
+		}
+		time_base = utime + stime;
+		start_us = end_us;
+	}
+}
+
+static void
+start_monitor_thread(void) {
+	pthread_t monitor;
+	pthread_create(&monitor, NULL, cpu_utilization_monitor, NULL);
+	pthread_setname_np(monitor, "monitor-0");
+	pthread_detach(monitor);
+}
