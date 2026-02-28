@@ -106,6 +106,8 @@ thread_pool_init(void) {
 static void
 thread_pool_spinup(void) {
 	pool.tp_num_queues = 0;
+	char buff[32];
+	static int worker_number = 0;
 #ifdef CPU_COUNT
 	cpu_set_t cpu_set;
 	sched_getaffinity(0, sizeof(cpu_set_t), &cpu_set);
@@ -119,6 +121,8 @@ thread_pool_spinup(void) {
 	pool.tp_threads = safe_malloc(sizeof(pthread_t) * pool.tp_num_threads);
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		pthread_create(&pool.tp_threads[i], NULL, queue_worker, NULL);
+		sprintf(buff, "queue-%d", worker_number++);
+		pthread_setname_np(pool.tp_threads[i], buff);
 		pthread_detach(pool.tp_threads[i]);
 	}
 	start_monitor_thread();
@@ -328,14 +332,14 @@ assign_thread_to_queue(void)
 		} else {
 			int q = select_stochastic(weights, num_queues);
 			zstream_queue_t *queue = pool.tp_queues[q];
-			if (queues_with_work > 1) {
-				pthread_cond_signal(&pool.tp_enqueued);
-			}
 			pthread_mutex_unlock(&pool.tp_mutex);
+			// pthread_cond_signal(&pool.tp_enqueued);
 			return queue;
 		}
 	}
 }
+
+volatile uint32_t items_claimed = {};
 
 static void *
 queue_worker(void *dummy)
@@ -344,17 +348,21 @@ queue_worker(void *dummy)
 	while (B_TRUE) {
 		zstream_queue_t *queue = assign_thread_to_queue();
 		queue_slot_t *batch[MAX_BATCH];
-		uint64_t count = claim_batch(queue, batch);
-		/* Complete the whole batch before returning any items */
-		for (int i = 0; i < count; i++) {
-			queue->zq_process(batch[i]->qs_item, queue->zq_context);
+		int count;
+		while ((count = claim_batch(queue, batch))) {
+			atomic_add_32(&items_claimed, count);
+			/* Complete the whole batch before returning any items */
+			for (int i = 0; i < count; i++) {
+				queue->zq_process(batch[i]->qs_item, queue->zq_context);
+			}
+			pthread_mutex_lock(&queue->zq_mutex);
+			for (int i = 0; i < count; i++) {
+				batch[i]->qs_completed = B_TRUE;
+			}
+			advance_completion_pointer(queue);
+			atomic_sub_32(&items_claimed, count);
+			pthread_mutex_unlock(&queue->zq_mutex);
 		}
-		pthread_mutex_lock(&queue->zq_mutex);
-		for (int i = 0; i < count; i++) {
-			batch[i]->qs_completed = B_TRUE;
-		}
-		advance_completion_pointer(queue);
-		pthread_mutex_unlock(&queue->zq_mutex);
 	}
 	return NULL;
 }
