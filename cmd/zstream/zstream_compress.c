@@ -30,6 +30,7 @@
 
 #include <err.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -81,7 +82,6 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 	free(item->dp_payload);
 	item->dp_payload = buff;
 	item->dp_payload_size = drrw->drr_logical_size;
-	drr->drr_payloadlen = drrw->drr_logical_size;
 	drrw->drr_compressed_size = 0;
 	drrw->drr_compressiontype = 0;
 	abd_free(&dabd);
@@ -116,7 +116,6 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 		free(item->dp_payload);
 		item->dp_payload = buff;
 		item->dp_payload_size = rounded;
-		drr->drr_payloadlen = rounded;
 	} else {
 		free(buff);
 		drrw->drr_compressiontype = 0;
@@ -313,3 +312,4 @@ zstream_do_recompress(int argc, char *argv[])
 	abd_fini();
 	return 0;
 }
+
