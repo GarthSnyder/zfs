@@ -198,8 +198,8 @@ parallel_decompress_writes(compression_spec_t *target)
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
 		.parallel = {
-		    .csp_queue_length = 128,
-		    .csp_batch_budget = 128 * 1024,
+		    .csp_queue_length = 256,
+		    .csp_batch_budget = 64 * 1024,
 		    .csp_process = (zq_process_item_f *)chain_decompress_writes,
 		    .csp_cost = (zq_estimate_cost_f *)chain_decompress_cost,
 		    .csp_context = context
@@ -220,8 +220,8 @@ parallel_compress_writes(compression_spec_t target)
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
 		.parallel = {
-		    .csp_queue_length = 128,
-		    .csp_batch_budget = 128 * 1024,
+		    .csp_queue_length = 512,
+		    .csp_batch_budget = 16 * 1024,
 		    .csp_process = (zq_process_item_f *)chain_compress_writes,
 		    .csp_cost = (zq_estimate_cost_f *)chain_compress_cost,
 		    .csp_context = context
@@ -284,7 +284,6 @@ zstream_do_recompress(int argc, char *argv[])
 	zstd_init();
 	libspl_init();
 
-	serialize_chains = B_TRUE;
 	zstream_chain_t recompress_chain = {
 		serial_read_stream(NULL),
 		parallel_calc_fletcher4(),
