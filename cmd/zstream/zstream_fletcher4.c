@@ -56,8 +56,8 @@ parallel_calc_fletcher4(void) {
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_fletcher4_t),
 		.parallel = {
-			.csp_queue_length = 64,
-			.csp_batch_budget = 128 * 1024,
+			.csp_queue_length = 128,
+			.csp_batch_budget = 256 * 1024,
 			.csp_process = (zq_process_item_f *)chain_calc_fletcher4,
 			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost
 		}		

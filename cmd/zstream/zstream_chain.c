@@ -1,5 +1,6 @@
 #include "zstream_chain.h"
 #include "zstream_io.h"
+#include <pthread.h>
 
 /*
  * Execute a chain of processing steps, some parallel and some serial.
@@ -215,5 +216,4 @@ chain_exec_serialized(chain_info_t ci)
 	    }
 	}
 }
-
 
