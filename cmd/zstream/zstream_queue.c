@@ -64,6 +64,8 @@ struct zstream_queue {
 	zq_estimate_cost_f	*zq_cost;
 	void			*zq_context;
 	int			zq_batch_budget;
+	int			zq_max_depth;
+	int			zq_min_depth;
 	zstream_queue_t		*zq_forward_to;
 	boolean_t		zq_is_forwarded_to;
 	boolean_t		zq_finalized;
@@ -389,6 +391,11 @@ zstream_enqueue_impl(zstream_queue_t *queue, queue_item *item, boolean_t last)
 	}
 	queue->zq_finalized = queue->zq_finalized || last;
 	queue->zq_enqueue++;
+
+	int depth = queue->zq_enqueue - queue->zq_dequeue;
+	queue->zq_max_depth = MAX(queue->zq_max_depth, depth);
+	queue->zq_min_depth = MIN(queue->zq_min_depth, depth);
+
 	pthread_mutex_unlock(&queue->zq_mutex);
 
 	/*
@@ -568,6 +575,10 @@ start:	pthread_mutex_lock(&from->zq_mutex);
 
 	boolean_t from_at_eos = forward_items(from, to);
 
+	int depth = to->zq_enqueue - to->zq_dequeue;
+	to->zq_max_depth = MAX(to->zq_max_depth, depth);
+	to->zq_min_depth = MIN(to->zq_min_depth, depth);
+
 	pthread_mutex_unlock(&to->zq_mutex);
 	pthread_mutex_lock(&pool.tp_mutex);
 	pthread_cond_signal(&pool.tp_enqueued);
@@ -595,15 +606,15 @@ cpu_utilization_monitor(void *dummy)
 {
 	(void) dummy;
 	uint64_t period = SAMPLE_DURATION_US;
-	long num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
 	struct timespec clock = {};
 	uint64_t start_us, end_us, delta_jif;
 	long unsigned int time_base = 0;
 	long unsigned int utime, stime;
 	long unsigned int delta_stat;
 	char buff[1024];
+	boolean_t interrupt = B_FALSE;
 
-	usleep(10 * 1000 * 1000);
+	usleep(5 * 1000 * 1000);
 	while (B_TRUE) {
 		usleep(period);
 		FILE *fp = fopen("/proc/self/stat", "r");
@@ -628,11 +639,21 @@ cpu_utilization_monitor(void *dummy)
 			end_us = clock.tv_sec * 1000000 + clock.tv_nsec / 1000;
 			delta_jif = (end_us - start_us) / 10000;
 			double cpu_pct = (double)delta_stat / delta_jif;
-			fprintf(stderr, "CPU utilization: %.0f%%\n", 100*cpu_pct);
-			if (cpu_pct < 16.0 && cpu_pct > 1.0) {
+			fprintf(stderr, "CPU utilization: %.0f%%  ", 100*cpu_pct);
+			if (interrupt && cpu_pct < 12.0 && cpu_pct > 1.0) {
 				kill(getpid(), SIGSTOP);
 			}
 		}
+		pthread_mutex_lock(&pool.tp_mutex);
+		for (int i = 0; i < pool.tp_num_queues; i++) {
+			zstream_queue_t *q = pool.tp_queues[i];
+			fprintf(stderr, "Queue %d: %d-%d  ", i, q->zq_min_depth,
+				q->zq_max_depth);
+			q->zq_min_depth = 999999999;
+			q->zq_max_depth = 0;
+		}
+		pthread_mutex_unlock(&pool.tp_mutex);
+		fprintf(stderr, "\n");
 		time_base = utime + stime;
 		start_us = end_us;
 	}
