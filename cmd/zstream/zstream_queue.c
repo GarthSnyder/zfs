@@ -313,8 +313,8 @@ select_stochastic(double weights[], int num_values)
  * may be skewed or out of date. However, the pool mutex prevents new work
  * from being enqueued while scoring is going on.
  */
-static zstream_queue_t *
-assign_thread_to_queue(void)
+static int
+assign_queue_and_claim_batch(zstream_queue_t **queue, queue_slot_t **batch)
 {
 	pthread_mutex_lock(&pool.tp_mutex);
 
@@ -325,18 +325,21 @@ assign_thread_to_queue(void)
 
 		for (int i = 0; i < num_queues; i++) {
 			weights[i] = score_queue(pool.tp_queues[i]);
-			if (weights[i] > NO_WORK) {
-				queues_with_work++;
-			}
+			if (weights[i] > NO_WORK) queues_with_work++;
 		}
 		if (!num_queues || !queues_with_work) {
 			await_condition(&pool.tp_enqueued, &pool.tp_mutex);
 		} else {
 			int q = select_stochastic(weights, num_queues);
-			zstream_queue_t *queue = pool.tp_queues[q];
+			*queue = pool.tp_queues[q];
 			pthread_mutex_unlock(&pool.tp_mutex);
-			// pthread_cond_signal(&pool.tp_enqueued);
-			return queue;
+			int count = claim_batch(*queue, batch);
+			if ((*queue)->zq_claim < (*queue)->zq_enqueue ||
+				queues_with_work > 1)
+			{
+				pthread_cond_signal(&pool.tp_enqueued);
+			}
+			return count;
 		}
 	}
 }
@@ -347,25 +350,25 @@ static void *
 queue_worker(void *dummy)
 {
 	(void) dummy;
-	while (B_TRUE) {
-		zstream_queue_t *queue = assign_thread_to_queue();
-		queue_slot_t *batch[MAX_BATCH];
-		int count;
-		while ((count = claim_batch(queue, batch))) {
-			atomic_add_32(&items_claimed, count);
-			/* Complete the whole batch before returning any items */
-			for (int i = 0; i < count; i++) {
-				queue->zq_process(batch[i]->qs_item, queue->zq_context);
-			}
-			pthread_mutex_lock(&queue->zq_mutex);
-			for (int i = 0; i < count; i++) {
-				batch[i]->qs_completed = B_TRUE;
-			}
-			advance_completion_pointer(queue);
-			atomic_sub_32(&items_claimed, count);
-			pthread_mutex_unlock(&queue->zq_mutex);
+	zstream_queue_t *queue;
+	queue_slot_t *batch[MAX_BATCH];
+	int count;
+
+start:	if ((count = assign_queue_and_claim_batch(&queue, batch))) {
+		atomic_add_32(&items_claimed, count);
+		/* Complete the whole batch before returning any items */
+		for (int i = 0; i < count; i++) {
+			queue->zq_process(batch[i]->qs_item, queue->zq_context);
 		}
+		pthread_mutex_lock(&queue->zq_mutex);
+		for (int i = 0; i < count; i++) {
+			batch[i]->qs_completed = B_TRUE;
+		}
+		advance_completion_pointer(queue);
+		atomic_sub_32(&items_claimed, count);
+		pthread_mutex_unlock(&queue->zq_mutex);
 	}
+	goto start;
 	return NULL;
 }
 
