@@ -49,14 +49,17 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 static fletcher4_context_t	fletcher4_contexts[MAX_FLETCHER_4];
 static int			next_context = 0;
 
+/*
+ * These queues double as I/O buffers, so the queue length is long.
+ */
 chain_step_t
-parallel_calc_fletcher4(void) {
+parallel_calc_fletcher4(int queue_length) {
 	return (chain_step_t) {
 		.cs_type = CS_PARALLEL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_fletcher4_t),
 		.parallel = {
-			.csp_queue_length = 128,
+			.csp_queue_length = queue_length,
 			.csp_batch_budget = 256 * 1024,
 			.csp_process = (zq_process_item_f *)chain_calc_fletcher4,
 			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost

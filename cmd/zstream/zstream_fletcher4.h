@@ -46,7 +46,7 @@ typedef struct {
 } drr_fletcher4_t;
 
 chain_step_t
-parallel_calc_fletcher4(void);
+parallel_calc_fletcher4(int queue_length);
 
 chain_step_t
 serial_validate_fletcher4(void);

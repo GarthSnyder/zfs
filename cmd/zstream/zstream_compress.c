@@ -199,7 +199,7 @@ parallel_decompress_writes(compression_spec_t *target)
 		.cs_out_size = sizeof(drr_packet_t),
 		.parallel = {
 		    .csp_queue_length = 256,
-		    .csp_batch_budget = 64 * 1024,
+		    .csp_batch_budget = 256 * 1024,
 		    .csp_process = (zq_process_item_f *)chain_decompress_writes,
 		    .csp_cost = (zq_estimate_cost_f *)chain_decompress_cost,
 		    .csp_context = context
@@ -220,8 +220,8 @@ parallel_compress_writes(compression_spec_t target)
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
 		.parallel = {
-		    .csp_queue_length = 512,
-		    .csp_batch_budget = 16 * 1024,
+		    .csp_queue_length = 1024,
+		    .csp_batch_budget = 32 * 1024,
 		    .csp_process = (zq_process_item_f *)chain_compress_writes,
 		    .csp_cost = (zq_estimate_cost_f *)chain_compress_cost,
 		    .csp_context = context
@@ -286,13 +286,16 @@ zstream_do_recompress(int argc, char *argv[])
 
 	zstream_chain_t recompress_chain = {
 		serial_read_stream(NULL),
-		parallel_calc_fletcher4(),
+		// serial_checkpoint("raw in"),
+		parallel_calc_fletcher4(1024),
 		serial_validate_fletcher4(),
 		serial_byteswap(),
 		serial_validate_records(),
+		// serial_checkpoint("enter queues"),
 		parallel_decompress_writes(&spec),
 		parallel_compress_writes(spec),
-		parallel_calc_fletcher4(),
+		parallel_calc_fletcher4(512),
+		// serial_checkpoint("exit queues"),
 		serial_add_fletcher4(),
 		serial_write_stream(NULL)
 	};
