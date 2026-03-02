@@ -43,6 +43,10 @@ serial_read_stream(const char *filename);
 chain_step_t
 serial_write_stream(const char *filename);
 
+/* Report throughput */
+chain_step_t
+serial_checkpoint(const char *name);
+
 size_t
 constant_cost_of_one(drr_packet_t *packet, void *context);
 

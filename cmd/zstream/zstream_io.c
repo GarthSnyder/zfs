@@ -17,16 +17,17 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+#include <time.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
-#include <sys/zfs_ioctl.h>
+#include <libzutil.h>
 
 #include "zstream_io.h"
 #include "zstream_chain.h"
 #include "zstream_shared.h"
 
-#define STDIO_BUFSIZE 1024 * 1024
+#define STDIO_BUFSIZE 32 * 1024 * 1024
 
 /* Init only the filename, chain_read_stream will prepare the FILE *. */
 typedef struct {
@@ -36,6 +37,13 @@ typedef struct {
 	boolean_t	ic_for_reading;
 	off_t		ic_offset;
 } io_context_t;
+
+typedef struct {
+	const char	*ck_name;
+	uint64_t	ck_last_us;
+	uint64_t	ck_last_bytes;
+	double		ck_period_s;
+} checkpoint_context_t;
 
 static chain_step_t
 setup_io(const char *filename, boolean_t for_reading);
@@ -48,6 +56,9 @@ chain_write(drr_packet_t *item, io_context_t *ctxt, chain_attrs_t chain);
 
 static io_context_t io_contexts[MAX_IO_STREAMS];
 static int next_io_context = 0;
+
+static checkpoint_context_t checkpoint_contexts[MAX_IO_STREAMS];
+static int next_checkpoint_context = 0;
 
 chain_step_t
 serial_read_stream(const char *filename) {
@@ -103,8 +114,8 @@ open_file(io_context_t *context) {
 	} else {
 		context->ic_fp = stdout;
 	}
-	context->ic_stdio_buffer = safe_malloc(STDIO_BUFSIZE);
-	setbuffer(context->ic_fp, context->ic_stdio_buffer, STDIO_BUFSIZE);
+	// context->ic_stdio_buffer = safe_malloc(STDIO_BUFSIZE);
+	// setbuffer(context->ic_fp, context->ic_stdio_buffer, STDIO_BUFSIZE);
 }
 
 /*
@@ -257,3 +268,43 @@ payload_size_as_cost(drr_packet_t *packet, void *context) {
 	return (packet->dp_payload_size);
 }
 
+static boolean_t
+checkpoint(drr_packet_t *item, checkpoint_context_t *context, void *dummy)
+{
+	(void) dummy;
+	struct timespec now;
+	char buff[32];
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	uint64_t us = now.tv_sec * 1000000 + now.tv_nsec / 1000;
+	double delta_t = (us - context->ck_last_us) / 1000000.0;
+	if (delta_t < context->ck_period_s) return B_TRUE;
+	uint64_t delta_b = item->dp_stream_offset - context->ck_last_bytes;
+	uint64_t dbdt = delta_b / delta_t;
+	zfs_nicenum(dbdt, buff, sizeof(buff));
+	fprintf(stderr, "Checkpoint %s: %s/s\n", context->ck_name, buff);
+	context->ck_last_us = us;
+	context->ck_last_bytes = item->dp_stream_offset;
+	return B_TRUE;
+}
+
+chain_step_t
+serial_checkpoint(const char *name)
+{
+	int ctxt = next_checkpoint_context++ % MAX_IO_STREAMS;
+
+	checkpoint_contexts[ctxt] = (checkpoint_context_t){
+		.ck_name = name,
+		.ck_period_s = 1.0
+	};
+
+	return (chain_step_t) {
+		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof(drr_packet_t),
+		.cs_out_size = sizeof(drr_packet_t),
+		.serial = {
+			.css_process = (zc_serial_process_f *)checkpoint,
+			.css_context = &checkpoint_contexts[ctxt]
+		},
+	};
+}
