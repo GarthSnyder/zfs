@@ -37,19 +37,22 @@ extern "C" {
  * below. Steps can be declared to execute either serially or in parallel.
  * Parallel steps are executed concurrently as outlined in zstream_queue.h,
  * and the parameters needed to set up the queue are included in the
- * chain_step_t struct. Serial steps have the option to pass an arbitrary
- * (void *) pointer to the processing function as a second argument. This
- * context can be used to maintain state between packets.
+ * chain_step_t struct.
  *
- * Both serial and parallel steps must declare the size of their output
- * packets. The buffer containing the input packet passed to a processing
- * function is guaranteed to be large enough to accommodate the stated
- * output size, and the processing function should write its output to the
- * same buffer.
+ * Both serial and parallel steps can pass an arbitrary (void *) pointer to
+ * the processing function as a second argument. This context can be used to
+ * maintain state between packets. (But keep in mind that execution order is
+ * not guaranteed in concurrent queues.)
+ *
+ * Input and output packet sizes are declared for each step. The buffer
+ * containing the input packet passed to a processing function is guaranteed
+ * to be large enough to accommodate the stated output size. The processing
+ * function should modify the buffer in place.
  *
  * The processing function for a serial step should normally return B_TRUE,
  * but it can return B_FALSE to indicate that no more data will be
- * forthcoming. Only the first step in a chain should use this feature.
+ * forthcoming. Only the first step in a chain should use this feature,
+ * however.
  *
  * Serial functions are called with a NULL packet when the end of the stream
  * passes by them. Since parallel functions may be called in any order, they
@@ -105,7 +108,7 @@ typedef chain_step_t zstream_chain_t[];
  * before execution returns to the head of the chain.
  *
  * Serialized execution should be logically identical to normal execution.
- * If it does not yield identical results, there's a bug somewhere.
+ * If it does not yield identical results, there's a problem somewhere.
  */
 extern boolean_t serialize_chains;
 

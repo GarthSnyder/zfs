@@ -319,20 +319,13 @@ zstream_do_dedup(int argc, char *argv[])
 	verify(dedup_table != NULL);
 
 	zstream_chain_t dedup_chain = {
-		serial_read_stream((argc == 1) ? argv[0] : NULL),
-		parallel_calc_fletcher4(512),
-		serial_validate_fletcher4(),
-		serial_byteswap(),
-		serial_validate_records(),
+		STANDARD_INPUT_STACK((argc == 1) ? argv[0] : NULL, 512),
 		parallel_calc_blake3(),
 		serial_dedup_writes(dedup_table),
-		parallel_calc_fletcher4(1024),
-		serial_add_fletcher4(),
-		serial_write_stream(NULL)
+		STANDARD_OUTPUT_STACK(NULL, 1024)
 	};
 
-	zstream_chain_exec(dedup_chain, &attrs,
-		sizeof(dedup_chain) / sizeof(chain_step_t));
+	zstream_chain_exec(dedup_chain, &attrs);
 	lh_destroy(dedup_table);
 	return 0;
 }

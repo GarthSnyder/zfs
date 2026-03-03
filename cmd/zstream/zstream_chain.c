@@ -75,7 +75,7 @@ void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 {
 	int num_steps = 0;
-	while (chain[i].cs_type != CS_TERMINATE) num_steps++;
+	while (chain[num_steps].cs_type != CS_TERMINATE) num_steps++;
 
 	zstream_queue_t		*queues[num_steps] = {};
 	size_t			max_size = 0;

@@ -285,27 +285,13 @@ zstream_do_recompress(int argc, char *argv[])
 	libspl_init();
 
 	zstream_chain_t recompress_chain = {
-		serial_read_stream(NULL),
-		// serial_checkpoint("raw in"),
-		parallel_calc_fletcher4(1024),
-		serial_validate_fletcher4(),
-		serial_byteswap(),
-		serial_validate_records(),
-		// serial_checkpoint("enter queues"),
+		STANDARD_INPUT_STACK(NULL, 1024),
 		parallel_decompress_writes(&spec),
 		parallel_compress_writes(spec),
-		parallel_calc_fletcher4(512),
-		// serial_checkpoint("exit queues"),
-		serial_add_fletcher4(),
-		serial_write_stream(NULL)
+		STANDARD_OUTPUT_STACK(NULL, 512)
 	};
 
-	if (spec.cs_type == ZIO_COMPRESS_OFF) {
-		recompress_chain[6] = serial_null_step();
-	}
-
-	zstream_chain_exec(recompress_chain, &attrs,
-		sizeof(recompress_chain) / sizeof(chain_step_t));
+	zstream_chain_exec(recompress_chain, &attrs);
 
 	fletcher_4_fini();
 	libspl_fini();

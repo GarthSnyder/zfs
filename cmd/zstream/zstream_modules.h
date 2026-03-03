@@ -33,17 +33,18 @@ extern "C" {
 #include "zstream_validate.h"
 #include "zstream_compress.h"
 
-/*
- * Pass NULL for infile/outfile to take input from stdin or send to stdout.
- */
-extern zstream_chain_t
-standard_input_stack(char *infile, size_t f4_queue_length);
+#define STANDARD_INPUT_STACK(infile, f4_queue_length) 			\
+	serial_read_stream(infile),					\
+	parallel_calc_fletcher4(f4_queue_length),			\
+	serial_validate_fletcher4(),					\
+	serial_byteswap(),						\
+	serial_validate_records()
 
-extern zstream_chain_t
-standard_output_stack(char *outfile, size_t f4_queue_length);
-
-extern zstream_chain_t
-concatenate_stack(zstream_chain_t first, zstream_chain_t last);
+#define STANDARD_OUTPUT_STACK(outfile, f4_queue_length) 		\
+	parallel_calc_fletcher4(f4_queue_length),			\
+	serial_add_fletcher4(),						\
+	serial_write_stream(outfile),					\
+	CHAIN_TERMINATOR
 
 #ifdef __cplusplus
 }
