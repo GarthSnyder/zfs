@@ -33,11 +33,21 @@ extern "C" {
 #include "zstream_validate.h"
 #include "zstream_compress.h"
 
+/*
+ * Pass NULL for infile/outfile to take input from stdin or send to stdout.
+ */
+extern zstream_chain_t
+standard_input_stack(char *infile, size_t f4_queue_length);
+
+extern zstream_chain_t
+standard_output_stack(char *outfile, size_t f4_queue_length);
+
+extern zstream_chain_t
+concatenate_stack(zstream_chain_t first, zstream_chain_t last);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif  /* _ZSTREAM_MODULES_H */
-
-
 
