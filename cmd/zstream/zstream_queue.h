@@ -32,18 +32,17 @@ extern "C" {
 
  /*
   * This is a generalized implementation of multithreaded, FIFO work queues.
-  * I'm calling them "queues", but there is no inherent order of work inside
-  * the queue. The only guarantee is that completed items will emerge from
-  * the queue in the same order they entered. The implementation broadly
-  * tries to work on items in order, but that is not guaranteed.
+  * The order guarantee applies only to enqueueing and dequeueing. Work on
+  * individual items can occur in any order, although the implementation
+  * generally starts work in FIFO order as well.
   *
-  * Callers define a fixed item size to be used by each queue and define
-  * thread-safe functions that estimate individual items' processing cost
-  * and perform the actual processing. The queue treats items as black
+  * Callers define a fixed item size to be used by each queue and supply two
+  * thread-safe functions that 1) estimate individual items' processing cost
+  * and 2) perform the actual processing. The queue treats items as black
   * boxes, so processing functions can modify them as desired.
   *
   * The cost function assigns a size_t cost that estimates the amount of
-  * work needed to process an item. For activities like hashing and data
+  * work needed to process an item. For operations like hashing and data
   * compression, the natural cost is typically input buffer length. This
   * function is run as items enter the queue, so it's single-threaded and
   * should return a value promptly. If cost estimation is important and
@@ -52,13 +51,6 @@ extern "C" {
   * It's expected that only a subset of input items will require processing.
   * If an item's cost is zero, it is fast-tracked and never presented to the
   * processing function.
-  *
-  * Threading granularity is specified as a per-batch budget that is set for
-  * each queue in the same units used for item costs. Threads claim items
-  * until the budget is met, there are no more items available, or MAX_BATCH
-  * items have been claimed. When claiming items to work on, threads never
-  * block waiting for additional work to arrive. They start work as quickly
-  * as possible even if the budget has not been reached.
   *
   * All queues share a single thread pool that is managed to avoid
   * contention. Threads are allocated to queues dynamically according to
@@ -83,11 +75,15 @@ zq_estimate_cost_f(queue_item *item, void *context);
 /*
  * Create a queue. Must be called before enqueue or dequeue.
  *
- * The target budget can be helpful when multithreading overhead is
- * significant in comparison to processing time, as in the case of Fletcher4
- * calculations. Raise the batch budget to coarsen the granularity of work
- * assignments. If the qp_batch_budget is zero, items are always processed
- * individually.
+ * Threading granularity is specified as a per-batch budget that is set for
+ * each queue in the same units used for item costs. Threads claim items
+ * until the budget is met, there are no more items available, or MAX_BATCH
+ * items have been claimed. When claiming items to work on, threads never
+ * block waiting for additional work to arrive. They start work as quickly
+ * as possible even if the budget has not been reached.
+ *
+ * The zq_context field is passed to the cost and processing functions and
+ * is not examined by the queue itself.
  */
 
 typedef struct {

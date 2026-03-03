@@ -35,15 +35,24 @@
 #include <sys/zfs_ioctl.h>
 #include <sys/dmu.h>
 
+typedef void cleanup_f(void *);
+typedef void *thread_f(void *);
+
 extern void *safe_malloc(size_t size);
 extern void *safe_calloc(size_t n);
 extern int sfread(void *buf, size_t size, FILE *fp);
 extern int dump_record(dmu_replay_record_t *drr, void *payload,
 	int payload_len, zio_cksum_t *zc, int outfd);
 
+extern void
+auto_unlock_mutex(pthread_mutex_t *mutex);
+
+extern void
+await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex);
+
 /* Static buffer, must use result before next call */
 extern char *
-checksum_str(zio_cksum_t *cksum);
+checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 
 /* Returns B_TRUE for valid, B_FALSE for invalid */
 boolean_t

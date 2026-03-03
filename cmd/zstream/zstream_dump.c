@@ -424,8 +424,9 @@ zstream_do_dump(int argc, char *argv[])
 			if (!do_cksum || validate_checksum(&pcksum, &drre->drr_checksum,
 					"in END record"))
 			{
+				char buff[128];
 				(void) printf("END %schecksum = %s\n", offset_str,
-					checksum_str(&drre->drr_checksum));
+					checksum_str(&drre->drr_checksum, buff, sizeof(buff)));
 			}
 			(void) printf("    toguid = %lx\n", drre->drr_toguid);
 
