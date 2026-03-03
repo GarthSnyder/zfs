@@ -197,12 +197,12 @@ parallel_decompress_writes(compression_spec_t *target)
 		.cs_type = CS_PARALLEL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
-		.parallel = {
+		.cs_context = context,
+		.cs_parallel = {
 		    .csp_queue_length = 256,
 		    .csp_batch_budget = 256 * 1024,
 		    .csp_process = (zq_process_item_f *)chain_decompress_writes,
-		    .csp_cost = (zq_estimate_cost_f *)chain_decompress_cost,
-		    .csp_context = context
+		    .csp_cost = (zq_estimate_cost_f *)chain_decompress_cost
 		}
 	};
 }
@@ -219,12 +219,12 @@ parallel_compress_writes(compression_spec_t target)
 		.cs_type = CS_PARALLEL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
-		.parallel = {
+		.cs_context = context,
+		.cs_parallel = {
 		    .csp_queue_length = 1024,
 		    .csp_batch_budget = 32 * 1024,
 		    .csp_process = (zq_process_item_f *)chain_compress_writes,
-		    .csp_cost = (zq_estimate_cost_f *)chain_compress_cost,
-		    .csp_context = context
+		    .csp_cost = (zq_estimate_cost_f *)chain_compress_cost
 		}
 	};
 }

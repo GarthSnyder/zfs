@@ -82,10 +82,10 @@ setup_io(const char *filename, boolean_t for_reading) {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
-		.serial = {
+		.cs_context = &io_contexts[context],
+		.cs_serial = {
 			.css_process = (zc_serial_process_f *)(for_reading ?
 				chain_read : chain_write),
-			.css_context = &io_contexts[context]
 		},
 	};
 }
@@ -302,9 +302,9 @@ serial_checkpoint(const char *name)
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
-		.serial = {
-			.css_process = (zc_serial_process_f *)checkpoint,
-			.css_context = &checkpoint_contexts[ctxt]
+		.cs_context = &checkpoint_contexts[ctxt],
+		.cs_serial = {
+			.css_process = (zc_serial_process_f *)checkpoint
 		},
 	};
 }

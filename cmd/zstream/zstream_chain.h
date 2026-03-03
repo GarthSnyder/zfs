@@ -65,6 +65,9 @@ extern "C" {
 #define CA_DUMP_DATA		(1ULL << 14)
 #define CA_IGNORE_CKSUMS	(1ULL << 15)
 
+#define CHAIN_TERMINATOR ((chain_step_t) { .cs_type = CS_TERMINATE})
+#define NULL_STACK	 ((zstream_chain_t) { CHAIN_TERMINATOR })
+
 typedef struct chain_attrs {
 	uint64_t	ca_flags;
 	off_t		ca_offset;
@@ -73,24 +76,23 @@ typedef struct chain_attrs {
 typedef boolean_t
 zc_serial_process_f(void *item, void *context, chain_attrs_t chain);
 
-typedef enum { CS_SERIAL, CS_PARALLEL } step_type_t;
+typedef enum { CS_SERIAL, CS_PARALLEL, CS_TERMINATE } step_type_t;
 
 typedef struct chain_step {
 		step_type_t		cs_type;
 		size_t			cs_in_size;
 		size_t 			cs_out_size;
+		void			*cs_context;
     union {
 	struct serial_config {
 		zc_serial_process_f	*css_process;
-		void			*css_context;
-	} serial;
+	} cs_serial;
 	struct parallel_config {
 		size_t 			csp_queue_length;
 		size_t 			csp_batch_budget;
 		zq_estimate_cost_f	*csp_cost;
 		zq_process_item_f	*csp_process;
-		void			*csp_context;
-	} parallel;
+	} cs_parallel;
     };
 } chain_step_t;
 
@@ -112,8 +114,7 @@ extern boolean_t serialize_chains;
  * individual chain steps are unmodified and may be reused.
  */
 void
-zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs,
-	int num_steps);
+zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs);
 
 chain_step_t
 serial_null_step(void);

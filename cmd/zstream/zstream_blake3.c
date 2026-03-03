@@ -44,7 +44,7 @@ parallel_calc_blake3(void) {
 		.cs_type = CS_PARALLEL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_blake3_t),
-		.parallel = {
+		.cs_parallel = {
 			.csp_queue_length = 512,
 			.csp_batch_budget = 64 * 1024,
 			.csp_process = (zq_process_item_f *)chain_calc_blake3,

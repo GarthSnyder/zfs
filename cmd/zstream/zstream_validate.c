@@ -137,9 +137,9 @@ serial_validate_records(void)
 	    .cs_type = CS_SERIAL,
 	    .cs_in_size = sizeof(drr_packet_t),
 	    .cs_out_size = sizeof(drr_packet_t),
+	    .cs_context = context,
 	    .serial = {
 		.css_process = (zc_serial_process_f *)chain_validate_records,
-		.css_context = context
 	    }
 	};
 }

@@ -240,9 +240,9 @@ serial_dedup_writes(linear_hash_t *dedup_table)
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof(drr_blake3_t),
 		.cs_out_size = sizeof(drr_packet_t),
-		.serial = {
+		.cs_context = &context,
+		.cs_serial = {
 			.css_process = (zc_serial_process_f *)chain_dedup_writes,
-			.css_context = &context
 		}
 	};
 }

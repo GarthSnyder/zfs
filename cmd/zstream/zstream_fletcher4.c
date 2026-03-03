@@ -58,7 +58,7 @@ parallel_calc_fletcher4(int queue_length) {
 		.cs_type = CS_PARALLEL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_fletcher4_t),
-		.parallel = {
+		.cs_parallel = {
 			.csp_queue_length = queue_length,
 			.csp_batch_budget = 256 * 1024,
 			.csp_process = (zq_process_item_f *)chain_calc_fletcher4,
@@ -77,10 +77,10 @@ fletcher4_serial_step(fletcher4_op_t operation) {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof(drr_fletcher4_t),
 		.cs_out_size = sizeof(drr_packet_t),
-		.serial = {
+		.cs_context = context,
+		.cs_serial = {
 			.css_process =
 				(zc_serial_process_f *)chain_fletcher4,
-			.css_context = context
 		}
 	};
 }
