@@ -84,8 +84,10 @@ typedef struct {
 static void *
 queue_worker(void *);
 
+#ifdef DEBUG_QUEUE
 static void
 start_monitor_thread(void);
+#endif
 
 static thread_pool_t pool = {};
 static pthread_once_t once_control = PTHREAD_ONCE_INIT;
@@ -121,8 +123,8 @@ thread_pool_spinup(void) {
 		pthread_setname_np(pool.tp_threads[i], buff);
 		pthread_detach(pool.tp_threads[i]);
 	}
-#ifdef DEBUG
-	// start_monitor_thread();
+#ifdef DEBUG_QUEUE
+	start_monitor_thread();
 #endif
 }
 
@@ -463,7 +465,7 @@ zstream_dequeue(zstream_queue_t *queue, queue_item *item)
 	}
 }
 
-#ifdef DEBUG
+#ifdef DEBUG_QUEUE
 
 #define JIFFIES_PER_SEC 100
 #define SAMPLE_DURATION_US 1000000
@@ -543,4 +545,4 @@ start_monitor_thread(void) {
 	pthread_detach(monitor);
 }
 
-#endif  /* DEBUG */
+#endif  /* DEBUG_QUEUE */
