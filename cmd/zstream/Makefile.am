@@ -30,7 +30,6 @@ zstream_SOURCES = \
 	%D%/zstream_hash_stats.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
-	%D%/zstream_modules.c \
 	%D%/zstream_modules.h \
 	%D%/zstream_queue.c \
 	%D%/zstream_queue.h \
