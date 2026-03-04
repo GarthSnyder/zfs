@@ -25,7 +25,17 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/*
+ * This module defines a generalized storage allocator that can be backed up
+ * by either memory or a disk file; the API is the same. An allocator can
+ * convert from memory backing to disk backing "in flight", without clients
+ * being aware that this transition has occurred. The goal is to use memory
+ * as long as it's available but not crap out arbitrarily when memory gets
+ * tight. With disk backing, it should be possible to process petabyte-scale
+ * streams.
+ */
 typedef int64_t record_ix_t;
+
 struct allocator;
 typedef struct allocator allocator_t;
 
@@ -36,14 +46,14 @@ typedef struct {
 } allocator_stats_t;
 
 /*
- * Initialize an allocator. Record size is required. If a file handle is
- * provided and max_memory is 0, the allocator will use disk backing.
- * If both a memory limit and a file handle are supplied, the allocator
- * is a convertible allocator that starts by using memory but converts
- * to disk storage if memory use is exceeded. A conversion can also be
- * triggered externally by allocator_convert_to_disk.
+ * Initialize an allocator. If a file handle is provided and max_memory is
+ * 0, the allocator will use disk backing. If both a memory limit and a file
+ * handle are supplied, the allocator is a convertible allocator that starts
+ * by using memory but converts to disk storage if memory use is exceeded.
+ * Conversion can also be triggered externally by calling
+ * allocator_convert_to_disk().
  *
- * If no file handle is supplied, the allocator will be memory-only. 
+ * If no file handle is supplied, the allocator will be memory-only.
  * max_memory must be specified and nonzero.
  */
 allocator_t *

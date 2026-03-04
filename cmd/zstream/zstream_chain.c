@@ -11,9 +11,7 @@
  * reused for different purposes as packets travel down the chain.
  *
  * Execution is straightforward. First, zstream_queues are created for every
- * step that is to be performed in parallel. These queues manage execution
- * of the steps on their own, but they need chain workers to enqueue and
- * dequeue packets to and from them.
+ * step that is to be performed in parallel.
  *
  * Second, service threads are spawned for sections of the chain. There is
  * only one kind of service thread, and the only information needed by the
@@ -44,7 +42,7 @@ typedef struct chain_info {
 
 typedef struct {
 	chain_info_t	wc_chain_info;
-	int		wc_first;
+	int		wc_first;	/* Responsibility region */
 	int		wc_last;
 } worker_context_t;
 
@@ -75,6 +73,7 @@ void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 {
 	int num_steps = 0;
+
 	while (chain[num_steps].cs_type != CS_TERMINATE) num_steps++;
 
 	zstream_queue_t		*queues[num_steps] = {};
@@ -83,7 +82,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 	pthread_t		worker_threads[num_steps] = {};
 	int			num_workers = 0;
 
-	verify(num_steps > 0);
+	VERIFY3U(num_steps, >, 0);
 	if (chain[num_steps-1].cs_type == CS_PARALLEL ||
 		chain[0].cs_type == CS_PARALLEL)
 	{
@@ -91,6 +90,8 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 			"with a parallel step.");
 		exit(1);
 	}
+
+	/* Double check expected input and output packet sizes */
 	for (int i = 0; i < num_steps; i++) {
 		if (chain[i].cs_out_size > max_size) {
 			max_size = chain[i].cs_out_size;
@@ -117,18 +118,18 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 
 	/* Create parallel queues */
 	for (int i = 0; i < num_steps; i++) {
-		if (chain[i].cs_type == CS_PARALLEL) {
-			chain_step_t *ci = &chain[i];
-			zq_params_t queue_params = {
-				.qp_process = ci->cs_parallel.csp_process,
-				.qp_estimate_cost = ci->cs_parallel.csp_cost,
-				.qp_item_size = max_size,
-				.qp_batch_budget = ci->cs_parallel.csp_batch_budget,
-				.qp_queue_length = ci->cs_parallel.csp_queue_length,
-				.qp_context = ci->cs_context
-			};
-			queues[i] = zstream_queue_create(&queue_params);
-		}
+	    if (chain[i].cs_type == CS_PARALLEL) {
+		 chain_step_t *ci = &chain[i];
+		 zq_params_t queue_params = {
+	 		.qp_process = ci->cs_parallel.csp_process,
+	 		.qp_estimate_cost = ci->cs_parallel.csp_cost,
+	 		.qp_item_size = max_size,
+	 		.qp_batch_budget = ci->cs_parallel.csp_batch_budget,
+	 		.qp_queue_length = ci->cs_parallel.csp_queue_length,
+	 		.qp_context = ci->cs_context
+	 	};
+	 	queues[i] = zstream_queue_create(&queue_params);
+	    }
 	}
 
 	/* Create worker context bundles and assign step ranges */
@@ -143,7 +144,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 		num_workers++;
 	}
 
-	/* Create and monitor threads */
+	/* Create threads */
 	for (int i = 0; i < num_workers; i++) {
 		char buff[32];
 		assert(pthread_create(&worker_threads[i], NULL,
@@ -152,6 +153,8 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 		sprintf(buff, "chain-%d", i);
 		pthread_setname_np(worker_threads[i], buff);
 	}
+
+	/* Await completion */
 	for (int i = 0; i < num_workers; i++) {
 		assert(pthread_join(worker_threads[i], NULL) == 0);
 	}
@@ -169,10 +172,8 @@ zstream_chain_worker(worker_context_t *context)
 	    	chain_step_t *step = &ci->ci_chain[i];
 	    	zstream_queue_t *queue = ci->ci_queues[i];
 		if (step->cs_type == CS_SERIAL) {
-			if (step->cs_serial.css_process) {
-				done = !step->cs_serial.css_process(done ? NULL : buffer,
-					step->cs_context, ci->ci_attrs) || done;
-			}
+		    done = !step->cs_serial.css_process(done ? NULL : buffer,
+			step->cs_context, ci->ci_attrs) || done;
 		} else if (i == context->wc_first) {
 			done = done || !zstream_dequeue(queue, buffer);
 		} else if (done) {
@@ -198,15 +199,13 @@ chain_exec_serialized(chain_info_t ci)
 	while (!done) {
 	    for (int i = 0; i < ci->ci_num_steps; i++) {
 		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
-			if (ci->ci_chain[i].cs_serial.css_process) {
-				uint8_t *arg = done ? NULL : buffer;
-				done = done || !ci->ci_chain[i].cs_serial.css_process(arg,
-					ci->ci_chain[i].cs_context,
-					ci->ci_attrs);
-			}
+			uint8_t *arg = done ? NULL : buffer;
+			done = !ci->ci_chain[i].cs_serial.css_process(arg,
+				ci->ci_chain[i].cs_context, ci->ci_attrs) ||
+				done;
 		} else if (!done) {
-			size_t cost = ci->ci_chain[i].cs_parallel.csp_cost(buffer,
-				ci->ci_chain[i].cs_context);
+			size_t cost = ci->ci_chain[i].cs_parallel.csp_cost(
+				buffer, ci->ci_chain[i].cs_context);
 			if (cost > 0) {
 				ci->ci_chain[i].cs_parallel.csp_process(buffer,
 					ci->ci_chain[i].cs_context);

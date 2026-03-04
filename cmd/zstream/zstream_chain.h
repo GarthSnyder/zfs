@@ -29,9 +29,14 @@ extern "C" {
 #endif
 
 /*
- * A chain is a sequence of processing steps that are run on packets of
- * data. Data packet size must be the same for all packets at a given step,
- * but the packet size can vary along the chain as steps add or remove data.
+ * A chain is a processing pipeline that runs on packets of data. The point
+ * of this construct is to
+ *
+ *   * Separate processing steps into small, discrete modules
+ *   * Facilitate component reuse (e.g., checksum validation, I/O)
+ *   * Convert pipelines to a simple, declarative form
+ *   * Handle marshalling of data as it passes down the pipeline
+ *   * Smooth the interfaces between sequential and parallel processing
  *
  * Steps in a chain are defined by instances of the chain_step_t struct
  * below. Steps can be declared to execute either serially or in parallel.
@@ -41,13 +46,13 @@ extern "C" {
  *
  * Both serial and parallel steps can pass an arbitrary (void *) pointer to
  * the processing function as a second argument. This context can be used to
- * maintain state between packets. (But keep in mind that execution order is
- * not guaranteed in concurrent queues.)
+ * maintain state between packets. (However, execution order is not
+ * guaranteed in concurrent queues.)
  *
  * Input and output packet sizes are declared for each step. The buffer
- * containing the input packet passed to a processing function is guaranteed
- * to be large enough to accommodate the stated output size. The processing
- * function should modify the buffer in place.
+ * containing the input packet passed to a processing function is large
+ * enough to accommodate the declared output size. The processing function
+ * should modify the buffer in place.
  *
  * The processing function for a serial step should normally return B_TRUE,
  * but it can return B_FALSE to indicate that no more data will be

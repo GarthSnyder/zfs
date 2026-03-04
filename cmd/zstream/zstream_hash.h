@@ -29,10 +29,15 @@ extern "C" {
 #include <stddef.h>
 
 /*
- * Callers are required neither to manage iterators nor to pursue iterations
- * to completion. In return, callers must limit themselves to MAX_LH_ITERATORS
- * concurrent iterators.
+ * This module implements a linear hash table with 64-bit hash keys. It runs
+ * on top of allocator_t, which allows the hash table to expand indefinitely
+ * as long as disk storage remains available.
+ *
+ * API clients are required neither to memory-manage iterators nor to pursue
+ * iterations to completion. In return, callers must limit themselves to
+ * MAX_LH_ITERATORS concurrent iterators.
  */
+
 #define MAX_LH_ITERATORS 8
 
 struct linear_hash;

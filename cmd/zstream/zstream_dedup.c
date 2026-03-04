@@ -95,8 +95,8 @@ static inline void
 dedup_table_insert(linear_hash_t *ddt, drr_blake3_t *item)
 {
 	dedup_entry_t dedup = {
-		.write_block = item->dp_base.dp_drr.drr_u.drr_write,
-		.blake3_hash = item->dp_blake3_payload,
+		.write_block 	= item->dp_base.dp_drr.drr_u.drr_write,
+		.blake3_hash 	= item->dp_blake3_payload,
 		.payload_length = item->dp_base.dp_payload_size
 	};
 	lh_insert(ddt, BLAKE3_64_BIT(&item->dp_blake3_payload), &dedup);
@@ -162,7 +162,7 @@ chain_dedup_writes(drr_blake3_t *item, dedup_context_t *context,
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
 	struct drr_begin *drrb   = &drr->drr_u.drr_begin;
 	dedup_stats_t *stats     = &context->dc_stats;
-	linear_hash_t *dd_table   = context->dc_table;
+	linear_hash_t *dd_table  = context->dc_table;
 	dedup_entry_t existing;
 
 	if (item == NULL) {
@@ -316,7 +316,7 @@ zstream_do_dedup(int argc, char *argv[])
 	validate_cache_dir(cache_dir);
 
 	dedup_table = lh_init(sizeof(dedup_entry_t), max_memory, cache_dir);
-	verify(dedup_table != NULL);
+	VERIFY3P(dedup_table, !=, NULL);
 
 	zstream_chain_t dedup_chain = {
 		STANDARD_INPUT_STACK((argc == 1) ? argv[0] : NULL, 512),
@@ -326,6 +326,7 @@ zstream_do_dedup(int argc, char *argv[])
 	};
 
 	zstream_chain_exec(dedup_chain, &attrs);
+	libspl_fini();
 	lh_destroy(dedup_table);
 	return 0;
 }
