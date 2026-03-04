@@ -21,7 +21,6 @@
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/blake3.h>
-
 #include "zstream_blake3.h"
 #include "zstream_shared.h"
 
@@ -30,7 +29,7 @@ chain_calc_blake3(drr_blake3_t *item, void *context)
 {
 	(void) context;
 	drr_packet_t *base = &item->dp_base;
-	assert(base->dp_payload_size > 0);
+	ASSERT3U(base->dp_payload_size, >, 0);
 
 	BLAKE3_CTX ctx;
 	Blake3_Init(&ctx);

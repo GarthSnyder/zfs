@@ -20,7 +20,6 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
-
 #include "zstream_chain.h"
 #include "zstream_fletcher4.h"
 #include "zstream_io.h"
@@ -32,12 +31,10 @@
  */
 #define	MAX_FLETCHER_BLOCK	(8ULL << 20)
 
-typedef enum { F4_SET, F4_VALIDATE } fletcher4_op_t;
-
-typedef struct {
+struct fletcher4_context {
 	zio_cksum_t	fc_stream_cksum;
 	fletcher4_op_t	fc_operation;
-} fletcher4_context_t;
+};
 
 void
 chain_calc_fletcher4(drr_fletcher4_t *item, void *context);
@@ -49,50 +46,12 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 static fletcher4_context_t	fletcher4_contexts[MAX_FLETCHER_4];
 static int			next_context = 0;
 
-/*
- * These queues double as I/O buffers, so the queue length is long.
- */
-chain_step_t
-parallel_calc_fletcher4(int queue_length) {
-	return (chain_step_t) {
-		.cs_type = CS_PARALLEL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_fletcher4_t),
-		.cs_parallel = {
-			.csp_queue_length = queue_length,
-			.csp_batch_budget = 256 * 1024,
-			.csp_process = (zq_process_item_f *)chain_calc_fletcher4,
-			.csp_cost = (zq_estimate_cost_f *)payload_size_as_cost
-		}		
-	};
-}
-
-static chain_step_t
-fletcher4_serial_step(fletcher4_op_t operation) {
-	fletcher4_context_t *context = &fletcher4_contexts[next_context];
+fletcher4_context_t *
+new_fletcher4_context(fletcher4_op_t operation) {
+	fletcher4_context_t *context = &fletcher4_contexts[next_context++];
 	context->fc_operation = operation;
 	ZIO_SET_CHECKSUM(&context->fc_stream_cksum, 0, 0, 0, 0);
-	next_context++;
-	return (chain_step_t) {
-		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof(drr_fletcher4_t),
-		.cs_out_size = sizeof(drr_packet_t),
-		.cs_context = context,
-		.cs_serial = {
-			.css_process =
-				(zc_serial_process_f *)chain_fletcher4,
-		}
-	};
-}
-
-chain_step_t
-serial_add_fletcher4(void) {
-	return fletcher4_serial_step(F4_SET);
-}
-
-chain_step_t
-serial_validate_fletcher4(void) {
-	return fletcher4_serial_step(F4_VALIDATE);
+	return context;
 }
 
 /*
@@ -126,7 +85,6 @@ fletcher4_init_once(void) {
  * handled correctly in a structured fashion, not by allowing intermediate
  * calculations to overflow.
  */
-
 static inline void
 fletcher4_incremental_combine(zio_cksum_t *zcp, const uint64_t size,
     const zio_cksum_t *nzcp)
@@ -176,7 +134,7 @@ chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
 	}
 }
 
-static void
+static inline void
 validate_or_exit(zio_cksum_t *expected, zio_cksum_t *actual,
 	const char *where)
 {

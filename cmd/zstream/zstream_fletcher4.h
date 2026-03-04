@@ -28,6 +28,41 @@ extern "C" {
 
 #define MAX_FLETCHER_4 8	/* Max cksum ops in one chain */
 
+#define PARALLEL_CALC_FLETCHER4(queue_length)				      \
+	((chain_step_t) {						      \
+		.cs_type = CS_PARALLEL,					      \
+		.cs_in_size = sizeof(drr_packet_t),			      \
+		.cs_out_size = sizeof(drr_fletcher4_t),			      \
+		.cs_parallel = {					      \
+		    .csp_queue_length = queue_length,			      \
+		    .csp_batch_budget = 256 * 1024,			      \
+		    .csp_process = (zq_process_item_f *)chain_calc_fletcher4, \
+		    .csp_cost = (zq_estimate_cost_f *)payload_size_as_cost    \
+		}							      \
+	})
+
+#define SERIAL_VALIDATE_FLETCHER4()					      \
+	((chain_step_t) {						      \
+		.cs_type = CS_SERIAL,					      \
+		.cs_in_size = sizeof(drr_fletcher4_t),			      \
+		.cs_out_size = sizeof(drr_packet_t),			      \
+		.cs_context = new_fletcher4_context(F4_VALIDATE),	      \
+		.cs_serial = {						      \
+		    .css_process = (zc_serial_process_f *)chain_fletcher4,    \
+		}							      \
+	})
+
+#define SERIAL_ADD_FLETCHER4()						      \
+	((chain_step_t) {						      \
+		.cs_type = CS_SERIAL,					      \
+		.cs_in_size = sizeof(drr_fletcher4_t),			      \
+		.cs_out_size = sizeof(drr_packet_t),			      \
+		.cs_context = new_fletcher4_context(F4_SET),		      \
+		.cs_serial = {						      \
+		    .css_process = (zc_serial_process_f *)chain_fletcher4,    \
+		}							      \
+	})
+
 /*
  * Fletcher 4 incremental blocks are limited to 8MB in size, and some ZFS
  * payloads can be significantly larger than this, notably DRR_WRITE blocks
@@ -45,14 +80,20 @@ typedef struct {
 	zio_cksum_t	*dp_fletcher4_overflow;
 } drr_fletcher4_t;
 
-chain_step_t
-parallel_calc_fletcher4(int queue_length);
+typedef enum { F4_SET, F4_VALIDATE } fletcher4_op_t;
 
-chain_step_t
-serial_validate_fletcher4(void);
+struct fletcher4_context;
+typedef struct fletcher4_context fletcher4_context_t;
 
-chain_step_t
-serial_add_fletcher4(void);
+fletcher4_context_t *
+new_fletcher4_context(fletcher4_op_t operation);
+
+void
+chain_calc_fletcher4(drr_fletcher4_t *item, void *context);
+
+boolean_t
+chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
+	chain_attrs_t chain);
 
 #ifdef __cplusplus
 }

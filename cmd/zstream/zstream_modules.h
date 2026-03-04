@@ -35,14 +35,14 @@ extern "C" {
 
 #define STANDARD_INPUT_STACK(infile, f4_queue_length) 			\
 	serial_read_stream(infile),					\
-	parallel_calc_fletcher4(f4_queue_length),			\
-	serial_validate_fletcher4(),					\
+	PARALLEL_CALC_FLETCHER4(f4_queue_length),			\
+	SERIAL_VALIDATE_FLETCHER4(),					\
 	serial_byteswap(),						\
 	serial_validate_records()
 
 #define STANDARD_OUTPUT_STACK(outfile, f4_queue_length) 		\
-	parallel_calc_fletcher4(f4_queue_length),			\
-	serial_add_fletcher4(),						\
+	PARALLEL_CALC_FLETCHER4(f4_queue_length),			\
+	SERIAL_ADD_FLETCHER4(),						\
 	serial_write_stream(outfile),					\
 	CHAIN_TERMINATOR
 
