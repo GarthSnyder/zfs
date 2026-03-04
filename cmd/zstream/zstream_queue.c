@@ -122,7 +122,7 @@ thread_pool_spinup(void) {
 		pthread_detach(pool.tp_threads[i]);
 	}
 #ifdef DEBUG
-	start_monitor_thread();
+	// start_monitor_thread();
 #endif
 }
 
@@ -490,8 +490,10 @@ cpu_and_queue_monitor(void *dummy)
 	usleep(3 * 1000 * 1000);
 
 start:	usleep(period);
-	VERIFY3S(fseek(fp, 0, SEEK_SET), ==, 0);
+	fp = fopen("/proc/self/stat", "r");
+	VERIFY3P(fp, !=, NULL);
 	VERIFY3P(fgets(buff, sizeof(buff), fp), !=, NULL);
+	fclose(fp);
 	char *p = strrchr(buff, ')');
 	VERIFY3P(p, !=, NULL);
 	p += 2;  /* skip ") " and fields 3-13 */
