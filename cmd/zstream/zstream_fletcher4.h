@@ -26,7 +26,7 @@ extern "C" {
 
 #include "zstream_io.h"
 
-#define MAX_FLETCHER_4 8	/* Max cksum ops in one chain */
+#define MAX_FLETCHER_4 8	/* Max checksum ops in one chain */
 
 /*
  * Fletcher 4 incremental blocks are limited to 8MB in size, and some ZFS

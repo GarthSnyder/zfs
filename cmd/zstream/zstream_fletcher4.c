@@ -20,7 +20,6 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
-
 #include "zstream_chain.h"
 #include "zstream_fletcher4.h"
 #include "zstream_io.h"
