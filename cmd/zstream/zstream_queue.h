@@ -43,13 +43,13 @@ extern "C" {
   *
   * The cost function assigns a size_t cost that estimates the amount of
   * work needed to process an item. For operations like hashing and data
-  * compression, the natural cost is typically input buffer length. This
+  * compression, the natural cost is typically input buffer length. The cost
   * function is run as items enter the queue, so it's single-threaded and
   * should return a value promptly. If cost estimation is important and
   * expensive, use a separate queue to implement it.
   *
   * It's expected that only a subset of input items will require processing.
-  * If an item's cost is zero, it is fast-tracked and never presented to the
+  * If an item's cost is 0, it is fast-tracked and never presented to the
   * processing function.
   *
   * All queues share a single thread pool that is managed to avoid
@@ -59,13 +59,16 @@ extern "C" {
   * pipeline stalls.
  */
 
-#define MAX_BATCH 16	/* Most items that can be claimed at once */
+#define MAX_BATCH 16	/* The most items that can be claimed at once */
 
 typedef void queue_item;
 
 struct zstream_queue;
 typedef struct zstream_queue zstream_queue_t;
 
+/*
+ * Required signatures that cost and processing functions must conform to.
+ */
 typedef void
 zq_process_item_f(queue_item *item, void *context);
 
@@ -88,7 +91,7 @@ zq_estimate_cost_f(queue_item *item, void *context);
 
 typedef struct {
 	zq_process_item_f	*qp_process;
-	zq_estimate_cost_f	*qp_estimate_cost;
+	zq_estimate_cost_f	*qp_cost;
 	void                    *qp_context;
 	size_t			qp_item_size;
 	size_t			qp_batch_budget;
@@ -108,9 +111,9 @@ zstream_enqueue(zstream_queue_t *queue, queue_item *item);
 
 /*
  * Retrieve a completed work item. The caller must provide a buffer into
- * which the dequeued item is copied. Items are returned in the same order
- * they were submitted. If the next unit is not yet ready, this call will
- * block.
+ * which the dequeued item is shallow-copied. Items are returned in the same
+ * order they were submitted. If the next unit is not yet ready, this call
+ * will block.
  *
  * If zstream_dequeue returns B_FALSE, the stream is complete. The returned
  * item is not valid and no further calls may be made.
