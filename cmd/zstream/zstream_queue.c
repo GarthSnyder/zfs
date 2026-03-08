@@ -13,10 +13,30 @@
  * CDDL HEADER END
  */
 
+/*
+ * REVIEW: Leading space on "/*" is inconsistent with the rest of the file.
+ */
  /*
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+/*
+ * REVIEW: Missing includes. The following are used directly in this file
+ * but not included (and not guaranteed transitively):
+ *   <string.h>    - memcpy(), memmove()
+ *   <stdlib.h>    - free(), abort()
+ *   <stdio.h>     - fprintf(), FILE, fopen(), etc. (MONITOR_QUEUES)
+ *   <unistd.h>    - usleep(), getpid() (MONITOR_QUEUES)
+ *   <signal.h>    - kill(), SIGSTOP (MONITOR_QUEUES)
+ *   <time.h>      - clock_gettime(), struct timespec (MONITOR_QUEUES)
+ *   <sched.h>     - sched_getaffinity(), cpu_set_t (CPU_COUNT path)
+ *
+ * Also: <sys/debug.h> for ASSERT3B/VERIFY3P/VERIFY3U, <sys/atomic.h>
+ * for atomic_add_32/atomic_sub_32, and <sys/random.h> for
+ * random_get_pseudo_bytes. These may come transitively through
+ * zstream_queue.h's current (overly broad) includes, but should be
+ * made explicit since those includes are candidates for removal.
+ */
 #include <pthread.h>
 
 #include "zstream_queue.h"
@@ -29,6 +49,18 @@
 #define NO_WORK		       0.0001	/* No-work score threshold */
 #define DEQUEUE_SCORE_WEIGHT   0.3	/* Dequeue score relative weight */
 
+/*
+ * REVIEW: These macros use token-pasting in a non-obvious way. The "index"
+ * parameter is pasted after "queue->" so callers must write things like
+ * Q_MOD(queue, zq_ix.enqueue). This is fragile and confusing. Consider
+ * making the macro take the integer index directly:
+ *   #define Q_MOD(queue, ix)  ((ix) % (queue)->zq_params.qp_queue_length)
+ *   #define Q_SLOT(queue, ix) ((queue)->zq_slots[Q_MOD(queue, ix)])
+ * and call as Q_SLOT(queue, queue->zq_ix.enqueue).
+ *
+ * Also: macro args should be parenthesized — (queue)->index to avoid
+ * precedence issues.
+ */
 #define Q_MOD(queue, index)    (queue->index % queue->zq_params.qp_queue_length)
 #define Q_SLOT(queue, index)   (queue->zq_slots[Q_MOD(queue, index)])
 
@@ -109,9 +141,21 @@ static void
 start_monitor_thread(void);
 #endif
 
+/*
+ * REVIEW: Empty initializer {} is a C23 extension. For C11 compatibility
+ * (which OpenZFS targets), use {0}. Same issue on lines with
+ * "items_claimed = {}" and "struct timespec clock = {}" below.
+ */
 static thread_pool_t	pool = {};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 
+/*
+ * REVIEW: OpenZFS style places the opening brace of function bodies on its
+ * own line. This applies to all function definitions in this file. E.g.:
+ *   static void
+ *   thread_pool_init(void)
+ *   {
+ */
 static void
 thread_pool_init(void) {
 	pthread_mutex_init(&pool.tp_mutex, NULL);
@@ -138,6 +182,13 @@ thread_pool_spinup(void) {
 	pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	pool.tp_threads = safe_malloc(sizeof (pthread_t) * pool.tp_num_threads);
 	for (int i = 0; i < pool.tp_num_threads; i++) {
+		/*
+		 * REVIEW: (1) Declare 'buff' before the pthread_create call;
+		 * OpenZFS style puts declarations at the top of the block.
+		 * (2) Use snprintf(buff, sizeof (buff), ...) instead of
+		 * sprintf() to prevent buffer overrun.
+		 * (3) pthread_create return value should be checked.
+		 */
 		pthread_create(&pool.tp_threads[i], NULL, queue_worker, NULL);
 		char buff[32];
 		sprintf(buff, "queue-%d", i);
@@ -154,6 +205,15 @@ thread_pool_spinup(void) {
  */
 static void
 thread_pool_spindown(void) {
+	/*
+	 * REVIEW: pthread_cancel() on detached threads is technically valid
+	 * but risky. Once cancelled, a detached thread's resources are freed
+	 * immediately, so any subsequent reference to that pthread_t is
+	 * undefined behavior. The cancel-then-free pattern here looks
+	 * correct, but there is no synchronization to ensure the threads
+	 * have actually terminated before free(tp_threads). Consider using
+	 * joinable threads instead of detached ones, and pthread_join() here.
+	 */
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		pthread_cancel(pool.tp_threads[i]);
 	}
@@ -172,6 +232,11 @@ zstream_queue_create(zq_params_t *params)
 		thread_pool_spinup();
 	}
 	zstream_queue_t *queue = safe_malloc(sizeof (struct zstream_queue));
+	/*
+	 * REVIEW: No bounds check against MAX_QUEUES. If tp_num_queues
+	 * reaches MAX_QUEUES, this overflows tp_queues[]. Add:
+	 *   VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
+	 */
 	pool.tp_queues[pool.tp_num_queues++] = queue;
 
 	*queue = (zstream_queue_t) {
@@ -182,6 +247,11 @@ zstream_queue_create(zq_params_t *params)
 	/*
 	 * Queue slots and item storage are allocated in one block. Connect
 	 * each slot to its item.
+	 */
+	/*
+	 * REVIEW: Pointer arithmetic on void* is a GCC extension (not
+	 * standard C). Use char* for the item pointer to make the byte-level
+	 * arithmetic portable and explicit.
 	 */
 	void *item = &queue->zq_slots[params->qp_queue_length];
 	queue_slot_t *slot = &queue->zq_slots[0];
@@ -234,6 +304,12 @@ advance_completion_index(zstream_queue_t *queue) {
 static int
 claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 {
+	/*
+	 * REVIEW: count is uint64_t but the function returns int. Use int
+	 * (or uint_t) for count since it's bounded by MAX_BATCH (16).
+	 * cost_claimed is uint64_t but compared against qp_batch_budget
+	 * which is size_t. Use size_t for consistency.
+	 */
 	uint64_t cost_claimed = 0;
 	uint64_t count = 0;
 	boolean_t more_to_claim, more_slots, more_budget;
@@ -284,6 +360,14 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * from being enqueued while scoring is going on, so this will not result in
  * newly-enqueued work being overlooked.
  *
+ * REVIEW: The comment says the pool mutex prevents new enqueues during
+ * scoring, but zstream_enqueue() acquires the queue mutex (not the pool
+ * mutex) to enqueue items, then acquires the pool mutex only to signal
+ * tp_enqueued afterward. So the pool mutex does NOT prevent concurrent
+ * enqueues — it only serializes the signal. The scores can see partially
+ * updated indices from concurrent enqueue operations. This may be
+ * acceptable as a benign race, but the comment is misleading.
+ *
  * The calling thread must hold the pool mutex.
  */
 static inline double
@@ -306,6 +390,7 @@ static inline int
 select_stochastic(double weights[], int num_values)
 {
 	uint32_t numerator;
+	/* REVIEW: Use UINT32_MAX for clarity. */
 	uint32_t denominator = 0xFFFFFFFF;
 	double total = 0.0;
 
@@ -318,6 +403,11 @@ select_stochastic(double weights[], int num_values)
 		if (select_val <= weights[i]) { return (i); }
 		select_val -= weights[i];
 	}
+	/*
+	 * REVIEW: Floating-point rounding can cause the loop above to
+	 * exhaust all weights without selecting an index. Return the last
+	 * index as a fallback instead of aborting.
+	 */
 	abort();
 }
 
@@ -358,6 +448,17 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			*queue = pool.tp_queues[q];
 			pthread_mutex_unlock(&pool.tp_mutex);
 			int count = claim_batch(*queue, batch);
+			/*
+			 * REVIEW: Reading zq_ix.claim and zq_ix.enqueue
+			 * without holding queue->zq_mutex is a data race.
+			 * The enqueue thread writes zq_ix.enqueue under
+			 * the queue mutex, and claim_batch writes
+			 * zq_ix.claim under it too. These reads could see
+			 * torn values. Either hold the lock briefly or use
+			 * atomic loads. (In practice on x86 this is benign
+			 * since aligned int reads are atomic, but it's
+			 * still formally UB per C11 and won't be portable.)
+			 */
 			if ((*queue)->zq_ix.claim < (*queue)->zq_ix.enqueue ||
 				queues_with_work > 1)
 			{
@@ -368,6 +469,13 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 	}
 }
 
+/*
+ * REVIEW: (1) Use {0} instead of {} for C11 compatibility.
+ * (2) "volatile" alone does not guarantee atomicity or ordering. Since
+ * atomic_add_32/atomic_sub_32 are already used, volatile is redundant
+ * and misleading. If this is only for debugging, consider #ifdef guard.
+ * (3) If this is a public symbol, it should have a zstream_ prefix.
+ */
 volatile uint32_t items_claimed = {};
 
 static void *
@@ -378,6 +486,11 @@ queue_worker(void *dummy)
 	queue_slot_t *batch[MAX_BATCH];
 	int count;
 
+	/*
+	 * REVIEW: The goto/label loop is unconventional. A for (;;) or
+	 * while (B_TRUE) loop would be more idiomatic for OpenZFS. The
+	 * "return (NULL)" at the end is dead code.
+	 */
 start:	count = assign_queue_and_get_work(&queue, batch);
 	if (count) {
 		zq_process_item_f *process = queue->zq_params.qp_process;
@@ -411,6 +524,11 @@ void
 zstream_enqueue(zstream_queue_t *queue, queue_item *item)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
+	/*
+	 * REVIEW: ASSERT3B is compiled out in non-debug builds. If this is
+	 * a condition that should always be checked (enqueueing after fini
+	 * is a programming error that corrupts data), use VERIFY3B instead.
+	 */
 	ASSERT3B(queue->zq_disallow_enqueue, ==, B_FALSE);
 
 	while (queue->zq_ix.enqueue - queue->zq_ix.dequeue >=
@@ -437,6 +555,10 @@ zstream_enqueue(zstream_queue_t *queue, queue_item *item)
 	/* Maintain queue usage data per monitor interval */
 	int depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
 	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
+	/*
+	 * REVIEW: BUG — "zq__stats" has a double underscore; should be
+	 * "zq_stats". This would fail to compile with MONITOR_QUEUES defined.
+	 */
 	queue->zq_stats.min_depth = MIN(queue->zq__stats.min_depth, depth);
 #endif
 
@@ -500,6 +622,18 @@ zstream_dequeue(zstream_queue_t *queue, queue_item *item)
 		return (B_FALSE);
 	} else {
 		memcpy(item, slot->qs_item, queue->zq_params.qp_item_size);
+		/*
+		 * REVIEW: The slot is not cleared/reset after dequeue. When
+		 * the ring buffer wraps, zstream_enqueue() overwrites the
+		 * slot's item and cost, but qs_completed and qs_end_of_stream
+		 * from the prior occupant are not reset. qs_completed is set
+		 * based on cost==0 in enqueue, so that's fine. But
+		 * qs_end_of_stream is never cleared, so if a slot that
+		 * previously held the EOS sentinel is reused (which shouldn't
+		 * happen in practice since EOS triggers destroy), this would
+		 * be a latent bug. Consider zeroing the slot on dequeue or
+		 * enqueue for defensive correctness.
+		 */
 		pthread_mutex_unlock(&queue->zq_mutex);
 		pthread_cond_signal(&queue->zq_cond.dequeued);
 		return (B_TRUE);
@@ -527,6 +661,11 @@ cpu_and_queue_monitor(void *dummy)
 	long unsigned int utime, stime;
 	char buff[1024];
 	boolean_t interrupt = B_FALSE;
+	/*
+	 * REVIEW: BUG — fp is opened here but never read from or closed
+	 * before being reopened on the first loop iteration. Remove this
+	 * initial fopen or move it into the loop.
+	 */
 	FILE *fp = fopen("/proc/self/stat", "r");
 	VERIFY3P(fp, !=, NULL);
 
@@ -563,6 +702,12 @@ start:	usleep(period);
 		}
 	}
 
+	/*
+	 * REVIEW: BUG — q->zq_min_depth and q->zq_max_depth do not exist.
+	 * The struct fields are q->zq_stats.min_depth and
+	 * q->zq_stats.max_depth. This would fail to compile with
+	 * MONITOR_QUEUES defined.
+	 */
 	/* Report queue depths */
 	for (int i = 0; i < pool.tp_num_queues; i++) {
 		zstream_queue_t *q = pool.tp_queues[i];
@@ -575,6 +720,14 @@ start:	usleep(period);
 	pthread_mutex_unlock(&pool.tp_mutex);
 	fprintf(stderr, "\n");
 	cpu_jif_prior = utime + stime;
+	/*
+	 * REVIEW: BUG — On the first iteration (cpu_jif_prior was 0), the
+	 * if-block that computes end_us is skipped, so end_us is
+	 * uninitialized here. start_us gets garbage. On the second
+	 * iteration, (end_us - start_us) produces a nonsensical delta.
+	 * Fix: initialize start_us with a clock_gettime() call before the
+	 * loop, or always compute end_us regardless of cpu_jif_prior.
+	 */
 	start_us = end_us;
 	goto start;
 	return (NULL);
