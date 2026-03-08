@@ -53,6 +53,22 @@ extern int
 dump_record(dmu_replay_record_t *drr, void *payload, size_t payload_len,
 	zio_cksum_t *zc, int outfd);
 
+/* Static buffer, must use result before next call */
+extern char *
+checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
+
+/* Returns B_TRUE for valid, B_FALSE for invalid */
+boolean_t
+validate_checksum(zio_cksum_t *expect, zio_cksum_t *actual, const char *where);
+
+static inline void
+validate_or_exit(zio_cksum_t *expect, zio_cksum_t *actual, const char *where)
+{
+	if (!validate_checksum(expect, actual, where)) {
+		exit(1);
+	}
+}
+
 #ifdef __cplusplus
 }
 #endif
