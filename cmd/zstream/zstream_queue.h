@@ -17,6 +17,21 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+/*
+ * REVIEW: Include guard must come before #includes, otherwise the includes
+ * are processed on every inclusion even when the guard is already set.
+ * See zstream_util.h for the correct pattern.
+ *
+ * REVIEW: <sys/dmu.h>, <sys/zio_checksum.h>, <sys/zfs_ioctl.h>, and
+ * <sys/fs/zfs.h> are not used by this header. The only types needed are
+ * boolean_t (from <sys/types.h>) and size_t (from <stddef.h>). Replace
+ * these heavy includes with the minimal set. Suggested fix:
+ *
+ *     #ifndef _ZSTREAM_QUEUE_H
+ *     #define _ZSTREAM_QUEUE_H
+ *     #include <stddef.h>
+ *     #include <sys/types.h>
+ */
 #include <stdint.h>
 #include <sys/dmu.h>
 #include <sys/zio_checksum.h>
@@ -30,6 +45,10 @@
 extern "C" {
 #endif
 
+/*
+ * REVIEW: Leading space on the opening comment delimiter (line below) is
+ * inconsistent with OpenZFS style. The "/*" should be flush to column 1.
+ */
  /*
   * This is a generalized implementation of multithreaded, FIFO work queues.
   * The order guarantee applies only to enqueueing and dequeueing. Work on
@@ -92,6 +111,7 @@ zq_estimate_cost_f(queue_item *item, void *context);
 typedef struct {
 	zq_process_item_f	*qp_process;
 	zq_estimate_cost_f	*qp_cost;
+	/* REVIEW: Alignment uses spaces; other fields use tabs. Use tabs. */
 	void                    *qp_context;
 	size_t			qp_item_size;
 	size_t			qp_batch_budget;
