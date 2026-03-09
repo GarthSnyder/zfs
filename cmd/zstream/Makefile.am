@@ -7,6 +7,8 @@ CPPCHECKTARGETS += zstream
 zstream_SOURCES = \
 	%D%/zstream.c \
 	%D%/zstream.h \
+	%D%/zstream_chain.h \
+	%D%/zstream_chain.c \
 	%D%/zstream_decompress.c \
 	%D%/zstream_drop_record.c \
 	%D%/zstream_dump.c \
