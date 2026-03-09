@@ -14,30 +14,20 @@
  */
 
 /*
- * REVIEW: Leading space on "/*" is inconsistent with the rest of the file.
- */
- /*
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-/*
- * REVIEW: Missing includes. The following are used directly in this file
- * but not included (and not guaranteed transitively):
- *   <string.h>    - memcpy(), memmove()
- *   <stdlib.h>    - free(), abort()
- *   <stdio.h>     - fprintf(), FILE, fopen(), etc. (MONITOR_QUEUES)
- *   <unistd.h>    - usleep(), getpid() (MONITOR_QUEUES)
- *   <signal.h>    - kill(), SIGSTOP (MONITOR_QUEUES)
- *   <time.h>      - clock_gettime(), struct timespec (MONITOR_QUEUES)
- *   <sched.h>     - sched_getaffinity(), cpu_set_t (CPU_COUNT path)
- *
- * Also: <sys/debug.h> for ASSERT3B/VERIFY3P/VERIFY3U, <sys/atomic.h>
- * for atomic_add_32/atomic_sub_32, and <sys/random.h> for
- * random_get_pseudo_bytes. These may come transitively through
- * zstream_queue.h's current (overly broad) includes, but should be
- * made explicit since those includes are candidates for removal.
- */
+#include <string.h>
+#include <stdlib.h>
 #include <pthread.h>
+
+#ifdef MONITOR_QUEUES
+#include <stdio.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
+#include <sched.h>
+#endif
 
 #include "zstream_queue.h"
 #include "zstream_util.h"
@@ -49,20 +39,8 @@
 #define NO_WORK		       0.0001	/* No-work score threshold */
 #define DEQUEUE_SCORE_WEIGHT   0.3	/* Dequeue score relative weight */
 
-/*
- * REVIEW: These macros use token-pasting in a non-obvious way. The "index"
- * parameter is pasted after "queue->" so callers must write things like
- * Q_MOD(queue, zq_ix.enqueue). This is fragile and confusing. Consider
- * making the macro take the integer index directly:
- *   #define Q_MOD(queue, ix)  ((ix) % (queue)->zq_params.qp_queue_length)
- *   #define Q_SLOT(queue, ix) ((queue)->zq_slots[Q_MOD(queue, ix)])
- * and call as Q_SLOT(queue, queue->zq_ix.enqueue).
- *
- * Also: macro args should be parenthesized — (queue)->index to avoid
- * precedence issues.
- */
-#define Q_MOD(queue, index)    (queue->index % queue->zq_params.qp_queue_length)
-#define Q_SLOT(queue, index)   (queue->zq_slots[Q_MOD(queue, index)])
+#define Q_MOD(queue, index)    ((index) % (queue)->zq_params.qp_queue_length)
+#define Q_SLOT(queue, index)   ((queue)->zq_slots[Q_MOD((queue), (index))])
 
 /*
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
@@ -110,24 +88,24 @@ typedef struct {
 } zq_conditions_t;
 
 struct zstream_queue {
-	queue_slot_t		*zq_slots;
-	pthread_mutex_t		zq_mutex;
-	zq_indices_t		zq_ix;
-	zq_conditions_t		zq_cond;
-	zq_params_t		zq_params;
+	queue_slot_t	*zq_slots;
+	pthread_mutex_t	zq_mutex;
+	zq_indices_t	zq_ix;
+	zq_conditions_t	zq_cond;
+	zq_params_t	zq_params;
 #ifdef MONITOR_QUEUES
-	zq_stats_t		zq_stats;
+	zq_stats_t	zq_stats;
 #endif
-	boolean_t		zq_disallow_enqueue;
+	boolean_t	zq_disallow_enqueue;
 };
 
 typedef struct {
-	pthread_mutex_t		tp_mutex;
-	pthread_cond_t		tp_enqueued;
-	zstream_queue_t		*tp_queues[MAX_QUEUES];
-	int			tp_num_queues;
-	pthread_t		*tp_threads;
-	int			tp_num_threads;
+	pthread_mutex_t	tp_mutex;
+	pthread_cond_t	tp_enqueued;
+	zstream_queue_t	*tp_queues[MAX_QUEUES];
+	int		tp_num_queues;
+	pthread_t	*tp_threads;
+	int		tp_num_threads;
 } thread_pool_t;
 
 typedef void cleanup_f(void *);
@@ -141,23 +119,12 @@ static void
 start_monitor_thread(void);
 #endif
 
-/*
- * REVIEW: Empty initializer {} is a C23 extension. For C11 compatibility
- * (which OpenZFS targets), use {0}. Same issue on lines with
- * "items_claimed = {}" and "struct timespec clock = {}" below.
- */
-static thread_pool_t	pool = {};
+static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 
-/*
- * REVIEW: OpenZFS style places the opening brace of function bodies on its
- * own line. This applies to all function definitions in this file. E.g.:
- *   static void
- *   thread_pool_init(void)
- *   {
- */
 static void
-thread_pool_init(void) {
+thread_pool_init(void)
+{
 	pthread_mutex_init(&pool.tp_mutex, NULL);
 	pthread_cond_init(&pool.tp_enqueued, NULL);
 }
@@ -170,7 +137,8 @@ thread_pool_init(void) {
  * set on, e.g., a container.
  */
 static void
-thread_pool_spinup(void) {
+thread_pool_spinup(void)
+{
 	pool.tp_num_queues = 0;
 #ifdef CPU_COUNT
 	cpu_set_t cpu_set;
@@ -182,18 +150,12 @@ thread_pool_spinup(void) {
 	pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	pool.tp_threads = safe_malloc(sizeof (pthread_t) * pool.tp_num_threads);
 	for (int i = 0; i < pool.tp_num_threads; i++) {
-		/*
-		 * REVIEW: (1) Declare 'buff' before the pthread_create call;
-		 * OpenZFS style puts declarations at the top of the block.
-		 * (2) Use snprintf(buff, sizeof (buff), ...) instead of
-		 * sprintf() to prevent buffer overrun.
-		 * (3) pthread_create return value should be checked.
-		 */
-		pthread_create(&pool.tp_threads[i], NULL, queue_worker, NULL);
 		char buff[32];
-		sprintf(buff, "queue-%d", i);
+		pthread_t *thread = &pool.tp_threads[i];
+		int ret = pthread_create(thread, NULL, queue_worker, NULL);
+		VERIFY3S(ret, ==, 0);
+		snprintf(buff, sizeof (buff), "queue-%d", i);
 		pthread_setname_np(pool.tp_threads[i], buff);
-		pthread_detach(pool.tp_threads[i]);
 	}
 #ifdef MONITOR_QUEUES
 	start_monitor_thread();
@@ -204,18 +166,11 @@ thread_pool_spinup(void) {
  * Must be called by a function holding the pool mutex
  */
 static void
-thread_pool_spindown(void) {
-	/*
-	 * REVIEW: pthread_cancel() on detached threads is technically valid
-	 * but risky. Once cancelled, a detached thread's resources are freed
-	 * immediately, so any subsequent reference to that pthread_t is
-	 * undefined behavior. The cancel-then-free pattern here looks
-	 * correct, but there is no synchronization to ensure the threads
-	 * have actually terminated before free(tp_threads). Consider using
-	 * joinable threads instead of detached ones, and pthread_join() here.
-	 */
+thread_pool_spindown(void)
+{
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		pthread_cancel(pool.tp_threads[i]);
+		VERIFY3S(pthread_join(pool.tp_threads[i], NULL), ==, 0);
 	}
 	free(pool.tp_threads);
 	pool.tp_threads = NULL;
@@ -227,16 +182,12 @@ zstream_queue_create(zq_params_t *params)
 {
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_mutex);
+	VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
 
 	if (!pool.tp_num_threads) {
 		thread_pool_spinup();
 	}
 	zstream_queue_t *queue = safe_malloc(sizeof (struct zstream_queue));
-	/*
-	 * REVIEW: No bounds check against MAX_QUEUES. If tp_num_queues
-	 * reaches MAX_QUEUES, this overflows tp_queues[]. Add:
-	 *   VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
-	 */
 	pool.tp_queues[pool.tp_num_queues++] = queue;
 
 	*queue = (zstream_queue_t) {
@@ -248,12 +199,7 @@ zstream_queue_create(zq_params_t *params)
 	 * Queue slots and item storage are allocated in one block. Connect
 	 * each slot to its item.
 	 */
-	/*
-	 * REVIEW: Pointer arithmetic on void* is a GCC extension (not
-	 * standard C). Use char* for the item pointer to make the byte-level
-	 * arithmetic portable and explicit.
-	 */
-	void *item = &queue->zq_slots[params->qp_queue_length];
+	uint8_t *item = (uint8_t *)&queue->zq_slots[params->qp_queue_length];
 	queue_slot_t *slot = &queue->zq_slots[0];
 	for (int i = 0; i < params->qp_queue_length; i++) {
 		slot->qs_item = item;
@@ -280,10 +226,11 @@ zstream_queue_create(zq_params_t *params)
  * The calling thread must hold the queue lock.
  */
 static void
-advance_completion_index(zstream_queue_t *queue) {
+advance_completion_index(zstream_queue_t *queue)
+{
 	boolean_t any_completed = B_FALSE;
 	while (queue->zq_ix.complete < queue->zq_ix.claim &&
-	    Q_SLOT(queue, zq_ix.complete).qs_completed)
+	    Q_SLOT(queue, queue->zq_ix.complete).qs_completed)
 	{
 		queue->zq_ix.complete++;
 		any_completed = B_TRUE;
@@ -291,55 +238,6 @@ advance_completion_index(zstream_queue_t *queue) {
 	if (any_completed) {
 		pthread_cond_signal(&queue->zq_cond.completed);
 	}
-}
-
-/*
- * Claim up to MAX_BATCH work items from the given queue, trying to
- * accumulate at least queue->qp_batch_budget worth of work data (== "cost").
- * All items in a batch will be drawn from the same queue.
- *
- * Does not block waiting to fill the budget; returns whatever is
- * available now.
- */
-static int
-claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
-{
-	/*
-	 * REVIEW: count is uint64_t but the function returns int. Use int
-	 * (or uint_t) for count since it's bounded by MAX_BATCH (16).
-	 * cost_claimed is uint64_t but compared against qp_batch_budget
-	 * which is size_t. Use size_t for consistency.
-	 */
-	uint64_t cost_claimed = 0;
-	uint64_t count = 0;
-	boolean_t more_to_claim, more_slots, more_budget;
-	boolean_t first_and_only, ok_to_claim;
-
-	pthread_mutex_lock(&queue->zq_mutex);
-
-	while (B_TRUE)
-	{
-		more_to_claim = queue->zq_ix.claim < queue->zq_ix.enqueue;
-		more_slots = count < MAX_BATCH;
-		more_budget = cost_claimed < queue->zq_params.qp_batch_budget;
-		first_and_only = queue->zq_params.qp_batch_budget == 0 &&
-		    count == 0;
-		ok_to_claim = first_and_only || more_budget;
-
-		if (!more_to_claim || !more_slots || !ok_to_claim) {
-			break;
-		}
-		queue_slot_t *slot = &Q_SLOT(queue, zq_ix.claim);
-		if (!slot->qs_completed) {
-			cost_claimed += slot->qs_cost;
-			batch[count++] = slot;
-		}
-		queue->zq_ix.claim++;
-	}
-
-	advance_completion_index(queue);
-	pthread_mutex_unlock(&queue->zq_mutex);
-	return (count);
 }
 
 /*
@@ -357,16 +255,8 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  *
  * Queues are scored without the queue mutex being held. Ergo, the numbers
  * may be skewed or out of date. However, the pool mutex prevents new work
- * from being enqueued while scoring is going on, so this will not result in
+ * from being signaled while scoring is going on, so this will not result in
  * newly-enqueued work being overlooked.
- *
- * REVIEW: The comment says the pool mutex prevents new enqueues during
- * scoring, but zstream_enqueue() acquires the queue mutex (not the pool
- * mutex) to enqueue items, then acquires the pool mutex only to signal
- * tp_enqueued afterward. So the pool mutex does NOT prevent concurrent
- * enqueues — it only serializes the signal. The scores can see partially
- * updated indices from concurrent enqueue operations. This may be
- * acceptable as a benign race, but the comment is misleading.
  *
  * The calling thread must hold the pool mutex.
  */
@@ -390,8 +280,7 @@ static inline int
 select_stochastic(double weights[], int num_values)
 {
 	uint32_t numerator;
-	/* REVIEW: Use UINT32_MAX for clarity. */
-	uint32_t denominator = 0xFFFFFFFF;
+	uint32_t denominator = UINT32_MAX;
 	double total = 0.0;
 
 	for (int i = 0; i < num_values; i++) {
@@ -403,24 +292,63 @@ select_stochastic(double weights[], int num_values)
 		if (select_val <= weights[i]) { return (i); }
 		select_val -= weights[i];
 	}
-	/*
-	 * REVIEW: Floating-point rounding can cause the loop above to
-	 * exhaust all weights without selecting an index. Return the last
-	 * index as a fallback instead of aborting.
-	 */
-	abort();
+	return (num_values - 1);
 }
 
 static void
-auto_unlock_mutex(pthread_mutex_t *mutex) {
+auto_unlock_mutex(pthread_mutex_t *mutex)
+{
 	pthread_mutex_unlock(mutex);
 }
 
 static void
-await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex) {
+await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex)
+{
 	pthread_cleanup_push((cleanup_f *)auto_unlock_mutex, mutex);
 	pthread_cond_wait(cond, mutex);
 	pthread_cleanup_pop(0);
+}
+
+/*
+ * Claim up to MAX_BATCH work items from the given queue, trying to
+ * accumulate at least queue->qp_batch_budget worth of work data (== "cost").
+ * All items in a batch will be drawn from the same queue.
+ *
+ * Does not block waiting to fill the budget; returns whatever is
+ * available now.
+ *
+ * Must be called with the queue mutex held.
+ */
+static int
+claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
+{
+	size_t cost_claimed = 0;
+	int count = 0;
+	boolean_t more_to_claim, more_slots, more_budget;
+	boolean_t first_and_only, ok_to_claim;
+
+	while (B_TRUE)
+	{
+		more_to_claim = queue->zq_ix.claim < queue->zq_ix.enqueue;
+		more_slots = count < MAX_BATCH;
+		more_budget = cost_claimed < queue->zq_params.qp_batch_budget;
+		first_and_only = queue->zq_params.qp_batch_budget == 0 &&
+		    count == 0;
+		ok_to_claim = first_and_only || more_budget;
+
+		if (!more_to_claim || !more_slots || !ok_to_claim) {
+			break;
+		}
+		queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.claim);
+		if (!slot->qs_completed) {
+			cost_claimed += slot->qs_cost;
+			batch[count++] = slot;
+		}
+		queue->zq_ix.claim++;
+	}
+
+	advance_completion_index(queue);
+	return (count);
 }
 
 /*
@@ -447,36 +375,20 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			int q = select_stochastic(weights, num_queues);
 			*queue = pool.tp_queues[q];
 			pthread_mutex_unlock(&pool.tp_mutex);
+			pthread_mutex_lock(&(*queue)->zq_mutex);
 			int count = claim_batch(*queue, batch);
-			/*
-			 * REVIEW: Reading zq_ix.claim and zq_ix.enqueue
-			 * without holding queue->zq_mutex is a data race.
-			 * The enqueue thread writes zq_ix.enqueue under
-			 * the queue mutex, and claim_batch writes
-			 * zq_ix.claim under it too. These reads could see
-			 * torn values. Either hold the lock briefly or use
-			 * atomic loads. (In practice on x86 this is benign
-			 * since aligned int reads are atomic, but it's
-			 * still formally UB per C11 and won't be portable.)
-			 */
 			if ((*queue)->zq_ix.claim < (*queue)->zq_ix.enqueue ||
 				queues_with_work > 1)
 			{
 				pthread_cond_signal(&pool.tp_enqueued);
 			}
+			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			return (count);
 		}
 	}
 }
 
-/*
- * REVIEW: (1) Use {0} instead of {} for C11 compatibility.
- * (2) "volatile" alone does not guarantee atomicity or ordering. Since
- * atomic_add_32/atomic_sub_32 are already used, volatile is redundant
- * and misleading. If this is only for debugging, consider #ifdef guard.
- * (3) If this is a public symbol, it should have a zstream_ prefix.
- */
-volatile uint32_t items_claimed = {};
+static uint32_t items_claimed = 0;  /* Useful for tuning/debugging */
 
 static void *
 queue_worker(void *dummy)
@@ -486,13 +398,9 @@ queue_worker(void *dummy)
 	queue_slot_t *batch[MAX_BATCH];
 	int count;
 
-	/*
-	 * REVIEW: The goto/label loop is unconventional. A for (;;) or
-	 * while (B_TRUE) loop would be more idiomatic for OpenZFS. The
-	 * "return (NULL)" at the end is dead code.
-	 */
-start:	count = assign_queue_and_get_work(&queue, batch);
-	if (count) {
+	while (B_TRUE) {
+	    count = assign_queue_and_get_work(&queue, batch);
+	    if (count) {
 		zq_process_item_f *process = queue->zq_params.qp_process;
 		void *context = queue->zq_params.qp_context;
 		atomic_add_32(&items_claimed, count);
@@ -512,8 +420,8 @@ start:	count = assign_queue_and_get_work(&queue, batch);
 		advance_completion_index(queue);
 		atomic_sub_32(&items_claimed, count);
 		pthread_mutex_unlock(&queue->zq_mutex);
+	    }
 	}
-	goto start;
 	return (NULL);
 }
 
@@ -524,12 +432,7 @@ void
 zstream_enqueue(zstream_queue_t *queue, queue_item *item)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
-	/*
-	 * REVIEW: ASSERT3B is compiled out in non-debug builds. If this is
-	 * a condition that should always be checked (enqueueing after fini
-	 * is a programming error that corrupts data), use VERIFY3B instead.
-	 */
-	ASSERT3B(queue->zq_disallow_enqueue, ==, B_FALSE);
+	VERIFY3B(queue->zq_disallow_enqueue, ==, B_FALSE);
 
 	while (queue->zq_ix.enqueue - queue->zq_ix.dequeue >=
 	    queue->zq_params.qp_queue_length)
@@ -537,11 +440,12 @@ zstream_enqueue(zstream_queue_t *queue, queue_item *item)
 		await_condition(&queue->zq_cond.dequeued, &queue->zq_mutex);
 	}
 
-	queue_slot_t *slot = &Q_SLOT(queue, zq_ix.enqueue);
+	queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.enqueue);
 	if (item) {
 		slot->qs_cost =
 		    queue->zq_params.qp_cost(item, queue->zq_params.qp_context);
 		slot->qs_completed = slot->qs_cost == 0;
+		slot->qs_end_of_stream = B_FALSE;
 		memcpy(slot->qs_item, item, queue->zq_params.qp_item_size);
 	} else {
 		slot->qs_cost = 0;
@@ -555,11 +459,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item *item)
 	/* Maintain queue usage data per monitor interval */
 	int depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
 	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
-	/*
-	 * REVIEW: BUG — "zq__stats" has a double underscore; should be
-	 * "zq_stats". This would fail to compile with MONITOR_QUEUES defined.
-	 */
-	queue->zq_stats.min_depth = MIN(queue->zq__stats.min_depth, depth);
+	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
@@ -612,7 +512,7 @@ zstream_dequeue(zstream_queue_t *queue, queue_item *item)
 	while (queue->zq_ix.dequeue >= queue->zq_ix.complete) {
 		await_condition(&queue->zq_cond.completed, &queue->zq_mutex);
 	}
-	queue_slot_t *slot = &Q_SLOT(queue, zq_ix.dequeue);
+	queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.dequeue);
 	queue->zq_ix.dequeue++;
 	if (slot->qs_end_of_stream) {
 		pthread_mutex_unlock(&queue->zq_mutex);
@@ -622,18 +522,6 @@ zstream_dequeue(zstream_queue_t *queue, queue_item *item)
 		return (B_FALSE);
 	} else {
 		memcpy(item, slot->qs_item, queue->zq_params.qp_item_size);
-		/*
-		 * REVIEW: The slot is not cleared/reset after dequeue. When
-		 * the ring buffer wraps, zstream_enqueue() overwrites the
-		 * slot's item and cost, but qs_completed and qs_end_of_stream
-		 * from the prior occupant are not reset. qs_completed is set
-		 * based on cost==0 in enqueue, so that's fine. But
-		 * qs_end_of_stream is never cleared, so if a slot that
-		 * previously held the EOS sentinel is reused (which shouldn't
-		 * happen in practice since EOS triggers destroy), this would
-		 * be a latent bug. Consider zeroing the slot on dequeue or
-		 * enqueue for defensive correctness.
-		 */
 		pthread_mutex_unlock(&queue->zq_mutex);
 		pthread_cond_signal(&queue->zq_cond.dequeued);
 		return (B_TRUE);
@@ -661,80 +549,62 @@ cpu_and_queue_monitor(void *dummy)
 	long unsigned int utime, stime;
 	char buff[1024];
 	boolean_t interrupt = B_FALSE;
-	/*
-	 * REVIEW: BUG — fp is opened here but never read from or closed
-	 * before being reopened on the first loop iteration. Remove this
-	 * initial fopen or move it into the loop.
-	 */
-	FILE *fp = fopen("/proc/self/stat", "r");
-	VERIFY3P(fp, !=, NULL);
+	FILE *fp;
 
 	/* Wait a few seconds for things to settle into steady state */
 	usleep(3 * 1000 * 1000);
 
-start:	usleep(period);
-	fp = fopen("/proc/self/stat", "r");
-	VERIFY3P(fp, !=, NULL);
-	VERIFY3P(fgets(buff, sizeof (buff), fp), !=, NULL);
-	fclose(fp);
-	char *p = strrchr(buff, ')');
-	VERIFY3P(p, !=, NULL);
-	p += 2;  /* skip ") " and fields 3-13 */
-	for (int i = 0; i < 11; i++) {
-		p = strchr(p, ' ');
+	while (B_TRUE) {
+		usleep(period);
+		fp = fopen("/proc/self/stat", "r");
+		VERIFY3P(fp, !=, NULL);
+		VERIFY3P(fgets(buff, sizeof (buff), fp), !=, NULL);
+		fclose(fp);
+		char *p = strrchr(buff, ')');
 		VERIFY3P(p, !=, NULL);
-		p++;
-	}
-	VERIFY3U(sscanf(p, "%lu %lu", &utime, &stime), ==, 2);
-
-	pthread_mutex_lock(&pool.tp_mutex);
-	if (cpu_jif_prior) {
-		delta_cpu_jif = utime + stime - cpu_jif_prior;
+		p += 2;  /* skip ") " and fields 3-13 */
+		for (int i = 0; i < 11; i++) {
+			p = strchr(p, ' ');
+			VERIFY3P(p, !=, NULL);
+			p++;
+		}
+		VERIFY3U(sscanf(p, "%lu %lu", &utime, &stime), ==, 2);
+		pthread_mutex_lock(&pool.tp_mutex);
 		clock_gettime(CLOCK_MONOTONIC, &clock);
 		end_us = clock.tv_sec * 1000000 + clock.tv_nsec / 1000;
-		delta_jif = (end_us - start_us) / (JIFFIES_PER_SEC * 100);
-		double cpu_pct = (double)delta_cpu_jif /
-		    (pool.tp_num_threads * delta_jif);
-		fprintf(stderr, "CPU: %.2f%%  ", 100 * cpu_pct);
-		/* Stop to investigate low CPU usage */
-		if (interrupt && cpu_pct < 0.85 && cpu_pct > 0.1) {
-			kill(getpid(), SIGSTOP);
+		if (cpu_jif_prior) {
+			delta_cpu_jif = utime + stime - cpu_jif_prior;
+			delta_jif = (end_us - start_us) /
+			    (JIFFIES_PER_SEC * 100);
+			double cpu_pct = (double)delta_cpu_jif /
+			    (pool.tp_num_threads * delta_jif);
+			fprintf(stderr, "CPU: %.2f%%  ", 100 * cpu_pct);
+			/* Stop to investigate low CPU usage */
+			if (interrupt && cpu_pct < 0.85 && cpu_pct > 0.1) {
+				kill(getpid(), SIGSTOP);
+			}
 		}
-	}
 
-	/*
-	 * REVIEW: BUG — q->zq_min_depth and q->zq_max_depth do not exist.
-	 * The struct fields are q->zq_stats.min_depth and
-	 * q->zq_stats.max_depth. This would fail to compile with
-	 * MONITOR_QUEUES defined.
-	 */
-	/* Report queue depths */
-	for (int i = 0; i < pool.tp_num_queues; i++) {
-		zstream_queue_t *q = pool.tp_queues[i];
-		fprintf(stderr, "Queue %d: %d-%d  ", i, q->zq_min_depth,
-			q->zq_max_depth);
-		q->zq_min_depth = 999999999;
-		q->zq_max_depth = 0;
-	}
+		/* Report queue depths */
+		for (int i = 0; i < pool.tp_num_queues; i++) {
+			zstream_queue_t *q = pool.tp_queues[i];
+			fprintf(stderr, "Queue %d: %d-%d  ", i,
+			    q->zq_stats.min_depth, q->zq_stats.max_depth);
+			q->zq_stats.min_depth = 999999999;
+			q->zq_stats.max_depth = 0;
+		}
 
-	pthread_mutex_unlock(&pool.tp_mutex);
-	fprintf(stderr, "\n");
-	cpu_jif_prior = utime + stime;
-	/*
-	 * REVIEW: BUG — On the first iteration (cpu_jif_prior was 0), the
-	 * if-block that computes end_us is skipped, so end_us is
-	 * uninitialized here. start_us gets garbage. On the second
-	 * iteration, (end_us - start_us) produces a nonsensical delta.
-	 * Fix: initialize start_us with a clock_gettime() call before the
-	 * loop, or always compute end_us regardless of cpu_jif_prior.
-	 */
-	start_us = end_us;
-	goto start;
+		pthread_mutex_unlock(&pool.tp_mutex);
+		fprintf(stderr, "\n");
+		cpu_jif_prior = utime + stime;
+		start_us = end_us;
+	}
 	return (NULL);
 }
 
 static void
-start_monitor_thread(void) {
+start_monitor_thread(void)
+{
 	pthread_t monitor;
 	pthread_create(&monitor, NULL, cpu_and_queue_monitor, NULL);
 	pthread_setname_np(monitor, "monitor-0");

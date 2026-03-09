@@ -17,27 +17,6 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-/*
- * REVIEW: Include guard must come before #includes, otherwise the includes
- * are processed on every inclusion even when the guard is already set.
- * See zstream_util.h for the correct pattern.
- *
- * REVIEW: <sys/dmu.h>, <sys/zio_checksum.h>, <sys/zfs_ioctl.h>, and
- * <sys/fs/zfs.h> are not used by this header. The only types needed are
- * boolean_t (from <sys/types.h>) and size_t (from <stddef.h>). Replace
- * these heavy includes with the minimal set. Suggested fix:
- *
- *     #ifndef _ZSTREAM_QUEUE_H
- *     #define _ZSTREAM_QUEUE_H
- *     #include <stddef.h>
- *     #include <sys/types.h>
- */
-#include <stdint.h>
-#include <sys/dmu.h>
-#include <sys/zio_checksum.h>
-#include <sys/zfs_ioctl.h>
-#include <sys/fs/zfs.h>
-
 #ifndef _ZSTREAM_QUEUE_H
 #define _ZSTREAM_QUEUE_H
 
@@ -45,37 +24,36 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
+#include <sys/types.h>
+
 /*
- * REVIEW: Leading space on the opening comment delimiter (line below) is
- * inconsistent with OpenZFS style. The "/*" should be flush to column 1.
- */
- /*
-  * This is a generalized implementation of multithreaded, FIFO work queues.
-  * The order guarantee applies only to enqueueing and dequeueing. Work on
-  * individual items can occur in any order, although the implementation
-  * generally starts work in FIFO order as well.
-  *
-  * Callers define a fixed item size to be used by each queue and supply two
-  * thread-safe functions that 1) estimate individual items' processing cost
-  * and 2) perform the actual processing. The queue treats items as black
-  * boxes, so processing functions can modify them as desired.
-  *
-  * The cost function assigns a size_t cost that estimates the amount of
-  * work needed to process an item. For operations like hashing and data
-  * compression, the natural cost is typically input buffer length. The cost
-  * function is run as items enter the queue, so it's single-threaded and
-  * should return a value promptly. If cost estimation is important and
-  * expensive, use a separate queue to implement it.
-  *
-  * It's expected that only a subset of input items will require processing.
-  * If an item's cost is 0, it is fast-tracked and never presented to the
-  * processing function.
-  *
-  * All queues share a single thread pool that is managed to avoid
-  * contention. Threads are allocated to queues dynamically according to
-  * where work is available. When multiple queues have work, threads are
-  * allocated among them stochastically with an eye toward preventing
-  * pipeline stalls.
+ * This is a generalized implementation of multithreaded, FIFO work queues.
+ * The order guarantee applies only to enqueueing and dequeueing. Work on
+ * individual items can occur in any order, although the implementation
+ * generally starts work in FIFO order as well.
+ *
+ * Callers define a fixed item size to be used by each queue and supply two
+ * thread-safe functions that 1) estimate individual items' processing cost
+ * and 2) perform the actual processing. The queue treats items as black
+ * boxes, so processing functions can modify them as desired.
+ *
+ * The cost function assigns a size_t cost that estimates the amount of
+ * work needed to process an item. For operations like hashing and data
+ * compression, the natural cost is typically input buffer length. The cost
+ * function is run as items enter the queue, so it's single-threaded and
+ * should return a value promptly. If cost estimation is important and
+ * expensive, use a separate queue to implement it.
+ *
+ * It's expected that only a subset of input items will require processing.
+ * If an item's cost is 0, it is fast-tracked and never presented to the
+ * processing function.
+ *
+ * All queues share a single thread pool that is managed to avoid
+ * contention. Threads are allocated to queues dynamically according to
+ * where work is available. When multiple queues have work, threads are
+ * allocated among them stochastically with an eye toward preventing
+ * pipeline stalls.
  */
 
 #define MAX_BATCH 16	/* The most items that can be claimed at once */
@@ -111,8 +89,7 @@ zq_estimate_cost_f(queue_item *item, void *context);
 typedef struct {
 	zq_process_item_f	*qp_process;
 	zq_estimate_cost_f	*qp_cost;
-	/* REVIEW: Alignment uses spaces; other fields use tabs. Use tabs. */
-	void                    *qp_context;
+	void			*qp_context;
 	size_t			qp_item_size;
 	size_t			qp_batch_budget;
 	size_t			qp_queue_length;
