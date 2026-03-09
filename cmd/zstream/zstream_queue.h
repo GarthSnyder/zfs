@@ -29,9 +29,6 @@ extern "C" {
 
 /*
  * This is a generalized implementation of multithreaded, FIFO work queues.
- * The order guarantee applies only to enqueueing and dequeueing. Work on
- * individual items can occur in any order, although the implementation
- * generally starts work in FIFO order as well.
  *
  * Callers define a fixed item size to be used by each queue and supply two
  * thread-safe functions that 1) estimate individual items' processing cost
@@ -44,6 +41,13 @@ extern "C" {
  * function is run as items enter the queue, so it's single-threaded and
  * should return a value promptly. If cost estimation is important and
  * expensive, use a separate queue to implement it.
+ *
+ * Threading granularity is specified as a per-batch budget that is set for
+ * each queue in the same units used for item costs. Threads claim items
+ * until the budget is met, there are no more items available, or MAX_BATCH
+ * items have been claimed. When claiming items to work on, threads never
+ * block waiting for additional work to arrive. They start work as quickly
+ * as possible even if the budget has not been reached.
  *
  * It's expected that only a subset of input items will require processing.
  * If an item's cost is 0, it is fast-tracked and never presented to the
@@ -75,13 +79,6 @@ zq_estimate_cost_f(queue_item *item, void *context);
 /*
  * Create a queue. Must be called before enqueue or dequeue.
  *
- * Threading granularity is specified as a per-batch budget that is set for
- * each queue in the same units used for item costs. Threads claim items
- * until the budget is met, there are no more items available, or MAX_BATCH
- * items have been claimed. When claiming items to work on, threads never
- * block waiting for additional work to arrive. They start work as quickly
- * as possible even if the budget has not been reached.
- *
  * The zq_context field is passed to the cost and processing functions and
  * is not examined by the queue itself.
  */
@@ -99,18 +96,16 @@ zstream_queue_t *
 zstream_queue_create(zq_params_t *params);
 
 /*
- * Submit a work item. The call blocks if the input queue is full. The work
- * item struct is shallow-copied into the queue and after zstream_enqueue
- * returns may be reused by the caller.
+ * Submit a work item. Blocks if the input queue is full. The work item
+ * struct is shallow-copied into the queue.
  */
 void
 zstream_enqueue(zstream_queue_t *queue, queue_item *item);
 
 /*
  * Retrieve a completed work item. The caller must provide a buffer into
- * which the dequeued item is shallow-copied. Items are returned in the same
- * order they were submitted. If the next unit is not yet ready, this call
- * will block.
+ * which the dequeued item is shallow-copied. If the next item is not yet
+ * ready, this call will block.
  *
  * If zstream_dequeue returns B_FALSE, the stream is complete. The returned
  * item is not valid and no further calls may be made.

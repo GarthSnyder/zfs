@@ -29,26 +29,23 @@ extern "C" {
 #endif
 
 /*
- * A chain is a processing pipeline that runs on packets of data. The point
- * of this construct is to
+ * A chain is a linear series of steps that process packets of data. The
+ * purpose of this construct is to:
  *
- * - Reduce code duplication - Separate processing steps into small,
- * logically distinct modules - Separate pipeline wrangling from functional
- * processing - Facilitate component reuse (checksum validation, I/O, etc.)
- * - Handle marshalling of data as it passes down the pipeline - Interface
- * automatically between sequential and parallel processing
+ *   - Reduce code duplication
+ *   - Separate processing into small, logically distinct steps
+ *   - Separate pipeline mangement from functional processing
+ *   - Facilitate component reuse (checksum validation, I/O, etc.)
+ *   - Automatically marshall data as it passes down the pipeline
+ *   - Interface automatically between sequential and parallel processing
+ *   - No, this was not written by an AI, despite being a list
  *
  * Some terms:
  *
  * **STEP** - A chain_step_t struct that represents a packet-processing
- * module. By convention, modules define a function named serial_* or
+ * module. Modules generally define a function named serial_* or
  * parallel_* that produces a chain_step_t which can be incorporated
- * directly into a chain. Some of those function accept configuration
- * arguments and others don't.
- *
- * Steps are logically distinct from one another. A module may appear more
- * than once in a pipeline, but a separate step should be created for each
- * instance.
+ * directly into a chain.
  *
  * **CHAIN** - An array of chain_step_t's. It's just data, so you can create
  * the array however you like. But normally you'd just declare the whole
@@ -64,7 +61,7 @@ extern "C" {
  *		chain_terminator()
  *	}
  *
- * Or more succinctly, something like:
+ * Or more succinctly:
  *
  *	zstream_chain_t recompress_chain = {
  *		STANDARD_INPUT_STACK(infile, 1024),
@@ -73,13 +70,11 @@ extern "C" {
  *		STANDARD_OUTPUT_STACK(NULL, 512)
  *	};
  *
- * The last step in a chain must be of type CS_TERMINATE to mark the end of
- * the chain. The only thing you can do with a chain is pass it to
- * zstream_chain_exec() to run it.
+ * Chains must be terminated by a step of type CS_TERMINATE.
  *
- * **PACKET** - The "things" that flow through a chain. Each step accepts
- * packets of one size and emits packets of another size, which may be
- * smaller, larger, or the same size. In the context of zstream, packets
+ * **ITEM** - The data packets that flow through a chain. Each step accepts
+ * items of one size and emits items of another size, which may be
+ * smaller, larger, or the same size. In the context of zstream, items
  * will generally be structs that start with a drr_packet_t (defined in
  * zstream_io.h) and may include additional module-specific fields.
  *
@@ -94,7 +89,7 @@ extern "C" {
  * will be forthcoming. Only the first step in a chain should use this
  * feature, however.
  *
- * Serial functions are also called with a NULL packet when the end of the
+ * Serial functions are called with a NULL packet when the end of the
  * stream passes by them. Since parallel functions may be called in any
  * order, they have no concept of "end of stream" and do not receive this
  * notification.
@@ -123,7 +118,7 @@ typedef uint64_t chain_attrs_t;
  * See zstream_queue.h for function signatures used by parallel steps.
  */
 typedef boolean_t
-zc_serial_process_f(void *item, void *context, chain_attrs_t chain);
+zc_serial_process_f(void *item, void *context, chain_attrs_t *chain);
 
 typedef enum { CS_SERIAL, CS_PARALLEL, CS_TERMINATE } step_type_t;
 
@@ -149,9 +144,8 @@ typedef chain_step_t zstream_chain_t[];
 
 /*
  * Serialize chain execution for debugging. This option forces all chains to
- * execute nonconcurrently. There are no worker threads, and each record
- * traverses the entire chain before execution returns to the head of the
- * chain.
+ * execute nonconcurrently. There are no worker threads, and each item
+ * traverses the entire chain before execution returns to the head.
  *
  * Serialized execution should be logically identical to normal execution.
  * If it does not yield identical results, there's a problem somewhere.
@@ -159,8 +153,7 @@ typedef chain_step_t zstream_chain_t[];
 extern boolean_t serialize_chains;
 
 /*
- * Execute a chain. This function returns once execution is complete. The
- * individual chain steps are unmodified and may be reused.
+ * Execute a chain. This function returns once execution is complete.
  */
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs);
