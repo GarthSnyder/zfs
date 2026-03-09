@@ -8,21 +8,17 @@
 /*
  * Execute a chain of processing steps, some parallel and some serial.
  *
- * For simplicity, we normalize the chain packet size to that of the largest
+ * For simplicity, we normalize the chain item size to that of the largest
  * output of any step. Packets with data beyond the base drr_record_t should
  * add their additional data to the end of the packet, and this area may be
- * reused for different purposes as packets travel down the chain.
+ * reused for different purposes as items travel down the chain.
  *
  * Execution is straightforward. First, zstream_queues are created for every
  * step that is to be performed in parallel.
  *
- * Second, service threads are spawned for sections of the chain. There is
- * only one kind of service thread, and the only information needed by the
- * thread (other than access to the chain itself) is the range of steps it
- * is responsible for.
- *
- * One thread is assigned to every contiguous sequence of serial steps, plus
- * the parallel steps on either side, if any. Adjacent parallel steps also
+ * Second, service threads are spawned for sections of the chain. One thread
+ * is assigned to every contiguous sequence of serial steps, plus the
+ * parallel steps on either side, if any. Adjacent parallel steps also
  * receive a worker; this is just a special case of the same general
  * pattern, with the serial portion consisting of zero steps.
  *
@@ -30,10 +26,9 @@
  * worker's domain begins with a parallel step, it dequeues items from the
  * associated queue. If it ends with a parallel step, it submits items to
  * that queue.
- *
- * No thread management is required for the chain's worker threads, other
- * than operations implicit in their calls into the parallel queues.
  */
+
+#define MAX_CHAIN_LENGTH 32
 
 typedef struct chain_info {
 	chain_step_t	*ci_chain;
@@ -61,15 +56,7 @@ boolean_t serialize_chains = B_FALSE;
 
 chain_step_t
 serial_null_step() {
-	return (chain_step_t) {
-		.cs_type = CS_SERIAL,
-		.cs_in_size = 0,
-		.cs_out_size = 0,
-		.cs_context = NULL,
-		.cs_serial = {
-			.process = NULL,
-		}
-	};
+	return ((chain_step_t) { .cs_type = CS_SERIAL });
 }
 
 chain_step_t
@@ -84,6 +71,10 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 	size_t max_size = 0;
 
 	while (chain[num_steps].cs_type != CS_TERMINATE) {
+		if (num_steps > MAX_CHAIN_LENGTH) {
+			fprintf(stderr, "Error: unterminated zstream_chain\n");
+			exit(1);
+		}
 		max_size = MAX(max_size, chain[num_steps].cs_out_size);
 		num_steps++;
 	}
@@ -98,7 +89,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 	    chain[0].cs_type == CS_PARALLEL)
 	{
 		fprintf(stderr, "A zstream_chain cannot start or end "
-		    "with a parallel step.");
+		    "with a parallel step.\n");
 		exit(1);
 	}
 
@@ -192,7 +183,7 @@ zstream_chain_worker(worker_context_t *ctxt)
 	    	zstream_queue_t *queue = ci->ci_queues[i];
 		if (step->cs_type == CS_SERIAL) {
 			done = !step->cs_serial.process(done ? NULL : buffer,
-			    step->cs_context, ci->ci_attrs) || done;
+			    step->cs_context, &ci->ci_attrs) || done;
 		} else if (i == ctxt->wc_first_step) {
 			done = done || !zstream_dequeue(queue, buffer);
 		} else if (done) {
@@ -221,7 +212,7 @@ chain_exec_serialized(chain_info_t *ci)
 		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
 			uint8_t *arg = done ? NULL : buffer;
 			done = !ci->ci_chain[i].cs_serial.process(arg,
-				ci->ci_chain[i].cs_context, ci->ci_attrs) ||
+				ci->ci_chain[i].cs_context, &ci->ci_attrs) ||
 				done;
 		} else if (!done) {
 			size_t cost = ci->ci_chain[i].cs_parallel.cost(buffer,

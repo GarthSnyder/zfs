@@ -22,11 +22,13 @@
 #include <pthread.h>
 
 #ifdef MONITOR_QUEUES
+
 #include <stdio.h>
 #include <unistd.h>
 #include <signal.h>
 #include <time.h>
 #include <sched.h>
+
 #endif
 
 #include "zstream_queue.h"
@@ -71,11 +73,6 @@ typedef struct {
 } queue_slot_t;
 
 typedef struct {
-	int		max_depth;
-	int		min_depth;
-} zq_stats_t;
-
-typedef struct {
 	int		enqueue;
 	int		claim;
 	int		complete;
@@ -87,15 +84,18 @@ typedef struct {
 	pthread_cond_t	dequeued;
 } zq_conditions_t;
 
+typedef struct {
+	int		max_depth;
+	int		min_depth;
+} zq_stats_t;
+
 struct zstream_queue {
 	queue_slot_t	*zq_slots;
 	pthread_mutex_t	zq_mutex;
 	zq_indices_t	zq_ix;
 	zq_conditions_t	zq_cond;
 	zq_params_t	zq_params;
-#ifdef MONITOR_QUEUES
 	zq_stats_t	zq_stats;
-#endif
 	boolean_t	zq_disallow_enqueue;
 };
 
