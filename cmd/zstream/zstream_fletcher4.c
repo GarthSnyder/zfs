@@ -199,7 +199,6 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	}
 	if (drr->drr_type == DRR_END) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
-		VERIFY0(item->dp_base.dp_payload_size);
 	} else {
 		fletcher_4_incremental_native(record_cksum,
 		    sizeof(drr->drr_u.drr_checksum.drr_checksum), stream_cksum);

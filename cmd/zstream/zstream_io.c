@@ -47,8 +47,13 @@ static int next_io_context = 0;
 static checkpoint_context_t checkpoint_contexts[MAX_IO_STREAMS];
 static int next_checkpoint_context = 0;
 
+/*
+ * Run from within chain execution to initialize I/O. A NULL filename
+ * indicates stdin or stdout.
+ */
 static void
-open_file(io_context_t *context) {
+open_file(io_context_t *context)
+{
 	if (context->ic_filename) {
 		context->ic_fp = fopen(context->ic_filename,
 			context->ic_for_reading ? "r" : "w+");
@@ -186,7 +191,7 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 	}
 	if (!item) {
 		if (context->ic_fp) fclose(context->ic_fp);
-		return B_TRUE;
+		return (B_TRUE);
 	}
 	if (fwrite(drr, sizeof(dmu_replay_record_t), 1, context->ic_fp) != 1) {
 		fprintf(stderr, "Error writing record header: %s\n",
@@ -209,16 +214,19 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 }
 
 /*
- * Storage for filename must remain valid throughout chain execution
+ * Storage for the filename must remain valid during chain execution
  */
 static chain_step_t
-setup_io(const char *filename, boolean_t for_reading) {
+setup_io(const char *filename, boolean_t for_reading)
+{
 	int context_num = next_io_context++ % MAX_IO_STREAMS;
+
 	io_contexts[context_num] = (io_context_t) {
 		.ic_filename = filename,
 		.ic_for_reading = for_reading
 	};
-	return (chain_step_t) {
+
+	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = 0,
 		.cs_out_size = sizeof(drr_packet_t),
@@ -226,8 +234,8 @@ setup_io(const char *filename, boolean_t for_reading) {
 		.cs_serial = {
 			.process = (zc_serial_process_f *)
 			    (for_reading ? chain_read : chain_write),
-		},
-	};
+		}
+	});
 }
 
 chain_step_t
@@ -253,7 +261,7 @@ payload_size_as_cost(drr_packet_t *packet, void *context) {
 }
 
 static boolean_t
-checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt, void *dummy)
+chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt, void *dummy)
 {
 	(void) dummy;
 	struct timespec now;
@@ -295,7 +303,7 @@ serial_checkpoint(const char *name)
 		.cs_out_size = sizeof(drr_packet_t),
 		.cs_context = &checkpoint_contexts[ctxt],
 		.cs_serial = {
-			.process = (zc_serial_process_f *)checkpoint
+			.process = (zc_serial_process_f *)chain_checkpoint
 		},
 	};
 }
