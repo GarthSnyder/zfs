@@ -155,21 +155,18 @@ thread_pool_spinup(void)
 		int ret = pthread_create(thread, NULL, queue_worker, NULL);
 		VERIFY3S(ret, ==, 0);
 		snprintf(buff, sizeof (buff), "queue-%d", i);
-		pthread_setname_np(pool.tp_threads[i], buff);
+		pthread_setname_np(*thread, buff);
 	}
 #ifdef MONITOR_QUEUES
 	start_monitor_thread();
 #endif
 }
 
-/*
- * Must be called by a function holding the pool mutex
- */
 static void
 thread_pool_spindown(void)
 {
 	for (int i = 0; i < pool.tp_num_threads; i++) {
-		pthread_cancel(pool.tp_threads[i]);
+		VERIFY3S(pthread_cancel(pool.tp_threads[i]), ==, 0);
 		VERIFY3S(pthread_join(pool.tp_threads[i], NULL), ==, 0);
 	}
 	free(pool.tp_threads);
@@ -494,7 +491,9 @@ zstream_queue_destroy(zstream_queue_t *queue)
 	free(queue);
 
 	if (pool.tp_num_queues == 1) {
+		pthread_mutex_unlock(&pool.tp_mutex);
 		thread_pool_spindown();
+		pthread_mutex_lock(&pool.tp_mutex);
 	} else {
 		/* Gaps are not allowed in the tp_queues array */
 		zstream_queue_t **qscan = &pool.tp_queues[0];

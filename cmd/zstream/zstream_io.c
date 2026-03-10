@@ -155,7 +155,7 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 			    "number %lx\n", magic);
 			exit(1);
 		}
-		attrs->ca_feature_flage = DMU_GET_FEATUREFLAGS(versioninfo);
+		attrs->ca_feature_flags = DMU_GET_FEATUREFLAGS(versioninfo);
 	}
 	item->dp_payload_size = calc_payload_size(&item->dp_drr, attrs);
 	if (item->dp_payload_size > 0) {
