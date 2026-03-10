@@ -22,6 +22,7 @@
  * Copyright (c) 2026 by Garth Snyder
  */
 
+#include <err.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -226,7 +227,7 @@ zstream_do_recompress(int argc, char *argv[])
 {
 	int c;
 	int level = 0;
-	struct chain_attrs attrs = {};
+	chain_attrs_t attrs = 0;
 
 	while ((c = getopt(argc, argv, "l:")) != -1) {
 	    switch (c) {
@@ -275,7 +276,7 @@ zstream_do_recompress(int argc, char *argv[])
 		STANDARD_OUTPUT_STACK(NULL, 512)
 	};
 
-	zstream_chain_exec(recompress_chain, &attrs);
+	zstream_chain_exec(recompress_chain, attrs);
 	return (0);
 }
 
