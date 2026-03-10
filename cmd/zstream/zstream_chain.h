@@ -17,16 +17,17 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include "zstream_queue.h"
-#include <stddef.h>
-#include <stdint.h>
-
 #ifndef _ZSTREAM_CHAIN_H
 #define _ZSTREAM_CHAIN_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "zstream_queue.h"
 
 /*
  * A chain is a linear series of steps that process packets of data. The
@@ -103,6 +104,7 @@ extern "C" {
 /*
  * Chain attribute flags that describe the stream.
  */
+
 #define CA_BYTESWAPPED		(1ULL << 0)
 #define CA_DEDUPED		(1ULL << 1)
 
@@ -111,6 +113,7 @@ extern "C" {
 #define CA_DUMP_OFFSETS		(1ULL << 13)
 #define CA_DUMP_DATA		(1ULL << 14)
 #define CA_IGNORE_CKSUMS	(1ULL << 15)
+#define CA_DO_NOT_VALIDATE	(1ULL << 16)
 
 typedef uint64_t chain_attrs_t;
 

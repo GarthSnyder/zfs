@@ -26,6 +26,7 @@ extern "C" {
 
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
+
 #include "zstream_chain.h"
 
 #define MAX_IO_STREAMS 4
@@ -41,15 +42,18 @@ typedef struct {
  * In the following, the filename or checkpoint name must remain valid
  * as long as the chain is executing.
  */
+
 chain_step_t
 serial_read_stream(const char *filename);
 
 chain_step_t
 serial_write_stream(const char *filename);
 
-/* Report throughput */
+/* Report throughput periodically */
 chain_step_t
 serial_checkpoint(const char *name);
+
+/* Off-the-shelf zstream_queue cost functions */
 
 size_t
 constant_cost_of_one(drr_packet_t *packet, void *context);
