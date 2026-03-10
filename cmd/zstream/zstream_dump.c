@@ -25,10 +25,8 @@
  * Use is subject to license terms.
  *
  * Portions Copyright 2012 Martin Matuska <martin@matuska.org>
- */
-
-/*
  * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
+ * Portions copyright 2026 by Garth Snyder <garth@garthsnyder.com>
  */
 
 #include <ctype.h>
@@ -44,6 +42,7 @@
 #include <sys/zio.h>
 #include <zfs_fletcher.h>
 #include "zstream.h"
+#include "zstream_chain.h"
 #include "zstream_util.h"
 
 /*
@@ -56,62 +55,20 @@
  */
 #define	DUMP_GROUPING	4
 
-static uint64_t total_stream_len = 0;
-static FILE *send_stream = 0;
-static boolean_t do_byteswap = B_FALSE;
-static boolean_t do_cksum = B_TRUE;
+typedef struct {
+	uint8_t drr_salt[ZIO_DATA_SALT_LEN];
+	uint8_t drr_iv[ZIO_DATA_IV_LEN];
+	uint8_t drr_mac[ZIO_DATA_MAC_LEN];
+} crypto_fields_t;
 
-/*
- * ssread - send stream read.
- *
- * Read while computing incremental checksum
- */
-static size_t
-ssread(void *buf, size_t len, zio_cksum_t *cksum)
-{
-	size_t outlen;
+typealias void dumper_f(drr_packet_t *item, chain_attrs_t *attrs);
 
-	if ((outlen = fread(buf, len, 1, send_stream)) == 0)
-		return (0);
-
-	if (do_cksum) {
-		if (do_byteswap)
-			fletcher_4_incremental_byteswap(buf, len, cksum);
-		else
-			fletcher_4_incremental_native(buf, len, cksum);
-	}
-	total_stream_len += len;
-	return (outlen);
-}
-
-static size_t
-read_hdr(dmu_replay_record_t *drr, zio_cksum_t *cksum)
-{
-	ASSERT3U(offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum),
-	    ==, sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
-	size_t r = ssread(drr, sizeof (*drr) - sizeof (zio_cksum_t), cksum);
-	if (r == 0)
-		return (0);
-	zio_cksum_t saved_cksum = *cksum;
-	r = ssread(&drr->drr_u.drr_checksum.drr_checksum,
-	    sizeof (zio_cksum_t), cksum);
-	if (r == 0)
-		return (0);
-	if (do_cksum &&
-	    !ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum) &&
-	    !ZIO_CHECKSUM_EQUAL(saved_cksum,
-	    drr->drr_u.drr_checksum.drr_checksum)) {
-		fprintf(stderr, "invalid checksum\n");
-		(void) printf("Incorrect checksum in record header.\n");
-		(void) printf("Expected checksum = %llx/%llx/%llx/%llx\n",
-		    (longlong_t)saved_cksum.zc_word[0],
-		    (longlong_t)saved_cksum.zc_word[1],
-		    (longlong_t)saved_cksum.zc_word[2],
-		    (longlong_t)saved_cksum.zc_word[3]);
-		return (0);
-	}
-	return (sizeof (*drr));
-}
+typedef struct {
+	char		*rt_typename;
+	uint64_t	rt_num_in_stream;
+	uint64_t	rt_bytes_in_stream;
+	dumper_f	*rt_dumper;
+} record_type_t;
 
 /*
  * Print part of a block in ASCII characters
@@ -194,609 +151,352 @@ sprintf_bytes(char *str, uint8_t *buf, uint_t buf_len)
 	str[0] = '\0';
 }
 
-int
-zstream_do_dump(int argc, char *argv[])
+static void
+maybe_dump_payload(drr_packet_t *item, chain_attrs_t *attrs)
 {
-	char *buf = safe_malloc(SPA_MAXBLOCKSIZE);
-	uint64_t drr_record_count[DRR_NUMTYPES] = { 0 };
-	uint64_t total_payload_size = 0;
-	uint64_t total_overhead_size = 0;
-	uint64_t drr_byte_count[DRR_NUMTYPES] = { 0 };
+	if (attrs->ca_command_opts & CA_DUMP_DATA) {
+		print_block(item->dp_payload, item->dp_payload_size);
+	}
+}
+
+static void
+stringify_encryption_fields(crypto_fields_t *crypto)
+{
 	char salt[ZIO_DATA_SALT_LEN * 2 + 1];
 	char iv[ZIO_DATA_IV_LEN * 2 + 1];
 	char mac[ZIO_DATA_MAC_LEN * 2 + 1];
-	uint64_t total_records = 0;
-	uint64_t payload_size;
-	dmu_replay_record_t thedrr;
-	dmu_replay_record_t *drr = &thedrr;
-	struct drr_begin *drrb = &thedrr.drr_u.drr_begin;
-	struct drr_end *drre = &thedrr.drr_u.drr_end;
-	struct drr_object *drro = &thedrr.drr_u.drr_object;
-	struct drr_freeobjects *drrfo = &thedrr.drr_u.drr_freeobjects;
-	struct drr_write *drrw = &thedrr.drr_u.drr_write;
-	struct drr_write_byref *drrwbr = &thedrr.drr_u.drr_write_byref;
-	struct drr_free *drrf = &thedrr.drr_u.drr_free;
-	struct drr_spill *drrs = &thedrr.drr_u.drr_spill;
-	struct drr_write_embedded *drrwe = &thedrr.drr_u.drr_write_embedded;
-	struct drr_object_range *drror = &thedrr.drr_u.drr_object_range;
-	struct drr_redact *drrr = &thedrr.drr_u.drr_redact;
-	struct drr_checksum *drrc = &thedrr.drr_u.drr_checksum;
-	int c;
-	boolean_t verbose = B_FALSE;
-	boolean_t very_verbose = B_FALSE;
-	boolean_t first = B_TRUE;
-	/*
-	 * dump flag controls whether the contents of any modified data blocks
-	 * are printed to the console during processing of the stream. Warning:
-	 * for large streams, this can obviously lead to massive prints.
-	 */
-	boolean_t dump = B_FALSE;
-	int err;
-	zio_cksum_t zc = { { 0 } };
-	zio_cksum_t pcksum = { { 0 } };
+	static char buff[sizeof (salt) + sizeof (iv) + sizeof(mac)];
+
+	sprintf_bytes(salt, crypto->drr_salt, ZIO_DATA_SALT_LEN);
+	sprintf_bytes(iv, crypto->drr_iv, ZIO_DATA_IV_LEN);
+	sprintf_bytes(mac, crypto->drr_mac, ZIO_DATA_MAC_LEN);
+	snprintf(buff, sizeof (buff), "salt = %s iv = %s mac = %s",
+	    salt, iv, mac);
+	return buff;
+}
+
+static void
+dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_begin *drrb = &item->dp_drr.drr_u.drr_begin;
+
+	printf("BEGIN record\n");
+	printf("\thdrtype = %zd\n",
+	    DMU_GET_STREAM_HDRTYPE(drrb->drr_versioninfo));
+	printf("\tfeatures = %zx\n",
+	    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo));
+	printf("\tmagic = %zx\n", drrb->drr_magic);
+	printf("\tcreation_time = %zx\n", drrb->drr_creation_time);
+	printf("\ttype = %u\n", drrb->drr_type);
+	printf("\tflags = 0x%x\n", drrb->drr_flags);
+	printf("\ttoguid = %zx\n", drrb->drr_toguid);
+	printf("\tfromguid = %zx\n", drrb->drr_fromguid);
+	printf("\ttoname = %s\n", drrb->drr_toname);
+	printf("\tpayloadlen = %u\n", drr->drr_payloadlen);
+	if (*attrs & CA_VERBOSE != 0) printf("\n");
+
+	if (drr->drr_payloadlen != 0) {
+		nvlist_t *nv;
+		int sz = drr->drr_payloadlen;
+		err = nvlist_unpack(item->dp_payload, sz, &nv, 0);
+		if (err) {
+			perror(strerror(err));
+		} else {
+			nvlist_print(stdout, nv);
+			nvlist_free(nv);
+		}
+	}
+}
+
+static void
+dump_end_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_end *drre = &item->dp_drr.drr_u.drr_end;
+
+	printf("END checksum = %zx/%zx/%zx/%zx\n",
+	    drre->drr_checksum.zc_word[0],
+	    drre->drr_checksum.zc_word[1],
+	    drre->drr_checksum.zc_word[2],
+	    drre->drr_checksum.zc_word[3]);
+}
+
+static void
+dump_object_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_object *drro = &item->dp_drr.drr_u.drr_object;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("OBJECT object = %zu type = %u "
+		    "bonustype = %u blksz = %u bonuslen = %u "
+		    "dn_slots = %u raw_bonuslen = %u "
+		    "flags = %u maxblkid = %zu "
+		    "indblkshift = %u nlevels = %u "
+		    "nblkptr = %u\n",
+		    drro->drr_object,
+		    drro->drr_type,
+		    drro->drr_bonustype,
+		    drro->drr_blksz,
+		    drro->drr_bonuslen,
+		    drro->drr_dn_slots,
+		    drro->drr_raw_bonuslen,
+		    drro->drr_flags,
+		    drro->drr_maxblkid,
+		    drro->drr_indblkshift,
+		    drro->drr_nlevels,
+		    drro->drr_nblkptr);
+	}
+	if (drro->drr_bonuslen > 0) {
+		maybe_dump_payload(item, attrs);
+	}
+}
+
+static void
+dump_freeobjects_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_freeobjects *drrfo = &item->dp_drr.drr_u.drr_freeobjects;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("FREEOBJECTS firstobj = %zu numobjs = %zu\n",
+		    drrfo->drr_firstobj, drrfo->drr_numobjs);
+	}
+}
+
+static void
+dump_write_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_write *drrw = &item->dp_drr.drr_u.drr_write;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("WRITE object = %zu type = %u "
+		    "checksum type = %u compression type = %u "
+		    "flags = %u offset = %zu "
+		    "logical_size = %zu "
+		    "compressed_size = %zu "
+		    "payload_size = %zu props = %zx "
+		    "%s\n",
+		    drrw->drr_object,
+		    drrw->drr_type,
+		    drrw->drr_checksumtype,
+		    drrw->drr_compressiontype,
+		    drrw->drr_flags,
+		    drrw->drr_offset,
+		    drrw->drr_logical_size,
+		    drrw->drr_compressed_size,
+		    payload_size,
+		    drrw->drr_key.ddk_prop,
+		    stringify_encryption_fields(&drrw->drr_salt));
+	}
+	maybe_dump_payload(item, attrs);
+}
+
+static void
+dump_write_byref_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_write_byref *drrwbr = &item->dp_drr.drr_u.drr_write_byref;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("WRITE_BYREF object = %zu "
+		    "checksum type = %u props = %zx "
+		    "offset = %zu length = %zu "
+		    "toguid = %zx refguid = %zx "
+		    "refobject = %zu refoffset = %zu\n",
+		    drrwbr->drr_object,
+		    drrwbr->drr_checksumtype,
+		    drrwbr->drr_key.ddk_prop,
+		    drrwbr->drr_offset,
+		    drrwbr->drr_length,
+		    drrwbr->drr_toguid,
+		    drrwbr->drr_refguid,
+		    drrwbr->drr_refobject,
+		    drrwbr->drr_refoffset);
+	}
+}
+
+static void
+dump_free_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_free *drrf = &item->dp_drr.drr_u.drr_free;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("FREE object = %zu "
+		    "offset = %zu length = %zd\n",
+		    drrf->drr_object,
+		    drrf->drr_offset,
+		    drrf->drr_length);
+	}
+}
+
+static void
+dump_spill_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_spill *drrs = &item->dp_drr.drr_u.drr_spill;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("SPILL block for object = %zu "
+		    "length = %zu flags = %u "
+		    "compression type = %u "
+		    "compressed_size = %zu "
+		    "payload_size = %zu "
+		    "%s\n",
+		    drrs->drr_object,
+		    drrs->drr_length,
+		    drrs->drr_flags,
+		    drrs->drr_compressiontype,
+		    drrs->drr_compressed_size,
+		    payload_size,
+		    stringify_encryption_fields(&drrs->drr_salt));
+	}
+	maybe_dump_payload(item, attrs);
+}
+
+static void
+dump_write_embedded_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_write_embedded *drrwe =
+	    &item->dp_drr.drr_u.drr_write_embedded;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("WRITE_EMBEDDED object = %zu "
+		    "offset = %zu length = %zu "
+		    "toguid = %zx comp = %u etype = %u "
+		    "lsize = %u psize = %u\n",
+		    drrwe->drr_object,
+		    drrwe->drr_offset,
+		    drrwe->drr_length,
+		    drrwe->drr_toguid,
+		    drrwe->drr_compression,
+		    drrwe->drr_etype,
+		    drrwe->drr_lsize,
+		    drrwe->drr_psize);
+	}
+	maybe_dump_payload(item, attrs);
+}
+
+static void
+dump_object_range_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_object_range *drror = &item->dp_drr.drr_u.drr_object_range;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("OBJECT_RANGE firstobj = %zu "
+		    "numslots = %zu flags = %u "
+		    "%s\n",
+		    drror->drr_firstobj,
+		    drror->drr_numslots,
+		    drror->drr_flags,
+		    stringify_encryption_fields(&drror->drr_salt));
+	}
+	break;
+}
+
+static void
+dump_redact_record(drr_packet_t *item, chain_attrs_t *attrs)
+{
+	struct drr_redact *drrr = &item->dp_drr.drr_u.drr_redact;
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		printf("REDACT object = %zu offset = "
+		    "%zu length = %zu\n",
+		    drrr->drr_object,
+		    drrr->drr_offset,
+		    drrr->drr_length);
+	}
+}
+
+static boolean_t
+chain_dump_record(drr_packet_t *item, record_type_t *context,
+	chain_attrs_t *attrs)
+{
+	int type = item->drr.drr_type;
+
+	if (!item) {
+		return (B_TRUE);
+	}
+	context[type].rt_num_in_stream++;
+	context[type].rt_bytes_in_stream +=
+	    sizeof(dmu_replay_record_t) + item->dp_payload_size;
+	context[type].rt_dumper(item, attrs);
+	return (B_TRUE);
+}
+
+chain_step_t
+serial_dump_records(record_type_t *context)
+{
+	return (chain_step_t) {
+		.cs_type = CS_PARALLEL,
+		.cs_in_size = sizeof(drr_packet_t),
+		.cs_out_size = sizeof(drr_packet_t),
+		.cs_context = context,
+		.cs_serial = {
+		    .process = chain_dump_record
+		}
+	}
+}
+
+int
+zstream_do_dump(int argc, char *argv[])
+{
+	chain_attrs_t attrs = {0};
+	const char *input_file = NULL;
+
+	record_type_t record_types[DRR_NUMTYPES] = {
+		{ "DRR_BEGIN", 		0, 0, dump_begin_record },
+		{ "DRR_OBJECT", 	0, 0, dump_object_record },
+		{ "DRR_FREEOBJECTS", 	0, 0, dump_freeobject_record },
+		{ "DRR_WRITE", 		0, 0, dump_write_record },
+		{ "DRR_FREE", 		0, 0, dump_free_record },
+		{ "DRR_END", 		0, 0, dump_end_record },
+		{ "DRR_WRITE_BYREF", 	0, 0, dump_write_byref_record },
+		{ "DRR_SPILL", 		0, 0, dump_spill_record },
+		{ "DRR_WRITE_EMBEDDED",	0, 0, dump_write_embedded_record },
+		{ "DRR_OBJECT_RANGE",	0, 0, dump_object_range_record },
+		{ "DRR_REDACT",		0, 0, dump_redact_record }
+	};
 
 	while ((c = getopt(argc, argv, ":vCd")) != -1) {
 		switch (c) {
 		case 'C':
-			do_cksum = B_FALSE;
+			ENABLE_OPTION(attrs, CA_IGNORE_CKSUMS);
 			break;
 		case 'v':
-			if (verbose)
-				very_verbose = B_TRUE;
-			verbose = B_TRUE;
+			if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+				ENABLE_OPTION(attrs, CA_VERY_VERBOSE);
+			}
 			break;
 		case 'd':
-			dump = B_TRUE;
-			verbose = B_TRUE;
-			very_verbose = B_TRUE;
+			ENABLE_OPTION(attrs, CA_VERBOSE);
+			ENABLE_OPTION(attrs, CA_VERY_VERBOSE);
+			ENABLE_OPTION(attrs, CA_DUMP_DATA);
 			break;
 		case ':':
-			(void) fprintf(stderr,
+			fprintf(stderr,
 			    "missing argument for '%c' option\n", optopt);
 			zstream_usage();
 			break;
 		case '?':
-			(void) fprintf(stderr, "invalid option '%c'\n",
-			    optopt);
+			fprintf(stderr, "invalid option '%c'\n", optopt);
 			zstream_usage();
 			break;
 		}
 	}
 
 	if (argc > optind) {
-		const char *filename = argv[optind];
-		send_stream = fopen(filename, "r");
-		if (send_stream == NULL) {
-			(void) fprintf(stderr,
-			    "Error while opening file '%s': %s\n",
-			    filename, strerror(errno));
-			exit(1);
-		}
-	} else {
-		if (isatty(STDIN_FILENO)) {
-			(void) fprintf(stderr,
-			    "Error: The send stream is a binary format "
-			    "and can not be read from a\n"
-			    "terminal.  Standard input must be redirected, "
-			    "or a file must be\n"
-			    "specified as a command-line argument.\n");
-			exit(1);
-		}
-		send_stream = stdin;
+		input_file = argv[optind];
 	}
 
-	fletcher_4_init();
-	while (read_hdr(drr, &zc)) {
-		uint64_t featureflags = 0;
+	zstream_chain_t dump_chain = {
+		STANDARD_INPUT_STACK(NULL, 1024),
+		serial_dump_records(record_types)
+	};
 
-		/*
-		 * If this is the first DMU record being processed, check for
-		 * the magic bytes and figure out the endian-ness based on them.
-		 */
-		if (first) {
-			if (drrb->drr_magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
-				do_byteswap = B_TRUE;
-				if (do_cksum) {
-					ZIO_SET_CHECKSUM(&zc, 0, 0, 0, 0);
-					/*
-					 * recalculate header checksum now
-					 * that we know it needs to be
-					 * byteswapped.
-					 */
-					fletcher_4_incremental_byteswap(drr,
-					    sizeof (dmu_replay_record_t), &zc);
-				}
-			} else if (drrb->drr_magic != DMU_BACKUP_MAGIC) {
-				(void) fprintf(stderr, "Invalid stream "
-				    "(bad magic number)\n");
-				exit(1);
-			}
-			first = B_FALSE;
-		}
-		if (do_byteswap) {
-			drr->drr_type = BSWAP_32(drr->drr_type);
-			drr->drr_payloadlen =
-			    BSWAP_32(drr->drr_payloadlen);
-		}
+	zstream_chain_exec(dump_chain, attrs);
 
-		/*
-		 * At this point, the leading fields of the replay record
-		 * (drr_type and drr_payloadlen) have been byte-swapped if
-		 * necessary, but the rest of the data structure (the
-		 * union of type-specific structures) is still in its
-		 * original state.
-		 */
-		if (drr->drr_type >= DRR_NUMTYPES) {
-			(void) printf("INVALID record found: type 0x%x\n",
-			    drr->drr_type);
-			(void) printf("Aborting.\n");
-			exit(1);
-		}
-
-		drr_record_count[drr->drr_type]++;
-		total_overhead_size += sizeof (*drr);
-		total_records++;
-		payload_size = 0;
-
-		switch (drr->drr_type) {
-		case DRR_BEGIN:
-			if (do_byteswap) {
-				drrb->drr_magic = BSWAP_64(drrb->drr_magic);
-				drrb->drr_versioninfo =
-				    BSWAP_64(drrb->drr_versioninfo);
-				drrb->drr_creation_time =
-				    BSWAP_64(drrb->drr_creation_time);
-				drrb->drr_type = BSWAP_32(drrb->drr_type);
-				drrb->drr_flags = BSWAP_32(drrb->drr_flags);
-				drrb->drr_toguid = BSWAP_64(drrb->drr_toguid);
-				drrb->drr_fromguid =
-				    BSWAP_64(drrb->drr_fromguid);
-			}
-
-			(void) printf("BEGIN record\n");
-			(void) printf("\thdrtype = %lld\n",
-			    DMU_GET_STREAM_HDRTYPE(drrb->drr_versioninfo));
-			(void) printf("\tfeatures = %llx\n",
-			    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo));
-			(void) printf("\tmagic = %llx\n",
-			    (u_longlong_t)drrb->drr_magic);
-			(void) printf("\tcreation_time = %llx\n",
-			    (u_longlong_t)drrb->drr_creation_time);
-			(void) printf("\ttype = %u\n", drrb->drr_type);
-			(void) printf("\tflags = 0x%x\n", drrb->drr_flags);
-			(void) printf("\ttoguid = %llx\n",
-			    (u_longlong_t)drrb->drr_toguid);
-			(void) printf("\tfromguid = %llx\n",
-			    (u_longlong_t)drrb->drr_fromguid);
-			(void) printf("\ttoname = %s\n", drrb->drr_toname);
-			(void) printf("\tpayloadlen = %u\n",
-			    drr->drr_payloadlen);
-			if (verbose)
-				(void) printf("\n");
-
-			if (drr->drr_payloadlen != 0) {
-				nvlist_t *nv;
-				int sz = drr->drr_payloadlen;
-
-				if (sz > SPA_MAXBLOCKSIZE) {
-					free(buf);
-					buf = safe_malloc(sz);
-				}
-				(void) ssread(buf, sz, &zc);
-				if (ferror(send_stream))
-					perror("fread");
-				err = nvlist_unpack(buf, sz, &nv, 0);
-				if (err) {
-					perror(strerror(err));
-				} else {
-					nvlist_print(stdout, nv);
-					nvlist_free(nv);
-				}
-				payload_size = sz;
-			}
-			break;
-
-		case DRR_END:
-			if (do_byteswap) {
-				drre->drr_checksum.zc_word[0] =
-				    BSWAP_64(drre->drr_checksum.zc_word[0]);
-				drre->drr_checksum.zc_word[1] =
-				    BSWAP_64(drre->drr_checksum.zc_word[1]);
-				drre->drr_checksum.zc_word[2] =
-				    BSWAP_64(drre->drr_checksum.zc_word[2]);
-				drre->drr_checksum.zc_word[3] =
-				    BSWAP_64(drre->drr_checksum.zc_word[3]);
-			}
-			/*
-			 * We compare against the *previous* checksum
-			 * value, because the stored checksum is of
-			 * everything before the DRR_END record.
-			 */
-			if (do_cksum && !ZIO_CHECKSUM_EQUAL(drre->drr_checksum,
-			    pcksum)) {
-				(void) printf("Expected checksum differs from "
-				    "checksum in stream.\n");
-				(void) printf("Expected checksum = "
-				    "%llx/%llx/%llx/%llx\n",
-				    (long long unsigned int)pcksum.zc_word[0],
-				    (long long unsigned int)pcksum.zc_word[1],
-				    (long long unsigned int)pcksum.zc_word[2],
-				    (long long unsigned int)pcksum.zc_word[3]);
-			}
-			(void) printf("END checksum = %llx/%llx/%llx/%llx\n",
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[0],
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[1],
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[2],
-			    (long long unsigned int)
-			    drre->drr_checksum.zc_word[3]);
-
-			ZIO_SET_CHECKSUM(&zc, 0, 0, 0, 0);
-			break;
-
-		case DRR_OBJECT:
-			if (do_byteswap) {
-				drro->drr_object = BSWAP_64(drro->drr_object);
-				drro->drr_type = BSWAP_32(drro->drr_type);
-				drro->drr_bonustype =
-				    BSWAP_32(drro->drr_bonustype);
-				drro->drr_blksz = BSWAP_32(drro->drr_blksz);
-				drro->drr_bonuslen =
-				    BSWAP_32(drro->drr_bonuslen);
-				drro->drr_raw_bonuslen =
-				    BSWAP_32(drro->drr_raw_bonuslen);
-				drro->drr_toguid = BSWAP_64(drro->drr_toguid);
-				drro->drr_maxblkid =
-				    BSWAP_64(drro->drr_maxblkid);
-			}
-
-			featureflags =
-			    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
-
-			if (featureflags & DMU_BACKUP_FEATURE_RAW &&
-			    drro->drr_bonuslen > drro->drr_raw_bonuslen) {
-				(void) fprintf(stderr,
-				    "Warning: Object %llu has bonuslen = "
-				    "%u > raw_bonuslen = %u\n\n",
-				    (u_longlong_t)drro->drr_object,
-				    drro->drr_bonuslen, drro->drr_raw_bonuslen);
-			}
-
-			payload_size = DRR_OBJECT_PAYLOAD_SIZE(drro);
-
-			if (verbose) {
-				(void) printf("OBJECT object = %llu type = %u "
-				    "bonustype = %u blksz = %u bonuslen = %u "
-				    "dn_slots = %u raw_bonuslen = %u "
-				    "flags = %u maxblkid = %llu "
-				    "indblkshift = %u nlevels = %u "
-				    "nblkptr = %u\n",
-				    (u_longlong_t)drro->drr_object,
-				    drro->drr_type,
-				    drro->drr_bonustype,
-				    drro->drr_blksz,
-				    drro->drr_bonuslen,
-				    drro->drr_dn_slots,
-				    drro->drr_raw_bonuslen,
-				    drro->drr_flags,
-				    (u_longlong_t)drro->drr_maxblkid,
-				    drro->drr_indblkshift,
-				    drro->drr_nlevels,
-				    drro->drr_nblkptr);
-			}
-			if (drro->drr_bonuslen > 0) {
-				(void) ssread(buf, payload_size, &zc);
-				if (dump)
-					print_block(buf, payload_size);
-			}
-			break;
-
-		case DRR_FREEOBJECTS:
-			if (do_byteswap) {
-				drrfo->drr_firstobj =
-				    BSWAP_64(drrfo->drr_firstobj);
-				drrfo->drr_numobjs =
-				    BSWAP_64(drrfo->drr_numobjs);
-				drrfo->drr_toguid = BSWAP_64(drrfo->drr_toguid);
-			}
-			if (verbose) {
-				(void) printf("FREEOBJECTS firstobj = %llu "
-				    "numobjs = %llu\n",
-				    (u_longlong_t)drrfo->drr_firstobj,
-				    (u_longlong_t)drrfo->drr_numobjs);
-			}
-			break;
-
-		case DRR_WRITE:
-			if (do_byteswap) {
-				drrw->drr_object = BSWAP_64(drrw->drr_object);
-				drrw->drr_type = BSWAP_32(drrw->drr_type);
-				drrw->drr_offset = BSWAP_64(drrw->drr_offset);
-				drrw->drr_logical_size =
-				    BSWAP_64(drrw->drr_logical_size);
-				drrw->drr_toguid = BSWAP_64(drrw->drr_toguid);
-				drrw->drr_key.ddk_prop =
-				    BSWAP_64(drrw->drr_key.ddk_prop);
-				drrw->drr_compressed_size =
-				    BSWAP_64(drrw->drr_compressed_size);
-			}
-
-			payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
-
-			/*
-			 * If this is verbose and/or dump output,
-			 * print info on the modified block
-			 */
-			if (verbose) {
-				sprintf_bytes(salt, drrw->drr_salt,
-				    ZIO_DATA_SALT_LEN);
-				sprintf_bytes(iv, drrw->drr_iv,
-				    ZIO_DATA_IV_LEN);
-				sprintf_bytes(mac, drrw->drr_mac,
-				    ZIO_DATA_MAC_LEN);
-
-				(void) printf("WRITE object = %llu type = %u "
-				    "checksum type = %u compression type = %u "
-				    "flags = %u offset = %llu "
-				    "logical_size = %llu "
-				    "compressed_size = %llu "
-				    "payload_size = %llu props = %llx "
-				    "salt = %s iv = %s mac = %s\n",
-				    (u_longlong_t)drrw->drr_object,
-				    drrw->drr_type,
-				    drrw->drr_checksumtype,
-				    drrw->drr_compressiontype,
-				    drrw->drr_flags,
-				    (u_longlong_t)drrw->drr_offset,
-				    (u_longlong_t)drrw->drr_logical_size,
-				    (u_longlong_t)drrw->drr_compressed_size,
-				    (u_longlong_t)payload_size,
-				    (u_longlong_t)drrw->drr_key.ddk_prop,
-				    salt,
-				    iv,
-				    mac);
-			}
-
-			/*
-			 * Read the contents of the block in from STDIN to buf
-			 */
-			(void) ssread(buf, payload_size, &zc);
-			/*
-			 * If in dump mode
-			 */
-			if (dump) {
-				print_block(buf, payload_size);
-			}
-			break;
-
-		case DRR_WRITE_BYREF:
-			if (do_byteswap) {
-				drrwbr->drr_object =
-				    BSWAP_64(drrwbr->drr_object);
-				drrwbr->drr_offset =
-				    BSWAP_64(drrwbr->drr_offset);
-				drrwbr->drr_length =
-				    BSWAP_64(drrwbr->drr_length);
-				drrwbr->drr_toguid =
-				    BSWAP_64(drrwbr->drr_toguid);
-				drrwbr->drr_refguid =
-				    BSWAP_64(drrwbr->drr_refguid);
-				drrwbr->drr_refobject =
-				    BSWAP_64(drrwbr->drr_refobject);
-				drrwbr->drr_refoffset =
-				    BSWAP_64(drrwbr->drr_refoffset);
-				drrwbr->drr_key.ddk_prop =
-				    BSWAP_64(drrwbr->drr_key.ddk_prop);
-			}
-			if (verbose) {
-				(void) printf("WRITE_BYREF object = %llu "
-				    "checksum type = %u props = %llx "
-				    "offset = %llu length = %llu "
-				    "toguid = %llx refguid = %llx "
-				    "refobject = %llu refoffset = %llu\n",
-				    (u_longlong_t)drrwbr->drr_object,
-				    drrwbr->drr_checksumtype,
-				    (u_longlong_t)drrwbr->drr_key.ddk_prop,
-				    (u_longlong_t)drrwbr->drr_offset,
-				    (u_longlong_t)drrwbr->drr_length,
-				    (u_longlong_t)drrwbr->drr_toguid,
-				    (u_longlong_t)drrwbr->drr_refguid,
-				    (u_longlong_t)drrwbr->drr_refobject,
-				    (u_longlong_t)drrwbr->drr_refoffset);
-			}
-			break;
-
-		case DRR_FREE:
-			if (do_byteswap) {
-				drrf->drr_object = BSWAP_64(drrf->drr_object);
-				drrf->drr_offset = BSWAP_64(drrf->drr_offset);
-				drrf->drr_length = BSWAP_64(drrf->drr_length);
-			}
-			if (verbose) {
-				(void) printf("FREE object = %llu "
-				    "offset = %llu length = %lld\n",
-				    (u_longlong_t)drrf->drr_object,
-				    (u_longlong_t)drrf->drr_offset,
-				    (longlong_t)drrf->drr_length);
-			}
-			break;
-		case DRR_SPILL:
-			if (do_byteswap) {
-				drrs->drr_object = BSWAP_64(drrs->drr_object);
-				drrs->drr_length = BSWAP_64(drrs->drr_length);
-				drrs->drr_compressed_size =
-				    BSWAP_64(drrs->drr_compressed_size);
-				drrs->drr_type = BSWAP_32(drrs->drr_type);
-			}
-
-			payload_size = DRR_SPILL_PAYLOAD_SIZE(drrs);
-
-			if (verbose) {
-				sprintf_bytes(salt, drrs->drr_salt,
-				    ZIO_DATA_SALT_LEN);
-				sprintf_bytes(iv, drrs->drr_iv,
-				    ZIO_DATA_IV_LEN);
-				sprintf_bytes(mac, drrs->drr_mac,
-				    ZIO_DATA_MAC_LEN);
-
-				(void) printf("SPILL block for object = %llu "
-				    "length = %llu flags = %u "
-				    "compression type = %u "
-				    "compressed_size = %llu "
-				    "payload_size = %llu "
-				    "salt = %s iv = %s mac = %s\n",
-				    (u_longlong_t)drrs->drr_object,
-				    (u_longlong_t)drrs->drr_length,
-				    drrs->drr_flags,
-				    drrs->drr_compressiontype,
-				    (u_longlong_t)drrs->drr_compressed_size,
-				    (u_longlong_t)payload_size,
-				    salt,
-				    iv,
-				    mac);
-			}
-			(void) ssread(buf, payload_size, &zc);
-			if (dump) {
-				print_block(buf, payload_size);
-			}
-			break;
-		case DRR_WRITE_EMBEDDED:
-			if (do_byteswap) {
-				drrwe->drr_object =
-				    BSWAP_64(drrwe->drr_object);
-				drrwe->drr_offset =
-				    BSWAP_64(drrwe->drr_offset);
-				drrwe->drr_length =
-				    BSWAP_64(drrwe->drr_length);
-				drrwe->drr_toguid =
-				    BSWAP_64(drrwe->drr_toguid);
-				drrwe->drr_lsize =
-				    BSWAP_32(drrwe->drr_lsize);
-				drrwe->drr_psize =
-				    BSWAP_32(drrwe->drr_psize);
-			}
-			if (verbose) {
-				(void) printf("WRITE_EMBEDDED object = %llu "
-				    "offset = %llu length = %llu "
-				    "toguid = %llx comp = %u etype = %u "
-				    "lsize = %u psize = %u\n",
-				    (u_longlong_t)drrwe->drr_object,
-				    (u_longlong_t)drrwe->drr_offset,
-				    (u_longlong_t)drrwe->drr_length,
-				    (u_longlong_t)drrwe->drr_toguid,
-				    drrwe->drr_compression,
-				    drrwe->drr_etype,
-				    drrwe->drr_lsize,
-				    drrwe->drr_psize);
-			}
-			(void) ssread(buf,
-			    P2ROUNDUP(drrwe->drr_psize, 8), &zc);
-			if (dump) {
-				print_block(buf,
-				    P2ROUNDUP(drrwe->drr_psize, 8));
-			}
-			payload_size = P2ROUNDUP(drrwe->drr_psize, 8);
-			break;
-		case DRR_OBJECT_RANGE:
-			if (do_byteswap) {
-				drror->drr_firstobj =
-				    BSWAP_64(drror->drr_firstobj);
-				drror->drr_numslots =
-				    BSWAP_64(drror->drr_numslots);
-				drror->drr_toguid = BSWAP_64(drror->drr_toguid);
-			}
-			if (verbose) {
-				sprintf_bytes(salt, drror->drr_salt,
-				    ZIO_DATA_SALT_LEN);
-				sprintf_bytes(iv, drror->drr_iv,
-				    ZIO_DATA_IV_LEN);
-				sprintf_bytes(mac, drror->drr_mac,
-				    ZIO_DATA_MAC_LEN);
-
-				(void) printf("OBJECT_RANGE firstobj = %llu "
-				    "numslots = %llu flags = %u "
-				    "salt = %s iv = %s mac = %s\n",
-				    (u_longlong_t)drror->drr_firstobj,
-				    (u_longlong_t)drror->drr_numslots,
-				    drror->drr_flags,
-				    salt,
-				    iv,
-				    mac);
-			}
-			break;
-		case DRR_REDACT:
-			if (do_byteswap) {
-				drrr->drr_object = BSWAP_64(drrr->drr_object);
-				drrr->drr_offset = BSWAP_64(drrr->drr_offset);
-				drrr->drr_length = BSWAP_64(drrr->drr_length);
-				drrr->drr_toguid = BSWAP_64(drrr->drr_toguid);
-			}
-			if (verbose) {
-				(void) printf("REDACT object = %llu offset = "
-				    "%llu length = %llu\n",
-				    (u_longlong_t)drrr->drr_object,
-				    (u_longlong_t)drrr->drr_offset,
-				    (u_longlong_t)drrr->drr_length);
-			}
-			break;
-		case DRR_NUMTYPES:
-			/* should never be reached */
-			exit(1);
-		}
-		if (drr->drr_type != DRR_BEGIN && very_verbose) {
-			(void) printf("    checksum = %llx/%llx/%llx/%llx\n",
-			    (longlong_t)drrc->drr_checksum.zc_word[0],
-			    (longlong_t)drrc->drr_checksum.zc_word[1],
-			    (longlong_t)drrc->drr_checksum.zc_word[2],
-			    (longlong_t)drrc->drr_checksum.zc_word[3]);
-		}
-		pcksum = zc;
-		drr_byte_count[drr->drr_type] += payload_size;
-		total_payload_size += payload_size;
+	printf("SUMMARY:\n");
+	for (int i = 0; i < DRR_NUMTYPES; i++) {
+		printf("\tTotal %s records = %zd (%zu bytes)\n",
+		    record_types[i].rt_typename,
+		    record_types[i].rt_num_in_stream,
+		    record_types[i].rt_bytes_in_stream);
 	}
-	free(buf);
-	fletcher_4_fini();
-
-	/* Print final summary */
-
-	(void) printf("SUMMARY:\n");
-	(void) printf("\tTotal DRR_BEGIN records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_BEGIN],
-	    (u_longlong_t)drr_byte_count[DRR_BEGIN]);
-	(void) printf("\tTotal DRR_END records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_END],
-	    (u_longlong_t)drr_byte_count[DRR_END]);
-	(void) printf("\tTotal DRR_OBJECT records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_OBJECT],
-	    (u_longlong_t)drr_byte_count[DRR_OBJECT]);
-	(void) printf("\tTotal DRR_FREEOBJECTS records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_FREEOBJECTS],
-	    (u_longlong_t)drr_byte_count[DRR_FREEOBJECTS]);
-	(void) printf("\tTotal DRR_WRITE records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_WRITE],
-	    (u_longlong_t)drr_byte_count[DRR_WRITE]);
-	(void) printf("\tTotal DRR_WRITE_BYREF records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_WRITE_BYREF],
-	    (u_longlong_t)drr_byte_count[DRR_WRITE_BYREF]);
-	(void) printf("\tTotal DRR_WRITE_EMBEDDED records = %lld (%llu "
-	    "bytes)\n", (u_longlong_t)drr_record_count[DRR_WRITE_EMBEDDED],
-	    (u_longlong_t)drr_byte_count[DRR_WRITE_EMBEDDED]);
-	(void) printf("\tTotal DRR_FREE records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_FREE],
-	    (u_longlong_t)drr_byte_count[DRR_FREE]);
-	(void) printf("\tTotal DRR_SPILL records = %lld (%llu bytes)\n",
-	    (u_longlong_t)drr_record_count[DRR_SPILL],
-	    (u_longlong_t)drr_byte_count[DRR_SPILL]);
-	(void) printf("\tTotal records = %lld\n",
-	    (u_longlong_t)total_records);
-	(void) printf("\tTotal payload size = %lld (0x%llx)\n",
-	    (u_longlong_t)total_payload_size, (u_longlong_t)total_payload_size);
-	(void) printf("\tTotal header overhead = %lld (0x%llx)\n",
-	    (u_longlong_t)total_overhead_size,
-	    (u_longlong_t)total_overhead_size);
-	(void) printf("\tTotal stream length = %lld (0x%llx)\n",
-	    (u_longlong_t)total_stream_len, (u_longlong_t)total_stream_len);
 	return (0);
 }

@@ -153,12 +153,13 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	    drr->drr_type == DRR_END &&
 	    drre->drr_toguid == 0 &&
 	    ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum);
+	boolean_t ignore_cksums = !!(attrs->ca_command_opts & CA_IGNORE_CKSUMS);
 
 	if (!item) {
 		fletcher_4_fini();
 		return (B_TRUE);
 	}
-	if (op == F4_VALIDATE && (*attrs & CA_IGNORE_CKSUMS) != 0) {
+	if (op == F4_VALIDATE && ignore_cksums) {
 		return (B_TRUE);
 	}
 	if (item->dp_base.dp_stream_offset == 0) {

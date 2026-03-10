@@ -26,7 +26,7 @@
 #include "zstream_util.h"
 
 /*
- * From dmu_recv.c
+ * Mostly from dmu_recv.c
  */
 
 #define	DO64(X) (drr->drr_u.X = BSWAP_64(drr->drr_u.X))
@@ -37,9 +37,10 @@ chain_btyeswap(drr_packet_t *item, void *context, chain_attrs_t *attrs)
 {
 	(void) context;
 	struct dmu_replay_record *drr = &item->dp_drr;
+	boolean_t byteswapped = !!(attrs->ca_attrs & CA_BYTESWAPPED);
 
-	if (item == NULL || (*attrs & CA_BYTESWAPPED) == 0) {
-		return B_TRUE;
+	if (item == NULL || !byteswapped) {
+		return (B_TRUE);
 	}
 	drr->drr_type = BSWAP_32(drr->drr_type);
 	drr->drr_payloadlen = BSWAP_32(drr->drr_payloadlen);

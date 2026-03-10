@@ -96,7 +96,7 @@ calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
 	struct drr_spill *drrs 		 = &drr->drr_u.drr_spill;
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 
-	boolean_t swap = !!(*attrs & CA_BYTESWAPPED);
+	boolean_t swap = !!(attrs->ca_attrs & CA_BYTESWAPPED);
 	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
 	uint32_t size;
 
@@ -148,19 +148,14 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		uint64_t magic = drrb->drr_magic;
 		uint64_t versioninfo = drrb->drr_versioninfo;
 		if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
-			atomic_or_64(attrs, CA_BYTESWAPPED);
+			attrs->ca_attrs |= CA_BYTESWAPPED;
 			versioninfo = BSWAP_64(drrb->drr_versioninfo);
 		} else if (magic != DMU_BACKUP_MAGIC) {
 			fprintf(stderr, "Invalid ZFS stream, bad magic "
 			    "number %lx\n", magic);
 			exit(1);
 		}
-		uint64_t fflags = DMU_GET_FEATUREFLAGS(versioninfo);
-		if (fflags & (DMU_BACKUP_FEATURE_DEDUP |
-			DMU_BACKUP_FEATURE_DEDUPPROPS))
-		{
-			atomic_or_64(attrs, CA_DEDUPED);
-		}
+		attrs->ca_feature_flage = DMU_GET_FEATUREFLAGS(versioninfo);
 	}
 	item->dp_payload_size = calc_payload_size(&item->dp_drr, attrs);
 	if (item->dp_payload_size > 0) {

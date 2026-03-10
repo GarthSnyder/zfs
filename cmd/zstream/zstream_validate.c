@@ -45,11 +45,11 @@ static boolean_t
 chain_validate_records(drr_packet_t *item, validate_context_t *context,
 	chain_attrs_t *attrs)
 {
-	(void) attrs;
 	struct dmu_replay_record *drr	 = &item->dp_drr;
 	struct drr_write *drrw		 = &drr->drr_u.drr_write;
+	struct drr_object *drro 	 = &drr->drr_u.drr_object;
 
-	if (item == NULL || *attrs & CA_DO_NOT_VALIDATE != 0) {
+	if (item == NULL || !!(attrs->ca_command_opts & CA_DO_NOT_VALIDATE)) {
 		return (B_TRUE);
 	}
 	if (item->dp_stream_offset == 0 && drr->drr_type != DRR_BEGIN) {
@@ -71,25 +71,31 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context,
 
 	switch (drr->drr_type) {
 	case DRR_BEGIN:
-	{
 		VERIFY3U(item->dp_payload_size, <=, 1UL << 28);
 		break;
-	}
+
+	case DRR_OBJECT:
+		if (attrs->ca_feature_flags & DMU_BACKUP_FEATURE_RAW &&
+		    drro->drr_bonuslen > drro->drr_raw_bonuslen)
+		{
+			fprintf(stderr,
+			    "Warning: Object %zu has bonuslen = "
+			    "%u > raw_bonuslen = %u\n\n",
+			    drro->drr_object, drro->drr_bonuslen,
+			    drro->drr_raw_bonuslen);
+		}
 
 	case DRR_WRITE:
-	{
 		if (drrw->drr_compressiontype >= ZIO_COMPRESS_FUNCTIONS) {
 		    fprintf(stderr, "Invalid compression type: %d\n",
 		    	drrw->drr_compressiontype);
 		    exit(3);
 		}
 		break;
-	}
 
 	default:
-	{
 		break;
-	}}
+	}
 	return (B_TRUE);
 }
 
