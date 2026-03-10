@@ -407,15 +407,27 @@ static boolean_t
 chain_dump_record(drr_packet_t *item, record_type_t *context,
 	chain_attrs_t *attrs)
 {
-	int type = item->drr.drr_type;
+	dmu_replay_record_t *drr = &item->dp_drr;
+	zio_cksum_t *cksum = &drr->drr_u.drr_checksum.drr_checksum;
+	int type = (int)drr.drr_type;
 
 	if (!item) {
 		return (B_TRUE);
 	}
+
 	context[type].rt_num_in_stream++;
 	context[type].rt_bytes_in_stream +=
 	    sizeof(dmu_replay_record_t) + item->dp_payload_size;
 	context[type].rt_dumper(item, attrs);
+
+	if (type != DRR_BEGIN && OPTION_ENABLED(attrs, CA_VERY_VERBOSE)) {
+		printf("    checksum = %zx / %zx / %zx / %zx\n",
+		    cksum->zc_word[0],
+		    cksum->zc_word[1],
+		    cksum->zc_word[2],
+		    cksum->zc_word[3]);
+	}
+
 	return (B_TRUE);
 }
 
