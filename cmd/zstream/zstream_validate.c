@@ -84,6 +84,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context,
 			    drro->drr_object, drro->drr_bonuslen,
 			    drro->drr_raw_bonuslen);
 		}
+		break;
 
 	case DRR_WRITE:
 		if (drrw->drr_compressiontype >= ZIO_COMPRESS_FUNCTIONS) {

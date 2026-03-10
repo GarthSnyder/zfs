@@ -43,6 +43,7 @@
 #include <zfs_fletcher.h>
 #include "zstream.h"
 #include "zstream_chain.h"
+#include "zstream_modules.h"
 #include "zstream_util.h"
 
 /*
@@ -61,10 +62,10 @@ typedef struct {
 	uint8_t drr_mac[ZIO_DATA_MAC_LEN];
 } crypto_fields_t;
 
-typealias void dumper_f(drr_packet_t *item, chain_attrs_t *attrs);
+typedef void dumper_f(drr_packet_t *item, chain_attrs_t *attrs);
 
 typedef struct {
-	char		*rt_typename;
+	const char	*rt_typename;
 	uint64_t	rt_num_in_stream;
 	uint64_t	rt_bytes_in_stream;
 	dumper_f	*rt_dumper;
@@ -74,7 +75,7 @@ typedef struct {
  * Print part of a block in ASCII characters
  */
 static void
-print_ascii_block(char *subbuf, int length)
+print_ascii_block(uint8_t *subbuf, int length)
 {
 	int i;
 
@@ -94,7 +95,7 @@ print_ascii_block(char *subbuf, int length)
  * Assume that buf has capacity evenly divisible by BYTES_PER_LINE
  */
 static void
-print_block(char *buf, int length)
+print_block(uint8_t *buf, uint32_t length)
 {
 	int i;
 	/*
@@ -154,14 +155,15 @@ sprintf_bytes(char *str, uint8_t *buf, uint_t buf_len)
 static void
 maybe_dump_payload(drr_packet_t *item, chain_attrs_t *attrs)
 {
-	if (attrs->ca_command_opts & CA_DUMP_DATA) {
+	if (OPTION_ENABLED(attrs, CA_DUMP_DATA)) {
 		print_block(item->dp_payload, item->dp_payload_size);
 	}
 }
 
-static void
-stringify_encryption_fields(crypto_fields_t *crypto)
+static char *
+stringify_encryption_fields(void *crypto_in)
 {
+	crypto_fields_t *crypto = crypto_in;
 	char salt[ZIO_DATA_SALT_LEN * 2 + 1];
 	char iv[ZIO_DATA_IV_LEN * 2 + 1];
 	char mac[ZIO_DATA_MAC_LEN * 2 + 1];
@@ -178,12 +180,13 @@ stringify_encryption_fields(crypto_fields_t *crypto)
 static void
 dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
 {
+	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_begin *drrb = &item->dp_drr.drr_u.drr_begin;
 
 	printf("BEGIN record\n");
-	printf("\thdrtype = %zd\n",
+	printf("\thdrtype = %llu\n",
 	    DMU_GET_STREAM_HDRTYPE(drrb->drr_versioninfo));
-	printf("\tfeatures = %zx\n",
+	printf("\tfeatures = %llx\n",
 	    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo));
 	printf("\tmagic = %zx\n", drrb->drr_magic);
 	printf("\tcreation_time = %zx\n", drrb->drr_creation_time);
@@ -193,12 +196,12 @@ dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
 	printf("\tfromguid = %zx\n", drrb->drr_fromguid);
 	printf("\ttoname = %s\n", drrb->drr_toname);
 	printf("\tpayloadlen = %u\n", drr->drr_payloadlen);
-	if (*attrs & CA_VERBOSE != 0) printf("\n");
+	if (OPTION_ENABLED(attrs, CA_VERBOSE)) printf("\n");
 
 	if (drr->drr_payloadlen != 0) {
 		nvlist_t *nv;
-		int sz = drr->drr_payloadlen;
-		err = nvlist_unpack(item->dp_payload, sz, &nv, 0);
+		size_t sz = drr->drr_payloadlen;
+		int err = nvlist_unpack((char *)item->dp_payload, sz, &nv, 0);
 		if (err) {
 			perror(strerror(err));
 		} else {
@@ -211,6 +214,7 @@ dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
 static void
 dump_end_record(drr_packet_t *item, chain_attrs_t *attrs)
 {
+	(void) attrs;
 	struct drr_end *drre = &item->dp_drr.drr_u.drr_end;
 
 	printf("END checksum = %zx/%zx/%zx/%zx\n",
@@ -272,7 +276,7 @@ dump_write_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    "flags = %u offset = %zu "
 		    "logical_size = %zu "
 		    "compressed_size = %zu "
-		    "payload_size = %zu props = %zx "
+		    "payload_size = %u props = %zx "
 		    "%s\n",
 		    drrw->drr_object,
 		    drrw->drr_type,
@@ -282,7 +286,7 @@ dump_write_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    drrw->drr_offset,
 		    drrw->drr_logical_size,
 		    drrw->drr_compressed_size,
-		    payload_size,
+		    item->dp_payload_size,
 		    drrw->drr_key.ddk_prop,
 		    stringify_encryption_fields(&drrw->drr_salt));
 	}
@@ -336,14 +340,14 @@ dump_spill_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    "length = %zu flags = %u "
 		    "compression type = %u "
 		    "compressed_size = %zu "
-		    "payload_size = %zu "
+		    "payload_size = %u "
 		    "%s\n",
 		    drrs->drr_object,
 		    drrs->drr_length,
 		    drrs->drr_flags,
 		    drrs->drr_compressiontype,
 		    drrs->drr_compressed_size,
-		    payload_size,
+		    item->dp_payload_size,
 		    stringify_encryption_fields(&drrs->drr_salt));
 	}
 	maybe_dump_payload(item, attrs);
@@ -386,7 +390,6 @@ dump_object_range_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    drror->drr_flags,
 		    stringify_encryption_fields(&drror->drr_salt));
 	}
-	break;
 }
 
 static void
@@ -407,13 +410,13 @@ static boolean_t
 chain_dump_record(drr_packet_t *item, record_type_t *context,
 	chain_attrs_t *attrs)
 {
-	dmu_replay_record_t *drr = &item->dp_drr;
-	zio_cksum_t *cksum = &drr->drr_u.drr_checksum.drr_checksum;
-	int type = (int)drr.drr_type;
-
 	if (!item) {
 		return (B_TRUE);
 	}
+
+	dmu_replay_record_t *drr = &item->dp_drr;
+	zio_cksum_t *cksum = &drr->drr_u.drr_checksum.drr_checksum;
+	int type = (int)drr->drr_type;
 
 	context[type].rt_num_in_stream++;
 	context[type].rt_bytes_in_stream +=
@@ -421,7 +424,7 @@ chain_dump_record(drr_packet_t *item, record_type_t *context,
 	context[type].rt_dumper(item, attrs);
 
 	if (type != DRR_BEGIN && OPTION_ENABLED(attrs, CA_VERY_VERBOSE)) {
-		printf("    checksum = %zx / %zx / %zx / %zx\n",
+		printf("    checksum = %zx/%zx/%zx/%zx\n",
 		    cksum->zc_word[0],
 		    cksum->zc_word[1],
 		    cksum->zc_word[2],
@@ -431,18 +434,18 @@ chain_dump_record(drr_packet_t *item, record_type_t *context,
 	return (B_TRUE);
 }
 
-chain_step_t
+static chain_step_t
 serial_dump_records(record_type_t *context)
 {
-	return (chain_step_t) {
-		.cs_type = CS_PARALLEL,
+	return ((chain_step_t) {
+		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof(drr_packet_t),
 		.cs_out_size = sizeof(drr_packet_t),
 		.cs_context = context,
 		.cs_serial = {
-		    .process = chain_dump_record
+		    .process = (zc_serial_process_f *)chain_dump_record
 		}
-	}
+	});
 }
 
 int
@@ -450,11 +453,12 @@ zstream_do_dump(int argc, char *argv[])
 {
 	chain_attrs_t attrs = {0};
 	const char *input_file = NULL;
+	int c;
 
 	record_type_t record_types[DRR_NUMTYPES] = {
 		{ "DRR_BEGIN", 		0, 0, dump_begin_record },
 		{ "DRR_OBJECT", 	0, 0, dump_object_record },
-		{ "DRR_FREEOBJECTS", 	0, 0, dump_freeobject_record },
+		{ "DRR_FREEOBJECTS", 	0, 0, dump_freeobjects_record },
 		{ "DRR_WRITE", 		0, 0, dump_write_record },
 		{ "DRR_FREE", 		0, 0, dump_free_record },
 		{ "DRR_END", 		0, 0, dump_end_record },
@@ -468,17 +472,19 @@ zstream_do_dump(int argc, char *argv[])
 	while ((c = getopt(argc, argv, ":vCd")) != -1) {
 		switch (c) {
 		case 'C':
-			ENABLE_OPTION(attrs, CA_IGNORE_CKSUMS);
+			ENABLE_OPTION(&attrs, CA_IGNORE_CKSUMS);
 			break;
 		case 'v':
-			if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
-				ENABLE_OPTION(attrs, CA_VERY_VERBOSE);
+			if (OPTION_ENABLED(&attrs, CA_VERBOSE)) {
+				ENABLE_OPTION(&attrs, CA_VERY_VERBOSE);
+			} else {
+				ENABLE_OPTION(&attrs, CA_VERBOSE);
 			}
 			break;
 		case 'd':
-			ENABLE_OPTION(attrs, CA_VERBOSE);
-			ENABLE_OPTION(attrs, CA_VERY_VERBOSE);
-			ENABLE_OPTION(attrs, CA_DUMP_DATA);
+			ENABLE_OPTION(&attrs, CA_VERBOSE);
+			ENABLE_OPTION(&attrs, CA_VERY_VERBOSE);
+			ENABLE_OPTION(&attrs, CA_DUMP_DATA);
 			break;
 		case ':':
 			fprintf(stderr,
@@ -497,8 +503,9 @@ zstream_do_dump(int argc, char *argv[])
 	}
 
 	zstream_chain_t dump_chain = {
-		STANDARD_INPUT_STACK(NULL, 1024),
-		serial_dump_records(record_types)
+		STANDARD_INPUT_STACK(input_file, 1024),
+		serial_dump_records(record_types),
+		chain_terminator()
 	};
 
 	zstream_chain_exec(dump_chain, attrs);

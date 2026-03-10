@@ -141,44 +141,41 @@ static boolean_t
 chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	chain_attrs_t *attrs)
 {
-	zio_cksum_t *stream_cksum = &context->fc_stream_cksum;
-	fletcher4_op_t op = context->fc_operation;
-	dmu_replay_record_t *drr = &item->dp_base.dp_drr;
-	struct drr_end *drre = &item->dp_base.dp_drr.drr_u.drr_end;
-	zio_cksum_t *record_cksum = &drr->drr_u.drr_checksum.drr_checksum;
-	zio_cksum_t *end_cksum = &drre->drr_checksum;
-	off_t offset = offsetof(dmu_replay_record_t,
-	    drr_u.drr_checksum.drr_checksum);
+	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
+		OPTION_ENABLED(attrs, CA_IGNORE_CKSUMS)))
+	{
+		return (B_TRUE);
+	}
+
+	zio_cksum_t *stream_cksum	= &context->fc_stream_cksum;
+	dmu_replay_record_t *drr	= &item->dp_base.dp_drr;
+	struct drr_end *drre		= &item->dp_base.dp_drr.drr_u.drr_end;
+	zio_cksum_t *record_cksum	= &drr->drr_u.drr_checksum.drr_checksum;
+	zio_cksum_t *end_cksum		= &drre->drr_checksum;
+
+	off_t off = offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum);
 	boolean_t is_conclusion_record =
 	    drr->drr_type == DRR_END &&
 	    drre->drr_toguid == 0 &&
 	    ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum);
-	boolean_t ignore_cksums = !!(attrs->ca_command_opts & CA_IGNORE_CKSUMS);
 
-	if (!item) {
-		fletcher_4_fini();
-		return (B_TRUE);
-	}
-	if (op == F4_VALIDATE && ignore_cksums) {
-		return (B_TRUE);
-	}
 	if (item->dp_base.dp_stream_offset == 0) {
-		VERIFY3U(offset, ==,
+		VERIFY3U(off, ==,
 		    sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
 	}
 	if (drr->drr_type == DRR_BEGIN) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else if (drr->drr_type == DRR_END) {
-		if (op == F4_VALIDATE) {
+		if (context->fc_operation == F4_VALIDATE) {
 			validate_or_exit(stream_cksum, end_cksum,
 			    "in DRR_END record");
 		} else {
 			*end_cksum = *stream_cksum;
 		}
 	}
-	fletcher_4_incremental_native(drr, offset, stream_cksum);
+	fletcher_4_incremental_native(drr, off, stream_cksum);
 	if (drr->drr_type != DRR_BEGIN && !is_conclusion_record) {
-		if (op == F4_VALIDATE) {
+		if (context->fc_operation == F4_VALIDATE) {
 			validate_or_exit(stream_cksum, record_cksum,
 				"at end of DRR record");
 		} else {
