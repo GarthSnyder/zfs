@@ -155,22 +155,23 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	chain_attrs_t *attrs)
 {
 	zio_cksum_t *stream_cksum = &context->fc_stream_cksum;
+	fletcher4_op_t op = context->fc_operation;
 	dmu_replay_record_t *drr = &item->dp_base.dp_drr;
+	struct drr_end *drre = &item->dp_base.dp_drr.drr_u.drr_end;
 	zio_cksum_t *record_cksum = &drr->drr_u.drr_checksum.drr_checksum;
-	zio_cksum_t *end_cksum = &drr->drr_u.drr_end.drr_checksum;
+	zio_cksum_t *end_cksum = &drre->drr_checksum;
 	off_t offset = offsetof(dmu_replay_record_t,
 	    drr_u.drr_checksum.drr_checksum);
 	boolean_t is_conclusion_record =
 	    drr->drr_type == DRR_END &&
-	    drr->drr_u.drr_end.drr_toguid == 0 &&
+	    drre->drr_toguid == 0 &&
 	    ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum);
-	boolean_t end_cksum_zero = ZIO_CHECKSUM_IS_ZERO(&drre->drr_checksum);
 
 	if (!item) {
 		fletcher_4_fini();
 		return (B_TRUE);
 	}
-	if (op == F4_VALIDATE && (attrs->ca_flags & CA_IGNORE_CKSUMS)) {
+	if (op == F4_VALIDATE && (*attrs & CA_IGNORE_CKSUMS) != 0) {
 		return (B_TRUE);
 	}
 	if (item->dp_base.dp_stream_offset == 0) {
