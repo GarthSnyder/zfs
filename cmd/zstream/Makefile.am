@@ -25,7 +25,9 @@ zstream_SOURCES = \
 	%D%/zstream_queue.c \
 	%D%/zstream_queue.h \
 	%D%/zstream_util.c \
-	%D%/zstream_util.h
+	%D%/zstream_util.h \
+	%D%/zstream_validate.c \
+	%D%/zstream_validate.h 
 
 zstream_LDADD = \
 	libzfs.la \
