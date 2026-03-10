@@ -1,6 +1,28 @@
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * CDDL HEADER START
+ *
+ * This file and its contents are supplied under the terms of the Common
+ * Development and Distribution License ("CDDL"), version 1.0. You may only use
+ * this file in accordance with the terms of version 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this source. A
+ * copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
+ */
+
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <libspl.h>
+#include <sys/zio_checksum.h>
+#include <sys/zstd/zstd.h>
 
 #include "zstream_chain.h"
 #include "zstream_io.h"
@@ -64,6 +86,24 @@ chain_terminator(void){
 	return ((chain_step_t) { .cs_type = CS_TERMINATE });
 }
 
+static void
+libraries_init(void) {
+	abd_init();
+	zio_init();
+	zstd_init();
+	libspl_init();
+	fletcher_4_init();
+}
+
+static void
+libraries_fini(void) {
+	fletcher_4_fini();
+	libspl_fini();
+	zio_fini();
+	zstd_fini();
+	abd_fini();
+}
+
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 {
@@ -108,6 +148,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 		}
 	}
 
+	libraries_init();
 	struct chain_info chain_info = {
 		.ci_chain	= chain,
 		.ci_num_steps	= num_steps,
@@ -118,6 +159,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 
 	if (serialize_chains) {
 		chain_exec_serialized(&chain_info);
+		libraries_fini();
 		return;
 	}
 
@@ -167,6 +209,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 		int ret = pthread_join(worker_threads[i], NULL);
 		VERIFY3S(ret, ==, 0);
 	}
+	libraries_fini();
 }
 
 static void *

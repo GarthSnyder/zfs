@@ -43,18 +43,6 @@ static fletcher4_context_t	fletcher4_contexts[MAX_FLETCHER_4];
 static int			next_context = 0;
 
 /*
- * fletcher_4_init() appears to run a benchmark, so make sure it's only once.
- */
-static inline void
-fletcher4_init_once(void) {
-	static boolean_t initialized = B_FALSE;
-	if (!initialized) {
-		fletcher_4_init();
-		initialized = B_TRUE;
-	}
-}
-
-/*
  * The function below (and the MAX_FLETCHER_BLOCK define) are
  * copied from zfs_fletcher.c, where they're internal.
  *
@@ -108,7 +96,6 @@ chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
 	int num_overflow = DIV_ROUND_UP(remaining, MAX_FLETCHER_BLOCK) - 1;
 	zio_cksum_t *fragment = &item->dp_fletcher4_payload;
 
-	fletcher4_init_once();
 	fletcher_4_native(data, write_size, NULL, fragment);
 	if (num_overflow) {
 		fragment = safe_calloc(num_overflow * sizeof (zio_cksum_t));
@@ -175,7 +162,6 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 		return (B_TRUE);
 	}
 	if (item->dp_base.dp_stream_offset == 0) {
-		fletcher4_init_once();
 		VERIFY3U(offset, ==,
 		    sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
 	}
