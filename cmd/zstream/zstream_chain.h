@@ -102,20 +102,34 @@ extern "C" {
  */
 
 /*
- * Chain attribute flags that describe the stream.
+ * Chain attribute flags that describe the stream. The lower 32 bits are a
+ * copy of the drr_versioninfo from the first DRR_BEGIN in the stream. The
+ * next 8 bits are reserved for discovered characteristics such as
+ * CA_BYTESWAPPED, and the remainder are for command-line options.
  */
 
-#define CA_BYTESWAPPED		(1ULL << 0)
-#define CA_DEDUPED		(1ULL << 1)
+#define CA_BYTESWAPPED		(1ULL << 0)	/* ca_attrs */
 
-#define CA_VERBOSE		(1ULL << 11)
-#define CA_VERY_VERBOSE		(1ULL << 12)
-#define CA_DUMP_OFFSETS		(1ULL << 13)
-#define CA_DUMP_DATA		(1ULL << 14)
-#define CA_IGNORE_CKSUMS	(1ULL << 15)
-#define CA_DO_NOT_VALIDATE	(1ULL << 16)
+#define CA_VERBOSE		(1ULL << 0)	/* ca_command_opts */
+#define CA_VERY_VERBOSE		(1ULL << 1)
+#define CA_DUMP_OFFSETS		(1ULL << 2)
+#define CA_DUMP_DATA		(1ULL << 3)
+#define CA_IGNORE_CKSUMS	(1ULL << 4)
+#define CA_DO_NOT_VALIDATE	(1ULL << 5)
 
-typedef uint64_t chain_attrs_t;
+#define OPTION_ENABLED(attrs, opt) (!!(attrs->ca_command_opts & opt))
+#define STREAM_HAS_FEATURE(attrs, feat) (!!(attrs->ca_feature_flags & feat))
+#define ATTR_IS_SET(attrs, attr) (!!(attrs->ca_attrs & attr))
+
+#define ENABLE_OPTION(attrs, opt) { attrs->ca_command_opts =		\
+	    attrs->ca_command_opts | opt; }
+#define SET_ATTR(attrs, attr) { attrs->ca_attrs = attrs->ca_attrs | attr; }
+
+typedef struct {
+	uint64_t	ca_feature_flags;	/* From drr_versioninfo */
+	uint64_t	ca_attrs;		/* Discovered attributes */
+	uint64_t	ca_command_opts;
+} chain_attrs_t;
 
 /*
  * See zstream_queue.h for function signatures used by parallel steps.
