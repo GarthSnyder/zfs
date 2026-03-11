@@ -66,8 +66,8 @@ typedef void dumper_f(drr_packet_t *item, chain_attrs_t *attrs);
 
 typedef struct {
 	const char	*rt_typename;
-	uint64_t	rt_num_in_stream;
-	uint64_t	rt_bytes_in_stream;
+	uint64_t	rt_count;
+	uint64_t	rt_payload_bytes;
 	dumper_f	*rt_dumper;
 } record_type_t;
 
@@ -167,7 +167,7 @@ stringify_encryption_fields(void *crypto_in)
 	char salt[ZIO_DATA_SALT_LEN * 2 + 1];
 	char iv[ZIO_DATA_IV_LEN * 2 + 1];
 	char mac[ZIO_DATA_MAC_LEN * 2 + 1];
-	static char buff[sizeof (salt) + sizeof (iv) + sizeof(mac)];
+	static char buff[sizeof (salt) + sizeof (iv) + sizeof(mac) + 20];
 
 	sprintf_bytes(salt, crypto->drr_salt, ZIO_DATA_SALT_LEN);
 	sprintf_bytes(iv, crypto->drr_iv, ZIO_DATA_IV_LEN);
@@ -418,9 +418,8 @@ chain_dump_record(drr_packet_t *item, record_type_t *context,
 	zio_cksum_t *cksum = &drr->drr_u.drr_checksum.drr_checksum;
 	int type = (int)drr->drr_type;
 
-	context[type].rt_num_in_stream++;
-	context[type].rt_bytes_in_stream +=
-	    sizeof(dmu_replay_record_t) + item->dp_payload_size;
+	context[type].rt_count++;
+	context[type].rt_payload_bytes += item->dp_payload_size;
 	context[type].rt_dumper(item, attrs);
 
 	if (type != DRR_BEGIN && OPTION_ENABLED(attrs, CA_VERY_VERBOSE)) {
@@ -510,12 +509,36 @@ zstream_do_dump(int argc, char *argv[])
 
 	zstream_chain_exec(dump_chain, attrs);
 
-	printf("SUMMARY:\n");
-	for (int i = 0; i < DRR_NUMTYPES; i++) {
-		printf("\tTotal %s records = %zd (%zu bytes)\n",
-		    record_types[i].rt_typename,
-		    record_types[i].rt_num_in_stream,
-		    record_types[i].rt_bytes_in_stream);
+	{
+		uint64_t total_count = 0;
+		uint64_t total_payload = 0;
+		uint64_t total_header = 0;
+
+		int print_order[] = {
+			DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,
+			DRR_WRITE, DRR_WRITE_BYREF, DRR_WRITE_EMBEDDED,
+			DRR_FREE, DRR_SPILL, DRR_OBJECT_RANGE, DRR_REDACT
+		};
+
+		printf("SUMMARY:\n");
+		for (int i = 0; i < DRR_NUMTYPES; i++) {
+			record_type_t *rec = &record_types[print_order[i]];
+			printf("\tTotal %s records = %zd (%zu bytes)\n",
+			    rec->rt_typename,
+			    rec->rt_count,
+			    rec->rt_payload_bytes);
+			total_count += rec->rt_count;
+			total_payload += rec->rt_payload_bytes;
+			total_header += rec->rt_count *
+			    sizeof (dmu_replay_record_t);
+		}
+		printf("\tTotal records = %zu\n", total_count);
+		printf("\tTotal payload size = %zu (0x%zx)\n",
+		    total_payload, total_payload);
+		printf("\tTotal header overhead = %zu (0x%zx)\n",
+		    total_header, total_header);
+		printf("\tTotal stream length = %zu (0x%zx)\n",
+		    total_header + total_payload, total_header + total_payload);
 	}
 	return (0);
 }
