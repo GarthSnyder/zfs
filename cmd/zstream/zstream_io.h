@@ -61,7 +61,6 @@ constant_cost_of_one(drr_packet_t *packet, void *context);
 size_t
 payload_size_as_cost(drr_packet_t *packet, void *context);
 
-
 #ifdef __cplusplus
 }
 #endif

@@ -18,12 +18,11 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
 
-#include "zstream.h"
 #include "zstream_byteswap.h"
-#include "zstream_util.h"
 
 /*
  * Mostly from dmu_recv.c
@@ -33,23 +32,20 @@
 #define	DO32(X) (drr->drr_u.X = BSWAP_32(drr->drr_u.X))
 
 static boolean_t
-chain_btyeswap(drr_packet_t *item, void *context, chain_attrs_t *attrs)
+chain_byteswap(drr_packet_t *item, void *context, chain_attrs_t *attrs)
 {
 	(void) context;
-	struct dmu_replay_record *drr = &item->dp_drr;
-	boolean_t byteswapped = !!(attrs->ca_attrs & CA_BYTESWAPPED);
+	struct dmu_replay_record *drr;
 
-	if (item == NULL || !byteswapped) {
+	if (item == NULL || !ATTR_IS_SET(attrs, CA_BYTESWAPPED)) {
 		return (B_TRUE);
 	}
+
+	drr = &item->dp_drr;
 	drr->drr_type = BSWAP_32(drr->drr_type);
 	drr->drr_payloadlen = BSWAP_32(drr->drr_payloadlen);
-	if (drr->drr_type != DRR_BEGIN) {
-		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_checksum.drr_checksum);
-	}
 
 	switch (drr->drr_type) {
-
 	case DRR_BEGIN:
 		DO64(drr_begin.drr_magic);
 		DO64(drr_begin.drr_versioninfo);
@@ -148,18 +144,23 @@ chain_btyeswap(drr_packet_t *item, void *context, chain_attrs_t *attrs)
 		(void) fprintf(stderr, "Unknown record type, aborting...\n");
 		exit(1);
 	}
-	return B_TRUE;
+
+	if (drr->drr_type != DRR_BEGIN) {
+		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_checksum.drr_checksum);
+	}
+
+	return (B_TRUE);
 }
 
 chain_step_t
 serial_byteswap(void)
 {
-	return (chain_step_t) {
+	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_packet_t),
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_packet_t),
 		.cs_serial = {
-			.process = (zc_serial_process_f *)chain_btyeswap,
+			.process = (zc_serial_process_f *)chain_byteswap,
 		}
-	};
+	});
 }

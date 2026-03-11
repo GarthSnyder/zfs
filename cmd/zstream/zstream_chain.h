@@ -35,11 +35,11 @@ extern "C" {
  *
  *   - Reduce code duplication
  *   - Separate processing into small, logically distinct steps
- *   - Separate pipeline mangement from functional processing
+ *   - Separate pipeline management from functional processing
  *   - Facilitate component reuse (checksum validation, I/O, etc.)
- *   - Automatically marshall data as it passes down the pipeline
+ *   - Automatically marshal data as it passes down the pipeline
  *   - Interface automatically between sequential and parallel processing
- *   - No, this was not written by an AI, despite being a list
+ *   - No, this was not written by an LLM, despite being a list
  *
  * Some terms:
  *
@@ -123,13 +123,8 @@ extern "C" {
 #define STREAM_HAS_FEATURE(attrs, feat) (!!((attrs)->ca_feature_flags & (feat)))
 #define ATTR_IS_SET(attrs, attr) (!!((attrs)->ca_attrs & (attr)))
 
-#define ENABLE_OPTION(attrs, opt) { 					\
-	(attrs)->ca_command_opts = (attrs)->ca_command_opts | (opt);	\
-    }
-
-#define SET_ATTR(attrs, atr) {						\
-	(attrs)->ca_attrs = (attrs)->ca_attrs | (atr);			\
-    }
+#define	ENABLE_OPTION(attrs, opt) ((attrs)->ca_command_opts |= (opt))
+#define	SET_ATTR(attrs, atr) ((attrs)->ca_attrs |= (atr))
 
 typedef struct {
 	uint64_t	ca_feature_flags;	/* From drr_versioninfo */
@@ -145,22 +140,23 @@ zc_serial_process_f(void *item, void *context, chain_attrs_t *chain);
 
 typedef enum { CS_SERIAL, CS_PARALLEL, CS_TERMINATE } step_type_t;
 
-typedef struct chain_step {
-		step_type_t		cs_type;
-		size_t			cs_in_size;
-		size_t 			cs_out_size;
-		void			*cs_context;
-    union {
-	struct serial_config {
-		zc_serial_process_f	*process;
-	} cs_serial;
-	struct parallel_config {
-		size_t 			queue_length;
-		size_t 			batch_budget;
-		zq_estimate_cost_f	*cost;
-		zq_process_item_f	*process;
-	} cs_parallel;
-    };
+typedef struct chain_step
+{
+	step_type_t	cs_type;
+	size_t		cs_in_size;
+	size_t		cs_out_size;
+	void		*cs_context;
+	union {
+		struct {
+			zc_serial_process_f	*process;      /* cs_serial */
+		} cs_serial;
+		struct {
+			size_t			queue_length;  /* cs_parallel */
+			size_t			batch_budget;
+			zq_estimate_cost_f	*cost;
+			zq_process_item_f	*process;
+		} cs_parallel;
+	};
 } chain_step_t;
 
 typedef chain_step_t zstream_chain_t[];
