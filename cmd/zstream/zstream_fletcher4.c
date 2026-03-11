@@ -18,12 +18,11 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
 
-#include "zstream_chain.h"
 #include "zstream_fletcher4.h"
-#include "zstream_io.h"
 #include "zstream_util.h"
 
 /*
@@ -122,9 +121,10 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
 	size_t read_size = MIN(remaining, MAX_FLETCHER_BLOCK);
 	zio_cksum_t *fragment = item->dp_fletcher4_overflow;
 
-	if (remaining == 0) { return; }
+	if (remaining == 0)
+		return;
 	fletcher4_incremental_combine(stream_ck, read_size,
-		&item->dp_fletcher4_payload);
+	    &item->dp_fletcher4_payload);
 	while (remaining -= read_size) {
 		read_size = MIN(remaining, MAX_FLETCHER_BLOCK);
 		fletcher4_incremental_combine(stream_ck, read_size, fragment);
@@ -141,10 +141,10 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
  */
 static boolean_t
 chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
-	chain_attrs_t *attrs)
+    chain_attrs_t *attrs)
 {
 	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
-		OPTION_ENABLED(attrs, CA_IGNORE_CKSUMS)))
+	    OPTION_ENABLED(attrs, CA_IGNORE_CKSUMS)))
 	{
 		return (B_TRUE);
 	}
@@ -179,7 +179,7 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	if (drr->drr_type != DRR_BEGIN && !is_conclusion_record) {
 		if (context->fc_operation == F4_VALIDATE) {
 			validate_or_exit(stream_cksum, record_cksum,
-				"at end of DRR record");
+			    "at end of DRR record");
 		} else {
 			*record_cksum = *stream_cksum;
 		}
@@ -188,7 +188,8 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else {
 		fletcher_4_incremental_native(record_cksum,
-		    sizeof(drr->drr_u.drr_checksum.drr_checksum), stream_cksum);
+		    sizeof (drr->drr_u.drr_checksum.drr_checksum),
+		    stream_cksum);
 		assemble_payload_cksum(item, stream_cksum);
 	}
 	return (B_TRUE);
@@ -198,44 +199,48 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
  * These queues double as I/O buffers, so the queue length is long.
  */
 chain_step_t
-parallel_calc_fletcher4(int queue_length) {
-	return (chain_step_t) {
+parallel_calc_fletcher4(int queue_length)
+{
+	return ((chain_step_t) {
 		.cs_type = CS_PARALLEL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_fletcher4_t),
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_fletcher4_t),
 		.cs_parallel = {
 			.queue_length = queue_length,
 			.batch_budget = 256 * 1024,
 			.process = (zq_process_item_f *)chain_calc_fletcher4,
 			.cost = (zq_estimate_cost_f *)payload_size_as_cost
 		}
-	};
+	});
 }
 
 static chain_step_t
-fletcher4_serial_step(fletcher4_op_t operation) {
+fletcher4_serial_step(fletcher4_op_t operation)
+{
 	fletcher4_context_t *context = &fletcher4_contexts[next_context];
 	context->fc_operation = operation;
 	ZIO_SET_CHECKSUM(&context->fc_stream_cksum, 0, 0, 0, 0);
 	next_context++;
-	return (chain_step_t) {
+	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof(drr_fletcher4_t),
-		.cs_out_size = sizeof(drr_packet_t),
+		.cs_in_size = sizeof (drr_fletcher4_t),
+		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
 		.cs_serial = {
 			.process =
-				(zc_serial_process_f *)chain_fletcher4,
+			    (zc_serial_process_f *)chain_fletcher4,
 		}
-	};
+	});
 }
 
 chain_step_t
-serial_add_fletcher4(void) {
-	return fletcher4_serial_step(F4_SET);
+serial_add_fletcher4(void)
+{
+	return (fletcher4_serial_step(F4_SET));
 }
 
 chain_step_t
-serial_validate_fletcher4(void) {
-	return fletcher4_serial_step(F4_VALIDATE);
+serial_validate_fletcher4(void)
+{
+	return (fletcher4_serial_step(F4_VALIDATE));
 }

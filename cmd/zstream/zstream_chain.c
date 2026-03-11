@@ -25,7 +25,6 @@
 #include <sys/zstd/zstd.h>
 
 #include "zstream_chain.h"
-#include "zstream_io.h"
 
 /*
  * Execute a chain of processing steps, some parallel and some serial.
@@ -77,17 +76,20 @@ chain_exec_serialized(chain_info_t *chain);
 boolean_t serialize_chains = B_FALSE;
 
 chain_step_t
-serial_null_step() {
+serial_null_step(void)
+{
 	return ((chain_step_t) { .cs_type = CS_SERIAL });
 }
 
 chain_step_t
-chain_terminator(void){
+chain_terminator(void)
+{
 	return ((chain_step_t) { .cs_type = CS_TERMINATE });
 }
 
 static void
-libraries_init(void) {
+libraries_init(void)
+{
 	abd_init();
 	zio_init();
 	zstd_init();
@@ -96,7 +98,8 @@ libraries_init(void) {
 }
 
 static void
-libraries_fini(void) {
+libraries_fini(void)
+{
 	fletcher_4_fini();
 	libspl_fini();
 	zio_fini();
@@ -165,17 +168,17 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 
 	/* Create parallel queues */
 	for (int i = 0; i < num_steps; i++) {
-	    	if (chain[i].cs_type == CS_PARALLEL) {
+		if (chain[i].cs_type == CS_PARALLEL) {
 			chain_step_t *ci = &chain[i];
 			zq_params_t queue_params = {
-		 		.qp_process      = ci->cs_parallel.process,
-		 		.qp_cost	 = ci->cs_parallel.cost,
-		 		.qp_item_size    = max_size,
-		 		.qp_batch_budget = ci->cs_parallel.batch_budget,
-		 		.qp_queue_length = ci->cs_parallel.queue_length,
-		 		.qp_context 	 = ci->cs_context
-	 		};
-		 	queues[i] = zstream_queue_create(&queue_params);
+				.qp_process	 = ci->cs_parallel.process,
+				.qp_cost	 = ci->cs_parallel.cost,
+				.qp_item_size	 = max_size,
+				.qp_batch_budget = ci->cs_parallel.batch_budget,
+				.qp_queue_length = ci->cs_parallel.queue_length,
+				.qp_context	 = ci->cs_context
+			};
+			queues[i] = zstream_queue_create(&queue_params);
 		}
 	}
 
@@ -200,7 +203,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 			(pthread_worker *)zstream_chain_worker,
 			&contexts[i]);
 		VERIFY3S(ret, ==, 0);
-		snprintf(buff, sizeof(buff), "chain-%d", i);
+		snprintf(buff, sizeof (buff), "chain-%d", i);
 		pthread_setname_np(worker_threads[i], buff);
 	}
 
@@ -221,22 +224,24 @@ zstream_chain_worker(worker_context_t *ctxt)
 	int i;
 
 	while (!done) {
-	    for (i = ctxt->wc_first_step; i <= ctxt->wc_last_step; i++) {
-	    	chain_step_t *step = &ci->ci_chain[i];
-	    	zstream_queue_t *queue = ci->ci_queues[i];
-		if (step->cs_type == CS_SERIAL) {
-			done = !step->cs_serial.process(done ? NULL : buffer,
-			    step->cs_context, &ci->ci_attrs) || done;
-		} else if (i == ctxt->wc_first_step) {
-			done = done || !zstream_dequeue(queue, buffer);
-		} else if (done) {
-			zstream_queue_fini(queue);
-		} else {
-			zstream_enqueue(queue, buffer);
+		for (i = ctxt->wc_first_step; i <= ctxt->wc_last_step; i++) {
+			chain_step_t *step = &ci->ci_chain[i];
+			zstream_queue_t *queue = ci->ci_queues[i];
+			if (step->cs_type == CS_SERIAL) {
+				done = !step->cs_serial.process(
+				    done ? NULL : buffer,
+				    step->cs_context,
+				    &ci->ci_attrs) || done;
+			} else if (i == ctxt->wc_first_step) {
+				done = done || !zstream_dequeue(queue, buffer);
+			} else if (done) {
+				zstream_queue_fini(queue);
+			} else {
+				zstream_enqueue(queue, buffer);
+			}
 		}
-	    }
 	}
-	return NULL;
+	return (NULL);
 }
 
 /*
@@ -255,14 +260,13 @@ chain_exec_serialized(chain_info_t *ci)
 		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
 			uint8_t *arg = done ? NULL : buffer;
 			done = !ci->ci_chain[i].cs_serial.process(arg,
-				ci->ci_chain[i].cs_context, &ci->ci_attrs) ||
-				done;
+			    ci->ci_chain[i].cs_context, &ci->ci_attrs) || done;
 		} else if (!done) {
 			size_t cost = ci->ci_chain[i].cs_parallel.cost(buffer,
 			    ci->ci_chain[i].cs_context);
 			if (cost > 0) {
 				ci->ci_chain[i].cs_parallel.process(buffer,
-					ci->ci_chain[i].cs_context);
+				    ci->ci_chain[i].cs_context);
 			}
 		}
 	    }

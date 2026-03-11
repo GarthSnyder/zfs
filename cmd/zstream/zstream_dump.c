@@ -33,18 +33,11 @@
 #include <libnvpair.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
-#include <stddef.h>
-
-#include <sys/dmu.h>
 #include <sys/zfs_ioctl.h>
-#include <sys/zio.h>
-#include <zfs_fletcher.h>
+
 #include "zstream.h"
-#include "zstream_chain.h"
 #include "zstream_modules.h"
-#include "zstream_util.h"
 
 /*
  * If dump mode is enabled, the number of bytes to print per line
@@ -167,7 +160,7 @@ stringify_encryption_fields(void *crypto_in)
 	char salt[ZIO_DATA_SALT_LEN * 2 + 1];
 	char iv[ZIO_DATA_IV_LEN * 2 + 1];
 	char mac[ZIO_DATA_MAC_LEN * 2 + 1];
-	static char buff[sizeof (salt) + sizeof (iv) + sizeof(mac) + 20];
+	static char buff[sizeof (salt) + sizeof (iv) + sizeof (mac) + 32];
 
 	sprintf_bytes(salt, crypto->drr_salt, ZIO_DATA_SALT_LEN);
 	sprintf_bytes(iv, crypto->drr_iv, ZIO_DATA_IV_LEN);
@@ -196,7 +189,9 @@ dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
 	printf("\tfromguid = %zx\n", drrb->drr_fromguid);
 	printf("\ttoname = %s\n", drrb->drr_toname);
 	printf("\tpayloadlen = %u\n", drr->drr_payloadlen);
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) printf("\n");
+
+	if (OPTION_ENABLED(attrs, CA_VERBOSE))
+		printf("\n");
 
 	if (drr->drr_payloadlen != 0) {
 		nvlist_t *nv;
@@ -408,7 +403,7 @@ dump_redact_record(drr_packet_t *item, chain_attrs_t *attrs)
 
 static boolean_t
 chain_dump_record(drr_packet_t *item, record_data_t *context,
-	chain_attrs_t *attrs)
+    chain_attrs_t *attrs)
 {
 	if (!item) {
 		return (B_TRUE);
@@ -438,11 +433,11 @@ serial_dump_records(record_data_t *context)
 {
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_packet_t),
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
 		.cs_serial = {
-		    .process = (zc_serial_process_f *)chain_dump_record
+			.process = (zc_serial_process_f *)chain_dump_record
 		}
 	});
 }
