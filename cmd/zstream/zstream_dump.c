@@ -69,7 +69,7 @@ typedef struct {
 	uint64_t	rt_count;
 	uint64_t	rt_payload_bytes;
 	dumper_f	*rt_dumper;
-} record_type_t;
+} record_data_t;
 
 /*
  * Print part of a block in ASCII characters
@@ -407,7 +407,7 @@ dump_redact_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static boolean_t
-chain_dump_record(drr_packet_t *item, record_type_t *context,
+chain_dump_record(drr_packet_t *item, record_data_t *context,
 	chain_attrs_t *attrs)
 {
 	if (!item) {
@@ -434,7 +434,7 @@ chain_dump_record(drr_packet_t *item, record_type_t *context,
 }
 
 static chain_step_t
-serial_dump_records(record_type_t *context)
+serial_dump_records(record_data_t *context)
 {
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
@@ -454,7 +454,7 @@ zstream_do_dump(int argc, char *argv[])
 	const char *input_file = NULL;
 	int c;
 
-	record_type_t record_types[DRR_NUMTYPES] = {
+	record_data_t record_types[DRR_NUMTYPES] = {
 		{ "DRR_BEGIN", 		0, 0, dump_begin_record },
 		{ "DRR_OBJECT", 	0, 0, dump_object_record },
 		{ "DRR_FREEOBJECTS", 	0, 0, dump_freeobjects_record },
@@ -522,7 +522,7 @@ zstream_do_dump(int argc, char *argv[])
 
 		printf("SUMMARY:\n");
 		for (int i = 0; i < DRR_NUMTYPES; i++) {
-			record_type_t *rec = &record_types[print_order[i]];
+			record_data_t *rec = &record_types[print_order[i]];
 			printf("\tTotal %s records = %zd (%zu bytes)\n",
 			    rec->rt_typename,
 			    rec->rt_count,
