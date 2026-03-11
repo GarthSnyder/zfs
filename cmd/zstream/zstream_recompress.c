@@ -227,7 +227,7 @@ zstream_do_recompress(int argc, char *argv[])
 {
 	int c;
 	int level = 0;
-	chain_attrs_t attrs = { 0 };
+	chain_attrs_t attrs = { .ca_command_opts = CA_FORBID_DEDUP };
 
 	while ((c = getopt(argc, argv, "l:")) != -1) {
 	    switch (c) {
