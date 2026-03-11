@@ -17,8 +17,8 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ZSTREAM_COMPRESS_H
-#define _ZSTREAM_COMPRESS_H
+#ifndef _ZSTREAM_RECOMPRESS_H
+#define _ZSTREAM_RECOMPRESS_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,7 +28,7 @@ extern "C" {
 
 typedef struct {
 	enum zio_compress	cs_type;
-	int 			cs_level;
+	int			cs_level;
 } compression_spec_t;
 
 chain_step_t
@@ -41,4 +41,4 @@ parallel_compress_writes(compression_spec_t *target);
 }
 #endif
 
-#endif  /* _ZSTREAM_COMPRESS_H */
+#endif  /* _ZSTREAM_RECOMPRESS_H */
