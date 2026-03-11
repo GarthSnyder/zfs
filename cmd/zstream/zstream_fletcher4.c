@@ -100,6 +100,8 @@ chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
 	if (num_overflow) {
 		fragment = safe_calloc(num_overflow * sizeof (zio_cksum_t));
 		item->dp_fletcher4_overflow = fragment;
+	} else {
+		item->dp_fletcher4_overflow = NULL;
 	}
 	while (remaining -= write_size) {
 		data += write_size;
