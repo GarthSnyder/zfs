@@ -24,6 +24,7 @@
 #include <libzutil.h>
 
 #include "zstream_io.h"
+#include "zstream_chain.h"
 #include "zstream_util.h"
 
 /* Init only the filename, chain_read_stream will prepare the FILE *. */
@@ -148,14 +149,35 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		uint64_t magic = drrb->drr_magic;
 		uint64_t versioninfo = drrb->drr_versioninfo;
 		if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
-			attrs->ca_attrs |= CA_BYTESWAPPED;
+			SET_ATTR(attrs, CA_BYTESWAPPED);
 			versioninfo = BSWAP_64(drrb->drr_versioninfo);
 		} else if (magic != DMU_BACKUP_MAGIC) {
-			fprintf(stderr, "Invalid ZFS stream, bad magic "
-			    "number %lx\n", magic);
+			fprintf(stderr, "Invalid ZFS stream, bad magic number "
+			    "%lx\n", magic);
 			exit(1);
 		}
 		attrs->ca_feature_flags = DMU_GET_FEATUREFLAGS(versioninfo);
+		if (ATTR_IS_SET(attrs, CA_BYTESWAPPED)) {
+			attrs->ca_feature_flags =
+			    BSWAP_64(attrs->ca_feature_flags);
+		}
+		if (OPTION_ENABLED(attrs, CA_FORBID_DEDUP) &&
+		    (STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUP) ||
+		    STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUPPROPS)))
+		{
+			fprintf(stderr, "The input stream is deduplicated, "
+		    	    "but this subcommand does not support deduplicated "
+			    "streams. Use zstream redup to reduplicate.\n");
+			exit(1);
+		}
+		if (OPTION_ENABLED(attrs, CA_REQUIRE_DEDUP) &&
+		    !STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUP))
+		{
+			fprintf(stderr, "This subcommand requires a "
+			    "deduplicated input stream, but the provided "
+			    "stream is not deduplicated.\n");
+			exit(1);
+		}
 	}
 	item->dp_payload_size = calc_payload_size(&item->dp_drr, attrs);
 	if (item->dp_payload_size > 0) {
