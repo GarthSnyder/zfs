@@ -55,4 +55,3 @@ extern "C" {
 #endif
 
 #endif  /* _ZSTREAM_MODULES_H */
-

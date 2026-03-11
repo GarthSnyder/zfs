@@ -17,14 +17,16 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <time.h>
-#include <stdint.h>
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <libzutil.h>
 
 #include "zstream_io.h"
-#include "zstream_chain.h"
 #include "zstream_util.h"
 
 /* Init only the filename, chain_read_stream will prepare the FILE *. */
@@ -57,7 +59,7 @@ open_file(io_context_t *context)
 {
 	if (context->ic_filename) {
 		context->ic_fp = fopen(context->ic_filename,
-			context->ic_for_reading ? "r" : "w+");
+		    context->ic_for_reading ? "r" : "w+");
 		if (!context->ic_fp) {
 			perror(context->ic_filename);
 			exit(1);
@@ -92,12 +94,12 @@ open_file(io_context_t *context)
 static size_t
 calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
 {
-	struct drr_object *drro 	 = &drr->drr_u.drr_object;
-	struct drr_write *drrw 		 = &drr->drr_u.drr_write;
-	struct drr_spill *drrs 		 = &drr->drr_u.drr_spill;
+	struct drr_object *drro		 = &drr->drr_u.drr_object;
+	struct drr_write *drrw		 = &drr->drr_u.drr_write;
+	struct drr_spill *drrs		 = &drr->drr_u.drr_spill;
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 
-	boolean_t swap = !!(attrs->ca_attrs & CA_BYTESWAPPED);
+	boolean_t swap = ATTR_IS_SET(attrs, CA_BYTESWAPPED);
 	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
 	uint32_t size;
 
@@ -128,13 +130,16 @@ calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
 static boolean_t
 chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 {
+	if (item == NULL)
+		return (B_TRUE);
+
 	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_begin *drrb	 = &drr->drr_u.drr_begin;
+	struct drr_begin *drrb = &drr->drr_u.drr_begin;
 
 	if (!context->ic_fp) {
 		open_file(context);
 	}
-	if (fread(drr, sizeof(dmu_replay_record_t), 1, context->ic_fp) == 0) {
+	if (fread(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) == 0) {
 		if (ferror(context->ic_fp)) {
 			fprintf(stderr, "Error reading record header at "
 			    "offset %lu: %s\n", context->ic_offset,
@@ -142,7 +147,7 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 			exit(1);
 		} else {
 			fclose(context->ic_fp);
-			return B_FALSE;
+			return (B_FALSE);
 		}
 	}
 	if (context->ic_offset == 0) {
@@ -166,7 +171,7 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		    STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUPPROPS)))
 		{
 			fprintf(stderr, "The input stream is deduplicated, "
-		    	    "but this subcommand does not support deduplicated "
+			    "but this subcommand does not support deduplicated "
 			    "streams. Use zstream redup to reduplicate.\n");
 			exit(1);
 		}
@@ -193,30 +198,33 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		item->dp_payload = NULL;
 	}
 	item->dp_stream_offset = context->ic_offset;
-	context->ic_offset += sizeof(*drr) + item->dp_payload_size;
-	return B_TRUE;
+	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
+	return (B_TRUE);
 }
 
 static boolean_t
 chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 {
 	(void) attrs;
-	dmu_replay_record_t *drr = &item->dp_drr;
+	if (item == NULL) {
+		if (context->ic_fp)
+			fclose(context->ic_fp);
+		return (B_TRUE);
+	}
 
 	if (!context->ic_fp) {
 		open_file(context);
 	}
-	if (!item) {
-		if (context->ic_fp) fclose(context->ic_fp);
-		return (B_TRUE);
-	}
-	if (fwrite(drr, sizeof(dmu_replay_record_t), 1, context->ic_fp) != 1) {
+
+	dmu_replay_record_t *drr = &item->dp_drr;
+
+	if (fwrite(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) != 1) {
 		fprintf(stderr, "Error writing record header: %s\n",
 		    strerror(errno));
 		exit(1);
 	} else if (item->dp_payload_size > 0) {
 		if (fwrite(item->dp_payload, item->dp_payload_size,
-			1, context->ic_fp) != 1)
+		    1, context->ic_fp) != 1)
 		{
 			fprintf(stderr, "Error writing payload: %s\n",
 			    strerror(errno));
@@ -246,7 +254,7 @@ setup_io(const char *filename, boolean_t for_reading)
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = 0,
-		.cs_out_size = sizeof(drr_packet_t),
+		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = &io_contexts[context_num],
 		.cs_serial = {
 			.process = (zc_serial_process_f *)
@@ -256,23 +264,28 @@ setup_io(const char *filename, boolean_t for_reading)
 }
 
 chain_step_t
-serial_read_stream(const char *filename) {
+serial_read_stream(const char *filename)
+{
 	return (setup_io(filename, B_TRUE));
 }
 
 chain_step_t
-serial_write_stream(const char *filename) {
+serial_write_stream(const char *filename)
+{
 	return (setup_io(filename, B_FALSE));
 }
 
 size_t
-constant_cost_of_one(drr_packet_t *packet, void *context) {
-	(void) context; (void) packet;
+constant_cost_of_one(drr_packet_t *packet, void *context)
+{
+	(void) context;
+	(void) packet;
 	return (1);
 }
 
 size_t
-payload_size_as_cost(drr_packet_t *packet, void *context) {
+payload_size_as_cost(drr_packet_t *packet, void *context)
+{
 	(void) context;
 	return (packet->dp_payload_size);
 }
@@ -281,19 +294,24 @@ static boolean_t
 chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt, void *dummy)
 {
 	(void) dummy;
+
 	struct timespec now;
 	char buff[32];
 	uint64_t delta_b, dbdt;
 	double now_sec, delta_t;
 
+	if (item == NULL)
+		return (B_TRUE);
+
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	now_sec = now.tv_sec + (double)now.tv_nsec / 1E9;
 	if (ctxt->cc_last_sec > 1E-9) {
 		delta_t = now_sec - ctxt->cc_last_sec;
-		if (delta_t < ctxt->cc_period_sec) return B_TRUE;
+		if (delta_t < ctxt->cc_period_sec)
+			return (B_TRUE);
 		delta_b = item->dp_stream_offset - ctxt->cc_last_bytes;
 		dbdt = delta_b / delta_t;
-		zfs_nicenum(dbdt, buff, sizeof(buff));
+		zfs_nicenum(dbdt, buff, sizeof (buff));
 		fprintf(stderr, "Checkpoint %s: %s/s\n", ctxt->cc_name, buff);
 	}
 	ctxt->cc_last_sec = now_sec;
@@ -309,18 +327,18 @@ serial_checkpoint(const char *name)
 {
 	int ctxt = next_checkpoint_context++ % MAX_IO_STREAMS;
 
-	checkpoint_contexts[ctxt] = (checkpoint_context_t){
+	checkpoint_contexts[ctxt] = (checkpoint_context_t) {
 		.cc_name = name,
 		.cc_period_sec = 1.0
 	};
 
-	return (chain_step_t) {
+	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_packet_t),
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = &checkpoint_contexts[ctxt],
 		.cs_serial = {
 			.process = (zc_serial_process_f *)chain_checkpoint
 		},
-	};
+	});
 }
