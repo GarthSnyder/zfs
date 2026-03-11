@@ -115,6 +115,13 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	abd_free(&dabd);
 }
 
+/*
+ * A cost of zero waives processing for the current item. If we want to
+ * process it, the cost will always be item->dp_payload_size. So in these
+ * two cost functions, we're mostly determining which packets need
+ * attention. A packet that's already compressed with the target compression
+ * profile can be ignored.
+ */
 static size_t
 chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
 {
@@ -148,6 +155,11 @@ chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
 	return (item->dp_payload_size);
 }
 
+/*
+ * Don't decompress packets that aren't compressed. And don't decompress
+ * them if their ultimate fate is to be recompressed using the compression
+ * profile that's already in use.
+ */
 static size_t
 chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
 {
