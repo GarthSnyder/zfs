@@ -17,14 +17,19 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include <libspl.h>
-#include <sys/zio_checksum.h>
-#include <sys/zstd/zstd.h>
+#include <assert.h>		/* VERIFY3S, VERIFY3U			*/
+#include <libspl.h>		/* libspl_fini, libspl_init		*/
+#include <pthread.h>		/* pthread_create, pthread_join		*/
+#include <stdio.h>		/* fprintf, stderr, snprintf		*/
+#include <stdlib.h>		/* exit					*/
+#include <sys/abd.h>		/* abd_fini, abd_init			*/
+#include <sys/param.h>		/* MAX, MIN				*/
+#include <sys/zio.h>		/* zio_fini, zio_init			*/
+#include <sys/zstd/zstd.h>	/* zstd_fini, zstd_init			*/
+#include <zfs_fletcher.h>	/* fletcher_4_fini, fletcher_4_init	*/
 
-#include "zstream_chain.h"
+#include "zstream_chain.h"	/* chain_attrs_t, record_stats_t...	*/
+#include "zstream_queue.h"	/* zstream_queue_t, zstream_dequeue	*/
 
 /*
  * Execute a chain of processing steps, some parallel and some serial.
@@ -56,7 +61,7 @@ typedef struct chain_info {
 	int		ci_num_steps;
 	zstream_queue_t	**ci_queues;	/* Sparse */
 	size_t		ci_item_size;
-	chain_attrs_t	ci_attrs;
+	chain_attrs_t	*ci_attrs;
 } chain_info_t;
 
 typedef struct {
@@ -108,10 +113,15 @@ libraries_fini(void)
 }
 
 void
-zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
+zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 {
 	int num_steps = 0;
 	size_t max_size = 0;
+	chain_attrs_t backup_attrs = {0};
+
+	if (!attrs) {
+		attrs = &backup_attrs;
+	}
 
 	while (chain[num_steps].cs_type != CS_TERMINATE) {
 		if (num_steps > MAX_CHAIN_LENGTH) {
@@ -122,10 +132,10 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs)
 		num_steps++;
 	}
 
-	zstream_queue_t		*queues[num_steps] = {};
-	worker_context_t	contexts[num_steps] = {};
-	pthread_t		worker_threads[num_steps] = {};
-	int			num_workers = 0;
+	zstream_queue_t	*queues[num_steps] = {};
+	worker_context_t contexts[num_steps] = {};
+	pthread_t worker_threads[num_steps] = {};
+	int num_workers = 0;
 
 	VERIFY3U(num_steps, >, 0);
 	if (chain[num_steps-1].cs_type == CS_PARALLEL ||
@@ -231,7 +241,7 @@ zstream_chain_worker(worker_context_t *ctxt)
 				done = !step->cs_serial.process(
 				    done ? NULL : buffer,
 				    step->cs_context,
-				    &ci->ci_attrs) || done;
+				    ci->ci_attrs) || done;
 			} else if (i == ctxt->wc_first_step) {
 				done = done || !zstream_dequeue(queue, buffer);
 			} else if (done) {
@@ -260,7 +270,7 @@ chain_exec_serialized(chain_info_t *ci)
 		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
 			uint8_t *arg = done ? NULL : buffer;
 			done = !ci->ci_chain[i].cs_serial.process(arg,
-			    ci->ci_chain[i].cs_context, &ci->ci_attrs) || done;
+			    ci->ci_chain[i].cs_context, ci->ci_attrs) || done;
 		} else if (!done) {
 			size_t cost = ci->ci_chain[i].cs_parallel.cost(buffer,
 			    ci->ci_chain[i].cs_context);

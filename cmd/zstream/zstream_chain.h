@@ -26,6 +26,7 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/zfs_ioctl.h>
 
 #include "zstream_queue.h"
 
@@ -127,9 +128,20 @@ extern "C" {
 #define	SET_ATTR(attrs, atr) ((attrs)->ca_attrs |= (atr))
 
 typedef struct {
+	uint64_t	rs_num_records;
+	uint64_t	rs_num_flagged;		/* Not used by zstream_chain */
+	uint64_t	rs_total_header_bytes;
+	uint64_t	rs_total_payload_bytes;
+} record_stats_t;
+
+typedef struct {
 	uint64_t	ca_feature_flags;	/* From drr_versioninfo */
 	uint64_t	ca_attrs;		/* Discovered attributes */
 	uint64_t	ca_command_opts;
+	record_stats_t	ca_totals_in;
+	record_stats_t	ca_totals_out;
+	record_stats_t	ca_stats_in[DRR_NUMTYPES];
+	record_stats_t	ca_stats_out[DRR_NUMTYPES];
 } chain_attrs_t;
 
 /*
@@ -172,10 +184,12 @@ typedef chain_step_t zstream_chain_t[];
 extern boolean_t serialize_chains;
 
 /*
- * Execute a chain. This function returns once execution is complete.
+ * Execute a chain. Returns once execution is complete. You can pass NULL
+ * for the attrs if you're not interested in preserving them after the chain
+ * has run.
  */
 void
-zstream_chain_exec(zstream_chain_t chain, chain_attrs_t attrs);
+zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs);
 
 chain_step_t
 serial_null_step(void);
