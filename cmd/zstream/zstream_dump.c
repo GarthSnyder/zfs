@@ -29,15 +29,21 @@
  * Portions copyright 2026 by Garth Snyder <garth@garthsnyder.com>
  */
 
-#include <ctype.h>
-#include <libnvpair.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/zfs_ioctl.h>
+#include <ctype.h>		/* isprint				*/
+#include <libnvpair.h>		/* nvlist_print				*/
+#include <stdint.h>		/* uint8_t, uint64_t, uint32_t		*/
+#include <stdio.h>		/* printf, fprintf, perror...		*/
+#include <string.h>		/* strerror				*/
+#include <sys/param.h>		/* MIN					*/
+#include <sys/nvpair.h>		/* nvlist_free, nvlist_unpack		*/
+#include <sys/spa_checksum.h>	/* zio_cksum_t				*/
+#include <sys/stdtypes.h>	/* B_TRUE, boolean_t, uint_t		*/
+#include <sys/zio.h>		/* ZIO_DATA_IV_LEN...			*/
+#include <sys/zfs_ioctl.h>	/* drr_object, dmu_replay_record...	*/
+#include <unistd.h>		/* getopt, optind, optopt		*/
 
-#include "zstream.h"
-#include "zstream_modules.h"
+#include "zstream.h"		/* zstream_usage, zstream_do_dump	*/
+#include "zstream_modules.h"	/* STANDARD_INPUT_STACK			*/
 
 /*
  * If dump mode is enabled, the number of bytes to print per line
@@ -59,10 +65,8 @@ typedef void dumper_f(drr_packet_t *item, chain_attrs_t *attrs);
 
 typedef struct {
 	const char	*rt_typename;
-	uint64_t	rt_count;
-	uint64_t	rt_payload_bytes;
 	dumper_f	*rt_dumper;
-} record_data_t;
+} record_type_t;
 
 /*
  * Print part of a block in ASCII characters
@@ -402,7 +406,7 @@ dump_redact_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static boolean_t
-chain_dump_record(drr_packet_t *item, record_data_t *context,
+chain_dump_record(drr_packet_t *item, record_type_t *context,
     chain_attrs_t *attrs)
 {
 	if (!item) {
@@ -413,8 +417,6 @@ chain_dump_record(drr_packet_t *item, record_data_t *context,
 	zio_cksum_t *cksum = &drr->drr_u.drr_checksum.drr_checksum;
 	int type = (int)drr->drr_type;
 
-	context[type].rt_count++;
-	context[type].rt_payload_bytes += item->dp_payload_size;
 	context[type].rt_dumper(item, attrs);
 
 	if (type != DRR_BEGIN && OPTION_ENABLED(attrs, CA_VERY_VERBOSE)) {
@@ -429,7 +431,7 @@ chain_dump_record(drr_packet_t *item, record_data_t *context,
 }
 
 static chain_step_t
-serial_dump_records(record_data_t *context)
+serial_dump_records(record_type_t *context)
 {
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
@@ -449,18 +451,18 @@ zstream_do_dump(int argc, char *argv[])
 	const char *input_file = NULL;
 	int c;
 
-	record_data_t record_types[DRR_NUMTYPES] = {
-		{ "DRR_BEGIN", 		0, 0, dump_begin_record },
-		{ "DRR_OBJECT", 	0, 0, dump_object_record },
-		{ "DRR_FREEOBJECTS", 	0, 0, dump_freeobjects_record },
-		{ "DRR_WRITE", 		0, 0, dump_write_record },
-		{ "DRR_FREE", 		0, 0, dump_free_record },
-		{ "DRR_END", 		0, 0, dump_end_record },
-		{ "DRR_WRITE_BYREF", 	0, 0, dump_write_byref_record },
-		{ "DRR_SPILL", 		0, 0, dump_spill_record },
-		{ "DRR_WRITE_EMBEDDED",	0, 0, dump_write_embedded_record },
-		{ "DRR_OBJECT_RANGE",	0, 0, dump_object_range_record },
-		{ "DRR_REDACT",		0, 0, dump_redact_record }
+	record_type_t record_types[DRR_NUMTYPES] = {
+		{ "DRR_BEGIN", 		dump_begin_record },
+		{ "DRR_OBJECT", 	dump_object_record },
+		{ "DRR_FREEOBJECTS", 	dump_freeobjects_record },
+		{ "DRR_WRITE", 		dump_write_record },
+		{ "DRR_FREE", 		dump_free_record },
+		{ "DRR_END", 		dump_end_record },
+		{ "DRR_WRITE_BYREF", 	dump_write_byref_record },
+		{ "DRR_SPILL", 		dump_spill_record },
+		{ "DRR_WRITE_EMBEDDED",	dump_write_embedded_record },
+		{ "DRR_OBJECT_RANGE",	dump_object_range_record },
+		{ "DRR_REDACT",		dump_redact_record }
 	};
 
 	while ((c = getopt(argc, argv, ":vCd")) != -1) {
@@ -502,13 +504,10 @@ zstream_do_dump(int argc, char *argv[])
 		chain_terminator()
 	};
 
-	zstream_chain_exec(dump_chain, attrs);
+	zstream_chain_exec(dump_chain, &attrs);
 
 	{
-		uint64_t total_count = 0;
-		uint64_t total_payload = 0;
-		uint64_t total_header = 0;
-
+		/* Match previous order */
 		int print_order[] = {
 			DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,
 			DRR_WRITE, DRR_WRITE_BYREF, DRR_WRITE_EMBEDDED,
@@ -517,17 +516,22 @@ zstream_do_dump(int argc, char *argv[])
 
 		printf("SUMMARY:\n");
 		for (int i = 0; i < DRR_NUMTYPES; i++) {
-			record_data_t *rec = &record_types[print_order[i]];
+			int type = print_order[i];
+			record_type_t *rec = &record_types[type];
+			record_stats_t *stats = &attrs.ca_stats_in[type];
 			printf("\tTotal %s records = %zd (%zu bytes)\n",
 			    rec->rt_typename,
-			    rec->rt_count,
-			    rec->rt_payload_bytes);
-			total_count += rec->rt_count;
-			total_payload += rec->rt_payload_bytes;
-			total_header += rec->rt_count *
-			    sizeof (dmu_replay_record_t);
+			    stats->rs_num_records,
+			    stats->rs_total_payload_bytes);
 		}
-		printf("\tTotal records = %zu\n", total_count);
+
+		uint64_t total_payload =
+		    attrs.ca_totals_in.rs_total_payload_bytes;
+		uint64_t total_header =
+		    attrs.ca_totals_in.rs_total_header_bytes;
+
+		printf("\tTotal records = %zu\n",
+		    attrs.ca_totals_in.rs_num_records);
 		printf("\tTotal payload size = %zu (0x%zx)\n",
 		    total_payload, total_payload);
 		printf("\tTotal header overhead = %zu (0x%zx)\n",

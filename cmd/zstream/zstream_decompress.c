@@ -25,22 +25,25 @@
  * Use is subject to license terms.
  *
  * Copyright (c) 2024, Klara, Inc.
+ * Copyright (c) 2026 by Garth Snyder
  */
 
-#include <err.h>
-#include <search.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/zfs_ioctl.h>
-#include <sys/zio_checksum.h>
-#include <sys/zstd/zstd.h>
-#include "zfs_fletcher.h"
-#include "zstream.h"
-#include "zstream_chain.h"
-#include "zstream_util.h"
-#include "zstream_modules.h"
+#include <err.h>		/* errx, err, warnx			*/
+#include <errno.h>		/* errno				*/
+#include <search.h>		/* ENTRY, hsearch, hcreate, hdestroy	*/
+#include <stdint.h>		/* intptr_t, uint64_t, uint8_t		*/
+#include <stdio.h>		/* NULL, fprintf, stderr, asprintf	*/
+#include <stdlib.h>		/* exit, free, strtoull			*/
+#include <string.h>		/* strcmp, strsep			*/
+#include <sys/stdtypes.h>	/* B_TRUE, u_longlong_t, boolean_t	*/
+#include <sys/zfs_ioctl.h>	/* drr_write, dmu_replay_record...	*/
+#include <sys/zio_compress.h>	/* zio_compress				*/
+#include <unistd.h>		/* getopt, optind, optopt		*/
+
+#include "zstream.h"		/* zstream_do_decompress...		*/
+#include "zstream_chain.h"	/* zc_serial_process_f, CA_VERBOSE	*/
+#include "zstream_modules.h"	/* STANDARD_INPUT_STACK...		*/
+#include "zstream_util.h"	/* decompress_buffer			*/
 
 #define KEYSIZE 64
 
@@ -52,6 +55,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw = &drr->drr_u.drr_write;
 	char key[KEYSIZE];
+	uint8_t *dcbuff;
 
 	if (item == NULL || drr->drr_type != DRR_WRITE) {
 		return (B_TRUE);
@@ -77,30 +81,10 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 		return (B_TRUE);
 	}
 
-	uint64_t lsize = drrw->drr_logical_size;
-	uint8_t *buff = safe_calloc(lsize);
-	VERIFY3U(item->dp_payload_size, <=, lsize);
+	dcbuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
+		drrw->drr_logical_size, c);
 
-	abd_t sabd, dabd;
-	abd_get_from_buf_struct(&sabd, item->dp_payload, item->dp_payload_size);
-	abd_get_from_buf_struct(&dabd, buff, lsize);
-	int err = zio_decompress_data(c, &sabd, &dabd,
-		item->dp_payload_size, lsize, NULL);
-	abd_free(&dabd);
-	abd_free(&sabd);
-
-	if (err == 0) {
-		drrw->drr_compressiontype = 0;
-		drrw->drr_compressed_size = 0;
-		item->dp_payload_size = lsize;
-		free(item->dp_payload);
-		item->dp_payload = buff;
-		if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
-			fprintf(stderr,
-			    "successfully decompressed ino %zu offset %zu\n",
-			    drrw->drr_object, drrw->drr_offset);
-		}
-	} else {
+	if (dcbuff == NULL) {
 		/*
 		 * The block must not be compressed, at least not with this
 		 * compression type, possibly because it gets written
@@ -108,9 +92,19 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 		 */
 		warnx("decompression failed for ino %zu offset %zu",
 		    drrw->drr_object, drrw->drr_offset);
-		free(buff);
+		free(dcbuff);
+	} else {
+		free(item->dp_payload);
+		item->dp_payload = dcbuff;
+		item->dp_payload_size = drrw->drr_logical_size;
+		drrw->drr_compressiontype = 0;
+		drrw->drr_compressed_size = 0;
+		if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+			fprintf(stderr,
+			    "successfully decompressed ino %zu offset %zu\n",
+			    drrw->drr_object, drrw->drr_offset);
+		}
 	}
-
 	return (B_TRUE);
 }
 
@@ -119,8 +113,8 @@ serial_decompress_named_writes(void)
 {
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_packet_t),
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = NULL,
 		.cs_serial = {
 		    .process =
@@ -203,7 +197,7 @@ zstream_do_decompress(int argc, char *argv[])
 		    (u_longlong_t)offset) < 0) {
 			err(1, "asprintf");
 		}
-		ENTRY e = {.key = key};
+		ENTRY e = { .key = key };
 		ENTRY *p;
 
 		p = hsearch(e, ENTER);
@@ -218,7 +212,7 @@ zstream_do_decompress(int argc, char *argv[])
 		STANDARD_OUTPUT_STACK(NULL, 512)
 	};
 
-	zstream_chain_exec(decompress_chain, attrs);
+	zstream_chain_exec(decompress_chain, &attrs);
 	hdestroy();
 	return (0);
 }

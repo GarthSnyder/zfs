@@ -17,22 +17,19 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <string.h>
-#include <stdlib.h>
-#include <pthread.h>
+#include <assert.h>		/* VERIFY3S, VERIFY3B			*/
+#include <atomic.h>		/* atomic_add_32, atomic_sub_32		*/
+#include <pthread.h>		/* pthread_mutex_unlock...		*/
+#include <sched.h>		/* CPU_COUNT, cpu_set_t...		*/
+#include <stdint.h>		/* uint32_t, uint64_t, uint8_t...	*/
+#include <stdio.h>		/* snprintf				*/
+#include <stdlib.h>		/* free					*/
+#include <string.h>		/* memcpy, memmove			*/
+#include <sys/param.h>		/* MAX, MIN				*/
+#include <sys/random.h>		/* random_get_pseudo_bytes		*/
 
-#ifdef MONITOR_QUEUES
-
-#include <stdio.h>
-#include <unistd.h>
-#include <signal.h>
-#include <time.h>
-#include <sched.h>
-
-#endif
-
-#include "zstream_queue.h"
-#include "zstream_util.h"
+#include "zstream_queue.h"	/* zq_params_t, zq_process_item_f...	*/
+#include "zstream_util.h"	/* safe_calloc, safe_malloc		*/
 
 #define MIN_THREADS 	6
 #define MAX_QUEUES 	16	/* Greatest # of queues simultaneously active */

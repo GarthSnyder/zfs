@@ -17,12 +17,15 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/zfs_ioctl.h>
+#include <stdio.h>			/* fprintf, NULL, stderr	*/
+#include <stdlib.h>			/* exit				*/
+#include <sys/byteorder.h>		/* BSWAP_64, BSWAP_32		*/
+#include <sys/spa_checksum.h>		/* ZIO_CHECKSUM_BSWAP		*/
+#include <sys/stdtypes.h>		/* B_TRUE, boolean_t		*/
+#include <sys/zfs_ioctl.h>		/* dmu_replay_record...		*/
 
-#include "zstream_byteswap.h"
+#include "zstream_io.h"			/* drr_packet_t			*/
+#include "zstream_byteswap.h"		/* serial_byteswap		*/
 
 /*
  * Mostly from dmu_recv.c

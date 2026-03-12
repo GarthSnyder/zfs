@@ -17,14 +17,15 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <stdio.h>
-#include <sys/types.h>
-#include <sys/zfs_ioctl.h>
+#include <assert.h>		/* VERIFY3U, VERIFY0			*/
+#include <stdio.h>		/* fprintf, stderr, NULL		*/
+#include <stdlib.h>		/* exit					*/
+#include <sys/stdtypes.h>	/* B_TRUE, boolean_t			*/
+#include <sys/zfs_ioctl.h>	/* dmu_replay_record, drr_object...	*/
+#include <sys/zio_compress.h>	/* zio_compress				*/
 
-#include "zstream.h"
-#include "zstream_validate.h"
-#include "zstream_io.h"
-#include "zstream_util.h"
+#include "zstream_io.h"		/* drr_packet_t				*/
+#include "zstream_validate.h"	/* serial_validate_records		*/
 
 /*
  * Validate consistency and well-formedness of the actual DRR records. I
