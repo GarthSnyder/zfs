@@ -50,32 +50,24 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
-	enum zio_compress dtype	= drrw->drr_compressiontype;
-	uint8_t *buff		= safe_calloc(drrw->drr_logical_size);
-	abd_t sabd, dabd;
+	uint8_t *debuff;
 
 	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
-	VERIFY3U(drrw->drr_compressiontype, !=, ZIO_COMPRESS_OFF);
-	abd_get_from_buf_struct(&sabd, item->dp_payload,
-	    item->dp_payload_size);
-	abd_get_from_buf_struct(&dabd, buff, drrw->drr_logical_size);
-	if (zio_decompress_data(dtype, &sabd, &dabd,
-	    item->dp_payload_size, abd_get_size(&dabd), NULL) != 0)
-	{
-		warnx("Decompression type %d failed "
-		    "for ino %llu offset %llu",
-		    dtype,
-		    (u_longlong_t)drrw->drr_object,
-		    (u_longlong_t)drrw->drr_offset);
+
+	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
+	    drrw->drr_logical_size, drrw->drr_compressiontype);
+	if (debuff == NULL) {
+		warnx("Decompression type %d failed for ino %zu offset %zu",
+		    drrw->drr_compressiontype,
+		    drrw->drr_object,
+		    drrw->drr_offset);
 		exit(4);
 	}
 	free(item->dp_payload);
-	item->dp_payload = buff;
+	item->dp_payload = debuff;
 	item->dp_payload_size = drrw->drr_logical_size;
 	drrw->drr_compressed_size = 0;
 	drrw->drr_compressiontype = 0;
-	abd_free(&dabd);
-	abd_free(&sabd);
 }
 
 static void
@@ -84,35 +76,24 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	 = &drr->drr_u.drr_write;
 	enum zio_compress ctype	 = drrw->drr_compressiontype;
-	uint8_t *buff = safe_calloc(drrw->drr_logical_size);
-
+	uint8_t cbuff = safe_calloc(drrw->drr_logical_size);
 	abd_t	sabd, dabd;
-	size_t	csize, rounded;
+	size_t	csize;
 
 	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
 	VERIFY0P(zio_compress_table[ctype].ci_decompress);
-	abd_t *pabd = abd_get_from_buf_struct(&dabd, buff,
-	    drrw->drr_logical_size);
-	abd_get_from_buf_struct(&sabd, item->dp_payload,
-	    item->dp_payload_size);
-	csize = zio_compress_data(context->cs_type, &sabd,
-	    &pabd, drrw->drr_logical_size, drrw->drr_logical_size,
-	    context->cs_level);
-	rounded = P2ROUNDUP(csize, SPA_MINBLOCKSIZE);
-	if (rounded < drrw->drr_logical_size) {
-		abd_zero_off(pabd, csize, rounded - csize);
-		drrw->drr_compressiontype = context->cs_type;
-		drrw->drr_compressed_size = rounded;
-		free(item->dp_payload);
-		item->dp_payload = buff;
-		item->dp_payload_size = rounded;
-	} else {
-		free(buff);
+	cbuff = compress_buffer(item->dp_payload, item->dp_payload_size,
+		*context, &csize);
+	if (outbuff == NULL) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
+	} else {
+		free(item->dp_payload);
+		item->dp_payload = cbuff;
+		item->dp_payload_size = csize;
+		drrw->drr_compressed_size = csize;
+		drrw->drr_compressiontype = context->cs_type;
 	}
-	abd_free(&sabd);
-	abd_free(&dabd);
 }
 
 /*

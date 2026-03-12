@@ -24,12 +24,8 @@
 extern "C" {
 #endif
 
+#include "zstream_util.h"
 #include "zstream_io.h"
-
-typedef struct {
-	enum zio_compress	cs_type;
-	int			cs_level;
-} compression_spec_t;
 
 chain_step_t
 parallel_decompress_writes(compression_spec_t *target);

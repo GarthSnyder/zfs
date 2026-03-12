@@ -29,6 +29,11 @@ extern "C" {
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
 
+typedef struct {
+	enum zio_compress	cs_type;
+	int			cs_level;
+} compression_spec_t;
+
 /*
  * The safe_ versions of the functions below terminate the process if the
  * operation doesn't succeed instead of returning an error.

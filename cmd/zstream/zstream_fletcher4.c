@@ -137,7 +137,32 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
 }
 
 /*
- * This is the serial step, which implements both validation and inscription.
+ * This is the serial step that implements both validation and
+ * inscription, based on checksum data assembled in the previous step.
+ *
+ * Emit or validate a replay record with proper checksums and with
+ * proper maintenance of the stream checksum.
+ *
+ * DRR_BEGIN records do not have record checksums. They can't, because
+ * the drr_begin struct overlaps with space that would otherwise be used
+ * for the end-record checksum.
+ *
+ * DRR_END records normally do have end-record checksums. However,
+ * records emitted by send_conclusion_record() in libzfs_sendrecv.c have
+ * the checksum set to zero. zfs receive ignores those.
+ *
+ * Null zstream transformations should be idempotent. E.g., a zstream
+ * redup that does not redup anything should yield a stream that is
+ * bit-for-bit identical to the original stream. So, it's helpful to
+ * emulate zfs send's checksumming practices just to minimize spurious
+ * differences between input and output streams.
+ *
+ * Note that there are two separate checksums in a DRR_END record. One
+ * is the drr->drr_u.drr_end.drr_checksum field, which is a
+ * stream-to-date checksum that is always filled out and always
+ * validated. The other checksum is the end-record
+ * drr->drr_u.drr_checksum.drr_checksum field, which may or may not be
+ * present.
  */
 static boolean_t
 chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
@@ -162,15 +187,13 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	    ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum);
 
 	if (item->dp_base.dp_stream_offset == 0) {
-		VERIFY3U(off, ==,
-		    sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
+		VERIFY3U(off, ==, sizeof (dmu_replay_record_t) - sizeof (zio_cksum_t));
 	}
 	if (drr->drr_type == DRR_BEGIN) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else if (drr->drr_type == DRR_END) {
 		if (context->fc_operation == F4_VALIDATE) {
-			validate_or_exit(stream_cksum, end_cksum,
-			    "in DRR_END record");
+			validate_or_exit(stream_cksum, end_cksum, "in DRR_END record");
 		} else {
 			*end_cksum = *stream_cksum;
 		}
@@ -178,8 +201,7 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context,
 	fletcher_4_incremental_native(drr, off, stream_cksum);
 	if (drr->drr_type != DRR_BEGIN && !is_conclusion_record) {
 		if (context->fc_operation == F4_VALIDATE) {
-			validate_or_exit(stream_cksum, record_cksum,
-			    "at end of DRR record");
+			validate_or_exit(stream_cksum, record_cksum, "at DRR record end");
 		} else {
 			*record_cksum = *stream_cksum;
 		}
