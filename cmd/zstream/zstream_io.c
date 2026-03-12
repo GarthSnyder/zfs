@@ -200,10 +200,17 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 	item->dp_stream_offset = context->ic_offset;
 
 	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
+
 	record_stats_t *stats = &attrs->ca_stats_in[drr->drr_type];
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
+
+	stats = &attrs->ca_totals_in;
+	stats->rs_num_records++;
+	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_payload_bytes += item->dp_payload_size;
+
 	return (B_TRUE);
 }
 
@@ -239,10 +246,17 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 			item->dp_payload = NULL;
 		}
 	}
+
 	record_stats_t *stats = &attrs->ca_stats_out[drr->drr_type];
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
+
+	stats = &attrs->ca_totals_out;
+	stats->rs_num_records++;
+	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_payload_bytes += item->dp_payload_size;
+
 	return (B_TRUE);
 }
 

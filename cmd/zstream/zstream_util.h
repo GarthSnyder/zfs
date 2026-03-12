@@ -74,6 +74,14 @@ validate_or_exit(zio_cksum_t *expect, zio_cksum_t *actual, const char *where)
 	}
 }
 
+uint8_t *
+decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
+	enum zio_compress compress_type);
+
+uint8_t *
+compress_buffer(uint8_t *inbuff, size_t inbuff_size,
+    compression_spec_t compress_type, size_t *compressed_size);
+
 #ifdef __cplusplus
 }
 #endif
