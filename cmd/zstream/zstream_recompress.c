@@ -76,15 +76,14 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	 = &drr->drr_u.drr_write;
 	enum zio_compress ctype	 = drrw->drr_compressiontype;
-	uint8_t cbuff = safe_calloc(drrw->drr_logical_size);
-	abd_t	sabd, dabd;
+	uint8_t *cbuff = safe_calloc(drrw->drr_logical_size);
 	size_t	csize;
 
 	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
 	VERIFY0P(zio_compress_table[ctype].ci_decompress);
 	cbuff = compress_buffer(item->dp_payload, item->dp_payload_size,
 		*context, &csize);
-	if (outbuff == NULL) {
+	if (cbuff == NULL) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
 	} else {
@@ -267,6 +266,6 @@ zstream_do_recompress(int argc, char *argv[])
 		STANDARD_OUTPUT_STACK(NULL, 512)
 	};
 
-	zstream_chain_exec(recompress_chain, attrs);
+	zstream_chain_exec(recompress_chain, &attrs);
 	return (0);
 }

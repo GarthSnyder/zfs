@@ -138,6 +138,8 @@ typedef struct {
 	uint64_t	ca_feature_flags;	/* From drr_versioninfo */
 	uint64_t	ca_attrs;		/* Discovered attributes */
 	uint64_t	ca_command_opts;
+	record_stats_t	ca_totals_in;
+	record_stats_t	ca_totals_out;
 	record_stats_t	ca_stats_in[DRR_NUMTYPES];
 	record_stats_t	ca_stats_out[DRR_NUMTYPES];
 } chain_attrs_t;

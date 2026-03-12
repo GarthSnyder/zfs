@@ -60,7 +60,7 @@ typedef void dumper_f(drr_packet_t *item, chain_attrs_t *attrs);
 typedef struct {
 	const char	*rt_typename;
 	dumper_f	*rt_dumper;
-} record_data_t;
+} record_type_t;
 
 /*
  * Print part of a block in ASCII characters
@@ -400,7 +400,7 @@ dump_redact_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static boolean_t
-chain_dump_record(drr_packet_t *item, record_data_t *context,
+chain_dump_record(drr_packet_t *item, record_type_t *context,
     chain_attrs_t *attrs)
 {
 	if (!item) {
@@ -425,7 +425,7 @@ chain_dump_record(drr_packet_t *item, record_data_t *context,
 }
 
 static chain_step_t
-serial_dump_records(record_data_t *context)
+serial_dump_records(record_type_t *context)
 {
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
@@ -445,7 +445,7 @@ zstream_do_dump(int argc, char *argv[])
 	const char *input_file = NULL;
 	int c;
 
-	record_data_t record_types[DRR_NUMTYPES] = {
+	record_type_t record_types[DRR_NUMTYPES] = {
 		{ "DRR_BEGIN", 		dump_begin_record },
 		{ "DRR_OBJECT", 	dump_object_record },
 		{ "DRR_FREEOBJECTS", 	dump_freeobjects_record },
@@ -501,10 +501,7 @@ zstream_do_dump(int argc, char *argv[])
 	zstream_chain_exec(dump_chain, &attrs);
 
 	{
-		uint64_t total_count = 0;
-		uint64_t total_payload = 0;
-		uint64_t total_header = 0;
-
+		/* Match previous order */
 		int print_order[] = {
 			DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,
 			DRR_WRITE, DRR_WRITE_BYREF, DRR_WRITE_EMBEDDED,
@@ -514,17 +511,21 @@ zstream_do_dump(int argc, char *argv[])
 		printf("SUMMARY:\n");
 		for (int i = 0; i < DRR_NUMTYPES; i++) {
 			int type = print_order[i];
-			record_data_t *rec = &record_types[type];
+			record_type_t *rec = &record_types[type];
 			record_stats_t *stats = &attrs.ca_stats_in[type];
 			printf("\tTotal %s records = %zd (%zu bytes)\n",
 			    rec->rt_typename,
 			    stats->rs_num_records,
 			    stats->rs_total_payload_bytes);
-			total_count += rec->rt_count;
-			total_payload += stats->rs_total_payload_bytes;
-			total_header += stats->rs_total_header_bytes;
 		}
-		printf("\tTotal records = %zu\n", total_count);
+
+		uint64_t total_payload =
+		    attrs.ca_totals_in.rs_total_payload_bytes;
+		uint64_t total_header =
+		    attrs.ca_totals_in.rs_total_header_bytes;
+
+		printf("\tTotal records = %zu\n",
+		    attrs.ca_totals_in.rs_num_records);
 		printf("\tTotal payload size = %zu (0x%zx)\n",
 		    total_payload, total_payload);
 		printf("\tTotal header overhead = %zu (0x%zx)\n",

@@ -40,6 +40,7 @@
 #include "zstream_chain.h"
 #include "zstream_io.h"
 #include "zstream_util.h"
+#include "zstream_modules.h"
 
 #define	MAX_RDT_PHYSMEM_PERCENT		20
 #define	SMALLEST_POSSIBLE_MAX_RDT_MB	128
@@ -60,7 +61,7 @@ typedef struct redup_table {
 } redup_table_t;
 
 typedef struct {
-	redup_table_t	*rc_rdt;
+	redup_table_t	rc_rdt;
 	FILE		*rc_fp;
 } redup_context_t;
 
@@ -107,12 +108,14 @@ static boolean_t
 chain_redup_writes(drr_packet_t *item, redup_context_t *context,
     chain_attrs_t *attrs)
 {
+	(void) attrs;
 	if (!item) {
 		return (B_TRUE);
 	}
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw = &drr->drr_u.drr_write;
+	struct drr_begin *drrb = &drr->drr_u.drr_begin;
 
 	switch (drr->drr_type) {
 
@@ -140,12 +143,12 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context,
 		    drrwb.drr_refobject, drrwb.drr_refoffset,
 		    &stream_offset);
 
-		if (fseeko(context.rc_fp, stream_offset, SEEK_SET) != 0) {
+		if (fseeko(context->rc_fp, stream_offset, SEEK_SET) != 0) {
 			fprintf(stderr, "Seek into source file failed, "
 			    "offset %zu: %s", stream_offset, strerror(errno));
 			exit(1);
 		}
-		if (fread(drr, sizeof (*drr), 1, context.rc_fp) != 1) {
+		if (fread(drr, sizeof (*drr), 1, context->rc_fp) != 1) {
 			fprintf(stderr, "Read of prior write failed: %s\n",
 			    strerror(errno));
 			exit(1);
@@ -160,7 +163,7 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context,
 		item->dp_payload = safe_malloc(item->dp_payload_size);
 
 		if (fread(item->dp_payload, item->dp_payload_size, 1,
-		    context.rc_fp) != 1)
+		    context->rc_fp) != 1)
 		{
 			fprintf(stderr, "Read of prior payload failed: %s\n",
 			    strerror(errno));
@@ -182,6 +185,8 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context,
 
 	default:
 		break;
+	}
+	return (B_TRUE);
 }
 
 static chain_step_t
@@ -264,9 +269,20 @@ zstream_do_redup(int argc, char *argv[])
 
 	zstream_chain_exec(redup_chain, &attrs);
 
+	if (OPTION_ENABLED(&attrs, CA_VERBOSE)) {
+		char mem_str[16];
+		zfs_nicenum(context.rc_rdt.ddt_count * sizeof (redup_entry_t),
+		    mem_str, sizeof (mem_str));
+		fprintf(stderr, "Converted stream with %zu total records, "
+		    "including %zu dedup records, using %sB memory.\n",
+		    attrs.ca_totals_in.rs_num_records,
+		    attrs.ca_stats_in[DRR_WRITE_BYREF].rs_num_records,
+		    mem_str);
+	}
+
 	fclose(context.rc_fp);
-	umem_cache_destroy(rdt.ddecache);
-	free(rdt.redup_hash_array);
+	umem_cache_destroy(context.rc_rdt.ddecache);
+	free(context.rc_rdt.redup_hash_array);
 	return (0);
 }
 
