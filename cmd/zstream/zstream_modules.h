@@ -37,6 +37,9 @@ extern "C" {
 #include "zstream_validate.h"
 #include "zstream_recompress.h"
 
+#define READ_STEP 0
+#define NUM_STANDARD_INPUT_STEPS 5
+
 #define STANDARD_INPUT_STACK(infile, f4_queue_length) 			\
 	serial_read_stream(infile),					\
 	parallel_calc_fletcher4(f4_queue_length),			\

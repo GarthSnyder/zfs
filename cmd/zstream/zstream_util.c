@@ -35,7 +35,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/zfs_ioctl.h>
 #include <zfs_fletcher.h>
+
 #include "zstream_util.h"
 
 /*
@@ -149,8 +151,65 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 		return B_TRUE;
 	}
 	fprintf(stderr, "Incorrect checksum %s.\n", where);
-	fprintf(stderr, "Expected = %s\n", checksum_str(expected, buff, sizeof(buff)));
-	fprintf(stderr, "  Actual = %s\n", checksum_str(actual, buff, sizeof(buff)));
+	fprintf(stderr, "Expected = %s\n", checksum_str(expected, buff,
+	    sizeof(buff)));
+	fprintf(stderr, "  Actual = %s\n", checksum_str(actual, buff,
+	    sizeof(buff)));
 	return B_FALSE;
+}
+
+/*
+ * The compress_type must reflect the buffer's current compression. Returns
+ * an allocated buffer if decompression was successful, NULL otherwise.
+ */
+uint8_t *
+decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
+	enum zio_compress compress_type)
+{
+	uint8_t *outbuff = safe_malloc(logical_size);
+	abd_t sabd, dabd;
+	int ret;
+
+	VERIFY3U(compress_type, !=, ZIO_COMPRESS_OFF);
+	abd_get_from_buf_struct(&sabd, buff, inbuff_size);
+	abd_get_from_buf_struct(&dabd, outbuff, logical_size);
+	ret = zio_decompress_data(compress_type, &sabd, &dabd,
+	    inbuff_size, abd_get_size(&dabd), NULL);
+	abd_free(&dabd);
+	abd_free(&sabd);
+	if (ret != 0) {
+		free(outbuff);
+		return (NULL);
+	}
+	return (outbuff);
+}
+
+/*
+ * Returns an allocated buffer if compression was successful, NULL
+ * otherwise.
+ */
+uint8_t *
+compress_buffer(uint8_t *inbuff, size_t inbuff_size,
+    compression_spec_t compress_type, size_t *compressed_size)
+{
+	uint8_t *outbuff = safe_malloc(inbuff_size);
+	abd_t	sabd, dabd;
+	size_t	csize, rounded;
+
+	abd_t *pabd = abd_get_from_buf_struct(&dabd, outbuff, inbuff_size);
+	abd_get_from_buf_struct(&sabd, inbuff, inbuff_size);
+	csize = zio_compress_data(compress_type.cs_type, &sabd,
+	    &pabd, inbuff_size, inbuff_size, compress_type.cs_level);
+	rounded = P2ROUNDUP(csize, SPA_MINBLOCKSIZE);
+	if (rounded < inbuff_size) {
+		abd_zero_off(pabd, csize, rounded - csize);
+		*compressed_size = rounded;
+	} else {
+		free(outbuff);
+		outbuff = NULL;
+	}
+	abd_free(&sabd);
+	abd_free(&dabd);
+	return (outbuff);
 }
 

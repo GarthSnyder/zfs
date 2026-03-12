@@ -65,14 +65,14 @@ open_file(io_context_t *context)
 			exit(1);
 		}
 	} else if (context->ic_for_reading && isatty(STDIN_FILENO)) {
-		(void) fprintf(stderr,
+		fprintf(stderr,
 		    "Error: Stream cannot be read from a terminal.\n"
 		    "Name a file or take input from a pipe.\n");
 		exit(1);
 	} else if (context->ic_for_reading) {
 		context->ic_fp = stdin;
 	} else if (isatty(STDOUT_FILENO)) {
-		(void) fprintf(stderr,
+		fprintf(stderr,
 		    "Error: Stream cannot be written to a terminal.\n"
 		    "Capture output to a file or pipe to another command.\n");
 		exit(1);
@@ -198,7 +198,12 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		item->dp_payload = NULL;
 	}
 	item->dp_stream_offset = context->ic_offset;
+
 	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
+	record_stats_t *stats = &attrs->ca_stats_in[drr->drr_type];
+	stats->rs_num_records++;
+	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_payload_bytes += item->dp_payload_size;
 	return (B_TRUE);
 }
 
@@ -232,9 +237,12 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		} else {
 			free(item->dp_payload);
 			item->dp_payload = NULL;
-			item->dp_payload_size = 0;
 		}
 	}
+	record_stats_t *stats = &attrs->ca_stats_out[drr->drr_type];
+	stats->rs_num_records++;
+	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_payload_bytes += item->dp_payload_size;
 	return (B_TRUE);
 }
 
