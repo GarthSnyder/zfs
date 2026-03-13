@@ -47,17 +47,6 @@ safe_calloc(size_t n);
 extern int
 sfread(void *buf, size_t size, FILE *fp);
 
-/*
- * 1) Update checksum with the record header up to drr_checksum.
- * 2) Update checksum field in the record header.
- * 3) Update checksum with the checksum field in the record header.
- * 4) Update checksum with the contents of the payload.
- * 5) Write header and payload to fd.
- */
-extern int
-dump_record(dmu_replay_record_t *drr, void *payload, size_t payload_len,
-	zio_cksum_t *zc, int outfd);
-
 /* Static buffer, must use result before next call */
 extern char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
