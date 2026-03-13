@@ -18,29 +18,25 @@
  * Copyright (c) 2020 by Delphix. All rights reserved.
  */
 
-#include <assert.h>
-#include <cityhash.h>
-#include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <libzfs.h>
-#include <libzutil.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <umem.h>
-#include <unistd.h>
-#include <sys/debug.h>
-#include <sys/stat.h>
-#include <sys/zfs_ioctl.h>
-#include <sys/zio_checksum.h>
-#include "zfs_fletcher.h"
-#include "zstream.h"
-#include "zstream_chain.h"
-#include "zstream_io.h"
-#include "zstream_util.h"
-#include "zstream_modules.h"
+#include <assert.h>		/* VERIFY3U, assert			*/
+#include <cityhash.h>		/* cityhash3				*/
+#include <errno.h>		/* errno				*/
+#include <libzutil.h>		/* zfs_nicenum				*/
+#include <stdint.h>		/* uint64_t				*/
+#include <stdio.h>		/* fprintf, NULL, stderr, fread, fclose	*/
+#include <stdlib.h>		/* exit, free				*/
+#include <string.h>		/* strerror				*/
+#include <sys/bitops.h>		/* BF64_GET				*/
+#include <sys/param.h>		/* MAX					*/
+#include <sys/stdtypes.h>	/* B_TRUE, boolean_t			*/
+#include <sys/sysmacros.h>	/* highbit64, ISP2			*/
+#include <sys/zfs_ioctl.h>	/* drr_write_byref, drr_write...	*/
+#include <umem.h>		/* umem_cache_alloc, umem_cache_create	*/
+#include <unistd.h>		/* sysconf, getopt, optind...		*/
+
+#include "zstream.h"		/* zstream_usage, zstream_do_redup	*/
+#include "zstream_util.h"	/* safe_calloc, safe_malloc		*/
+#include "zstream_modules.h"	/* STANDARD_INPUT_STACK...		*/
 
 #define	MAX_RDT_PHYSMEM_PERCENT		20
 #define	SMALLEST_POSSIBLE_MAX_RDT_MB	128

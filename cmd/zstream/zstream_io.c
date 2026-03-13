@@ -17,17 +17,21 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <libzutil.h>
+#include <errno.h>		/* errno				*/
+#include <libzutil.h>		/* zfs_nicenum				*/
+#include <stdio.h>		/* fprintf, stderr, fclose, fread	*/
+#include <stdlib.h>		/* exit, free				*/
+#include <string.h>		/* strerror				*/
+#include <sys/byteorder.h>	/* BSWAP_32, BSWAP_64			*/
+#include <sys/stdtypes.h>	/* B_TRUE, boolean_t, B_FALSE		*/
+#include <sys/sysmacros.h>	/* P2ROUNDUP				*/
+#include <sys/types.h>		/* off_t				*/
+#include <sys/zfs_ioctl.h>	/* drr_begin, dmu_replay_record_t	*/
+#include <time.h>		/* timespec, clock_gettime, CLOC...	*/
+#include <unistd.h>		/* isatty, STDIN_FILENO, STDOUT_...	*/
 
-#include "zstream_io.h"
-#include "zstream_util.h"
+#include "zstream_io.h"		/* drr_packet_t, zc_serial_process_f	*/
+#include "zstream_util.h"	/* safe_malloc				*/
 
 /* Init only the filename, chain_read_stream will prepare the FILE *. */
 typedef struct {
