@@ -33,9 +33,9 @@ extern "C" {
 #include "zstream_chain.h"
 #include "zstream_fletcher4.h"
 #include "zstream_io.h"
+#include "zstream_recompress.h"
 #include "zstream_util.h"
 #include "zstream_validate.h"
-#include "zstream_recompress.h"
 
 #define READ_STEP 0
 #define NUM_STANDARD_INPUT_STEPS 5

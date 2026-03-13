@@ -17,14 +17,19 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <pthread.h>
-#include <libspl.h>
-#include <sys/zio_checksum.h>
-#include <sys/zstd/zstd.h>
+#include <assert.h>		/* VERIFY3S, VERIFY3U			*/
+#include <libspl.h>		/* libspl_fini, libspl_init		*/
+#include <pthread.h>		/* pthread_create, pthread_join		*/
+#include <stdio.h>		/* fprintf, stderr, snprintf		*/
+#include <stdlib.h>		/* exit					*/
+#include <sys/abd.h>		/* abd_fini, abd_init			*/
+#include <sys/param.h>		/* MAX, MIN				*/
+#include <sys/zio.h>		/* zio_fini, zio_init			*/
+#include <sys/zstd/zstd.h>	/* zstd_fini, zstd_init			*/
+#include <zfs_fletcher.h>	/* fletcher_4_fini, fletcher_4_init	*/
 
-#include "zstream_chain.h"
+#include "zstream_chain.h"	/* chain_attrs_t, record_stats_t...	*/
+#include "zstream_queue.h"	/* zstream_queue_t, zstream_dequeue	*/
 
 /*
  * Execute a chain of processing steps, some parallel and some serial.

@@ -17,13 +17,21 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/zfs_ioctl.h>
+#include <assert.h>		/* VERIFY3U, ASSERT3U			*/
+#include <stddef.h>		/* offsetof				*/
+#include <stdint.h>		/* uint64_t, uint32_t, uint8_t		*/
+#include <stdlib.h>		/* NULL, free, size_t			*/
+#include <sys/param.h>		/* MIN					*/
+#include <sys/stdtypes.h>	/* B_TRUE, boolean_t			*/
+#include <sys/sysmacros.h>	/* DIV_ROUND_UP				*/
+#include <sys/types.h>		/* ssize_t, off_t			*/
+#include <sys/zfs_ioctl.h>	/* dmu_replay_record::(anonymous)	*/
+#include <zfs_fletcher.h>	/* fletcher_4_incremental_native	*/
 
 #include "zstream_fletcher4.h"
-#include "zstream_util.h"
+#include "zstream_io.h"		/* drr_packet_t...			*/
+#include "zstream_queue.h"	/* zq_estimate_cost_f...		*/
+#include "zstream_util.h"	/* validate_or_exit, safe_calloc	*/
 
 /*
  * Copied from zfs_fletcher.c. See comments below regarding the
