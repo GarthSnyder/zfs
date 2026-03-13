@@ -45,8 +45,8 @@
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
  * complete, and dequeue, in that order. No index can move beyond its
  * preceding index. Every interval between indices contains work items in a
- * particular state: enqueued, claimed for work, completed. Since items
- * never leave the ring buffer, FIFO order is guaranteed on dequeueing.
+ * particular state: enqueued, claimed for work, completed. Items never
+ * leave the ring buffer, so FIFO order is guaranteed on dequeueing.
  *
  * In concept, every index has a corresponding condition that threads can
  * wait on if they are interested in knowing when that index moves. However,
@@ -97,7 +97,7 @@ struct zstream_queue {
 };
 
 typedef struct {
-	pthread_mutex_t	tp_mutex;
+	pthread_mutex_t	tp_pool_mutex;
 	pthread_mutex_t tp_enqueue_mutex;
 	pthread_cond_t	tp_enqueued;
 	zstream_queue_t	*tp_queues[MAX_QUEUES];
@@ -123,7 +123,7 @@ static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 static void
 thread_pool_init(void)
 {
-	pthread_mutex_init(&pool.tp_mutex, NULL);
+	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
 	pthread_mutex_init(&pool.tp_enqueue_mutex, NULL);
 	pthread_cond_init(&pool.tp_enqueued, NULL);
 }
@@ -180,7 +180,7 @@ zstream_queue_t *
 zstream_queue_create(zq_params_t *params)
 {
 	pthread_once(&once_control, thread_pool_init);
-	pthread_mutex_lock(&pool.tp_mutex);
+	pthread_mutex_lock(&pool.tp_pool_mutex);
 	VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
 
 	if (!pool.tp_num_threads) {
@@ -210,7 +210,7 @@ zstream_queue_create(zq_params_t *params)
 	pthread_cond_init(&queue->zq_cond.completed, NULL);
 	pthread_cond_init(&queue->zq_cond.dequeued, NULL);
 
-	pthread_mutex_unlock(&pool.tp_mutex);
+	pthread_mutex_unlock(&pool.tp_pool_mutex);
 	return (queue);
 }
 
@@ -483,7 +483,7 @@ zstream_queue_fini(zstream_queue_t *queue) {
 static void
 zstream_queue_destroy(zstream_queue_t *queue)
 {
-	pthread_mutex_lock(&pool.tp_mutex);
+	pthread_mutex_lock(&pool.tp_pool_mutex);
 
 	pthread_mutex_destroy(&queue->zq_mutex);
 	pthread_cond_destroy(&queue->zq_cond.completed);
@@ -503,7 +503,7 @@ zstream_queue_destroy(zstream_queue_t *queue)
 		memmove(qscan, qscan + 1, i * sizeof (*qscan));
 	}
 	pool.tp_num_queues--;
-	pthread_mutex_unlock(&pool.tp_mutex);
+	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
 boolean_t
