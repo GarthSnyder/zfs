@@ -38,23 +38,21 @@ extern "C" {
 #include "zstream_validate.h"
 
 #define READ_STEP 0
-#define NUM_STANDARD_INPUT_STEPS 5
+#define NUM_STANDARD_INPUT_STEPS 4
 
-#define STANDARD_INPUT_STACK(infile, f4_queue_length) 			\
+#define STANDARD_INPUT_STACK(infile)					\
 	serial_read_stream(infile),					\
-	parallel_calc_fletcher4(f4_queue_length),			\
 	serial_validate_fletcher4(),					\
 	serial_byteswap(),						\
 	serial_validate_records()
 
-#define STANDARD_OUTPUT_STACK(outfile, f4_queue_length) 		\
-	parallel_calc_fletcher4(f4_queue_length),			\
+#define STANDARD_OUTPUT_STACK(outfile)					\
 	serial_add_fletcher4(),						\
 	serial_write_stream(outfile),					\
 	chain_terminator()
 
-#define NULL_OUTPUT_STACK() 						\
-	serial_null_output(),					\
+#define NULL_OUTPUT_STACK()						\
+	serial_null_output(),						\
 	chain_terminator()
 
 #ifdef __cplusplus
