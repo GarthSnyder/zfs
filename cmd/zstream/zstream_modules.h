@@ -53,6 +53,10 @@ extern "C" {
 	serial_write_stream(outfile),					\
 	chain_terminator()
 
+#define NULL_OUTPUT_STACK() 						\
+	serial_null_output(),					\
+	chain_terminator()
+
 #ifdef __cplusplus
 }
 #endif
