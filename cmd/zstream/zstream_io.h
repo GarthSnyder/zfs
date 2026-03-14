@@ -3,7 +3,7 @@
  * CDDL HEADER START
  *
  * This file and its contents are supplied under the terms of the Common
- * Development and Distribution License ("CDDL"), version 1.0. You may only use
+ * Development and Distribution License ("CDDL")k, version 1.0. You may only use
  * this file in accordance with the terms of version 1.0 of the CDDL.
  *
  * A full copy of the text of the CDDL should have accompanied this source. A
@@ -52,6 +52,14 @@ serial_write_stream(const char *filename);
 /* Report throughput periodically */
 chain_step_t
 serial_checkpoint(const char *name);
+
+/*
+ * Usually the output step is responsible for freeing payloads. Subcommands
+ * that don't have stream outputs still need to free this memory. A
+ * serial_null_output step does this and nothing more.
+ */
+chain_step_t
+serial_null_output(void);
 
 /* Off-the-shelf zstream_queue cost functions */
 

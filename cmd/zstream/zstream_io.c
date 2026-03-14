@@ -31,6 +31,7 @@
 #include <unistd.h>		/* isatty, STDIN_FILENO, STDOUT_...	*/
 
 #include "zstream_io.h"		/* drr_packet_t, zc_serial_process_f	*/
+#include "zstream_chain.h"
 #include "zstream_util.h"	/* safe_malloc				*/
 
 /* Init only the filename, chain_read_stream will prepare the FILE *. */
@@ -264,6 +265,18 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 	return (B_TRUE);
 }
 
+static boolean_t
+chain_null_output(drr_packet_t *item, void *ctxt, chain_attrs_t *attrs)
+{
+	(void) ctxt; (void) attrs;
+	if (item && item->dp_payload != NULL && item->dp_payload_size > 0) {
+		free(item->dp_payload);
+		item->dp_payload = NULL;
+		item->dp_payload_size = 0;
+	}
+	return (B_TRUE);
+}
+
 /*
  * Storage for the filename must remain valid during chain execution
  */
@@ -299,6 +312,20 @@ chain_step_t
 serial_write_stream(const char *filename)
 {
 	return (setup_io(filename, B_FALSE));
+}
+
+chain_step_t
+serial_null_output(void)
+{
+	return ((chain_step_t) {
+		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = 0,
+		.cs_context = NULL,
+		.cs_serial = {
+			.process = (zc_serial_process_f *)chain_null_output
+		}
+	});
 }
 
 size_t
