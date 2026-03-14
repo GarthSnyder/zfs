@@ -28,6 +28,10 @@ extern "C" {
 #include <stddef.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
+#include <sys/zio_compress.h>
+
+/* Determine whether a compression type indicates no compression */
+#define IS_UNCOMPRESSED(ct) (zio_compress_table[(int)(ct)].ci_compress == NULL)
 
 typedef struct {
 	enum zio_compress	cs_type;
