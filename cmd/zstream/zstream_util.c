@@ -117,7 +117,7 @@ decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
 	abd_t sabd, dabd;
 	int ret;
 
-	VERIFY3U(compress_type, !=, ZIO_COMPRESS_OFF);
+	VERIFY3B(IS_UNCOMPRESSED(compress_type), ==, B_FALSE);
 	abd_get_from_buf_struct(&sabd, inbuff, inbuff_size);
 	abd_get_from_buf_struct(&dabd, outbuff, logical_size);
 	ret = zio_decompress_data(compress_type, &sabd, &dabd,
@@ -142,6 +142,8 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 	uint8_t *outbuff = safe_malloc(inbuff_size);
 	abd_t	sabd, dabd;
 	size_t	csize, rounded;
+
+	VERIFY3B(IS_UNCOMPRESSED(compress_type.cs_type), ==, B_FALSE);
 
 	abd_t *pabd = abd_get_from_buf_struct(&dabd, outbuff, inbuff_size);
 	abd_get_from_buf_struct(&sabd, inbuff, inbuff_size);
