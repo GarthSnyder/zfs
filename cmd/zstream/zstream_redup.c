@@ -258,9 +258,9 @@ zstream_do_redup(int argc, char *argv[])
 	context.rc_rdt.ddt_count = 0;
 
 	zstream_chain_t redup_chain = {
-		STANDARD_INPUT_STACK(argv[0], 1024),
+		STANDARD_INPUT_STACK(argv[0]),
 		serial_redup_writes(&context),
-		STANDARD_OUTPUT_STACK(NULL, 512)
+		STANDARD_OUTPUT_STACK(NULL)
 	};
 
 	zstream_chain_exec(redup_chain, &attrs);

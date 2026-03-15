@@ -28,8 +28,6 @@ extern "C" {
 #include <stdint.h>
 #include <sys/zfs_ioctl.h>
 
-#include "zstream_queue.h"
-
 /*
  * A chain is a linear series of steps that process packets of data. The
  * purpose of this construct is to:
@@ -39,15 +37,13 @@ extern "C" {
  *   - Separate pipeline management from functional processing
  *   - Facilitate component reuse (checksum validation, I/O, etc.)
  *   - Automatically marshal data as it passes down the pipeline
- *   - Interface automatically between sequential and parallel processing
  *   - No, this was not written by an LLM, despite being a list
  *
  * Some terms:
  *
  * **STEP** - A chain_step_t struct that represents a packet-processing
- * module. Modules generally define a function named serial_* or
- * parallel_* that produces a chain_step_t which can be incorporated
- * directly into a chain.
+ * module. Modules generally define a function named serial_* that produces
+ * a chain_step_t which can be incorporated directly into a chain.
  *
  * **CHAIN** - An array of chain_step_t's. It's just data, so you can create
  * the array however you like. But normally you'd just declare the whole
@@ -55,21 +51,20 @@ extern "C" {
  *
  *	zstream_chain_t dump_chain = {
  *		serial_read_stream(infile),
- *		parallel_calc_fletcher4(f4_queue_length),
  *		serial_validate_fletcher4(),
  *		serial_byteswap(),
  *		serial_validate_records(),
  *		serial_dump_records(&dump_args),
+ *		serial_null_output(),
  *		chain_terminator()
  *	}
  *
  * Or more succinctly:
  *
  *	zstream_chain_t recompress_chain = {
- *		STANDARD_INPUT_STACK(infile, 1024),
- *		parallel_decompress_writes(&spec),
- *		parallel_compress_writes(&spec),
- *		STANDARD_OUTPUT_STACK(NULL, 512)
+ *		STANDARD_INPUT_STACK(infile),
+ *		serial_dump_records(&dump_args),
+ *		NULL_OUTPUT_STACK()
  *	};
  *
  * Chains must be terminated by a step of type CS_TERMINATE.
@@ -83,23 +78,19 @@ extern "C" {
  * **PROCESSING FUNCTION** - Each step names a processing function that
  * transforms a buffer of its input size to a buffer of its output size. The
  * transformation happens in place, in a single buffer provided by the
- * chain. (Parallel steps must also identify a cost function; see
- * zstream_queue.h.)
+ * chain.
  *
- * The processing function for a serial step should return a boolean_t,
- * normally B_TRUE, but it can return B_FALSE to indicate that no more data
- * will be forthcoming. Only the first step in a chain should use this
- * feature, however.
+ * The processing function should return a boolean_t, normally B_TRUE, but
+ * it can return B_FALSE to indicate that no more data will be forthcoming.
+ * Only the first step in a chain should use this feature.
  *
- * Serial functions are called with a NULL packet when the end of the
- * stream passes by them. Since parallel functions may be called in any
- * order, they have no concept of "end of stream" and do not receive this
- * notification.
+ * Functions are called with a NULL packet when the end of the stream
+ * passes by them.
  *
  * **CONTEXT** - An arbitrary void * that the chain passes along to the
  * processing function as an argument.
  *
- * **CHAIN ATTRIBUTES** - A set of flags available to all serial steps.
+ * **CHAIN ATTRIBUTES** - A set of flags available to all steps.
  */
 
 /*
@@ -129,7 +120,6 @@ extern "C" {
 
 typedef struct {
 	uint64_t	rs_num_records;
-	uint64_t	rs_num_flagged;		/* Not used by zstream_chain */
 	uint64_t	rs_total_header_bytes;
 	uint64_t	rs_total_payload_bytes;
 } record_stats_t;
@@ -137,20 +127,17 @@ typedef struct {
 typedef struct {
 	uint64_t	ca_feature_flags;	/* From drr_versioninfo */
 	uint64_t	ca_attrs;		/* Discovered attributes */
-	uint64_t	ca_command_opts;
+	uint64_t	ca_command_opts;	/* Command line */
 	record_stats_t	ca_totals_in;
 	record_stats_t	ca_totals_out;
 	record_stats_t	ca_stats_in[DRR_NUMTYPES];
 	record_stats_t	ca_stats_out[DRR_NUMTYPES];
 } chain_attrs_t;
 
-/*
- * See zstream_queue.h for function signatures used by parallel steps.
- */
 typedef boolean_t
 zc_serial_process_f(void *item, void *context, chain_attrs_t *chain);
 
-typedef enum { CS_SERIAL, CS_PARALLEL, CS_TERMINATE } step_type_t;
+typedef enum { CS_SERIAL, CS_TERMINATE } step_type_t;
 
 typedef struct chain_step
 {
@@ -158,30 +145,12 @@ typedef struct chain_step
 	size_t		cs_in_size;
 	size_t		cs_out_size;
 	void		*cs_context;
-	union {
-		struct {
-			zc_serial_process_f	*process;      /* cs_serial */
-		} cs_serial;
-		struct {
-			size_t			queue_length;  /* cs_parallel */
-			size_t			batch_budget;
-			zq_estimate_cost_f	*cost;
-			zq_process_item_f	*process;
-		} cs_parallel;
-	};
+	struct {
+		zc_serial_process_f	*process;
+	} cs_serial;
 } chain_step_t;
 
 typedef chain_step_t zstream_chain_t[];
-
-/*
- * Serialize chain execution for debugging. This option forces all chains to
- * execute nonconcurrently. There are no worker threads, and each item
- * traverses the entire chain before execution returns to the head.
- *
- * Serialized execution should be logically identical to normal execution.
- * If it does not yield identical results, there's a problem somewhere.
- */
-extern boolean_t serialize_chains;
 
 /*
  * Execute a chain. Returns once execution is complete. You can pass NULL
