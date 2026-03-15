@@ -45,17 +45,19 @@ static compression_spec_t	specs[MAX_COMPRESSION_STEPS];
 static int			next_spec = 0;
 
 /*
- * These two functions determine which packets require processing. A packet
- * that's already compressed with the target profile can be skipped.
+ * Item is known to be a DRR_WRITE packet. Determine whether current
+ * compression is compatible with desired compression and whether the
+ * current record is modifiable at all.
  */
 static boolean_t
-needs_compression(drr_packet_t *item, compression_spec_t *context)
+needs_modification(drr_packet_t *item, compression_spec_t *target)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
+	enum zio_compress ctype = drrw->drr_compressiontype;
 	uint8_t cur_level;
 
-	if (drr->drr_type != DRR_WRITE) {
+	if (IS_UNCOMPRESSED(target->cs_type) && IS_UNCOMPRESSED(ctype)) {
 		return (B_FALSE);
 	}
 	/*
@@ -66,19 +68,28 @@ needs_compression(drr_packet_t *item, compression_spec_t *context)
 	 */
 	for (int i = 0; i < ZIO_DATA_SALT_LEN; i++) {
 		if (drrw->drr_salt[i] != 0) {
-			return (0);
+			return (B_FALSE);
 		}
 	}
-	if (drrw->drr_compressiontype == context->cs_type) {
-		if (context->cs_type == ZIO_COMPRESS_ZSTD) {
-			cur_level = zfs_get_hdrlevel((void *)item->dp_payload);
-			if (context->cs_level != cur_level) {
-				return (B_TRUE);
-			}
-		}
-		return (B_FALSE);
+	if (ctype != target->cs_type) {
+		return (B_TRUE);
 	}
-	return (B_TRUE);
+	if (ZIO_COMPRESS_HASLEVEL(target->cs_type)) {
+		cur_level = zfs_get_hdrlevel((void *)item->dp_payload);
+		if (target->cs_type == ZIO_COMPRESS_ZSTD &&
+		    target->cs_level == ZIO_COMPLEVEL_DEFAULT)
+		{
+			return (cur_level != ZIO_ZSTD_LEVEL_DEFAULT);
+		}
+		return (target->cs_level != cur_level);
+	}
+	return (B_FALSE);
+}
+
+static boolean_t
+needs_compression(drr_packet_t *item, compression_spec_t *context)
+{
+	return (needs_modification(item, context));
 }
 
 /*
@@ -93,16 +104,9 @@ needs_decompression(drr_packet_t *item, compression_spec_t *context)
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
 	enum zio_compress ctype	= drrw->drr_compressiontype;
 
-	if (drr->drr_type != DRR_WRITE ||
-	    zio_compress_table[ctype].ci_decompress == NULL)
-	{
+	if (IS_UNCOMPRESSED(ctype))
 		return (B_FALSE);
-	}
-	if (context != NULL) {
-		return (needs_compression(item, context));
-	} else {
-		return (B_TRUE);
-	}
+	return (needs_compression(item, context));
 }
 
 static boolean_t
@@ -110,14 +114,15 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context,
     chain_attrs_t *attrs)
 {
 	(void) attrs;
-	if (item == NULL || !needs_decompression(item, context))
-		return (B_TRUE);
-
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
 	uint8_t *debuff;
 
-	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
+	if (item == NULL || drr->drr_type != DRR_WRITE ||
+	    !needs_decompression(item, context))
+	{
+		return (B_TRUE);
+	}
 
 	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
 	    drrw->drr_logical_size, drrw->drr_compressiontype);
@@ -141,17 +146,20 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context,
     chain_attrs_t *attrs)
 {
 	(void) attrs;
-	if (item == NULL || !needs_compression(item, context))
-		return (B_TRUE);
-
 	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw	 = &drr->drr_u.drr_write;
-	enum zio_compress ctype	 = drrw->drr_compressiontype;
-	uint8_t *cbuff = safe_calloc(drrw->drr_logical_size);
+
+	if (item == NULL || drr->drr_type != DRR_WRITE ||
+	    !needs_compression(item, context))
+	{
+		return (B_TRUE);
+	}
+
+	struct drr_write *drrw = &drr->drr_u.drr_write;
+	enum zio_compress ctype = drrw->drr_compressiontype;
+	uint8_t *cbuff;
 	size_t	csize;
 
-	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
-	VERIFY0P(zio_compress_table[ctype].ci_decompress);
+	VERIFY3B(IS_UNCOMPRESSED(ctype), ==, B_TRUE);
 	cbuff = compress_buffer(item->dp_payload, item->dp_payload_size,
 	    *context, &csize);
 	if (cbuff == NULL) {
@@ -219,7 +227,7 @@ int
 zstream_do_recompress(int argc, char *argv[])
 {
 	int c;
-	int level = 0;
+	int level = ZIO_COMPLEVEL_DEFAULT;
 	chain_attrs_t attrs = { .ca_command_opts = CA_FORBID_DEDUP };
 
 	while ((c = getopt(argc, argv, "l:")) != -1) {
@@ -253,11 +261,10 @@ zstream_do_recompress(int argc, char *argv[])
 			if (!strcmp(argv[0], zio_compress_table[ct].ci_name))
 				break;
 		}
-		if (ct == ZIO_COMPRESS_FUNCTIONS ||
-		    zio_compress_table[ct].ci_compress == NULL)
-		{
-			fprintf(stderr, "Invalid compression type %s.\n",
-			    argv[0]);
+		if (ct == ZIO_COMPRESS_FUNCTIONS || IS_UNCOMPRESSED(ct)) {
+			fprintf(stderr, "Invalid compression type %s.\nUse "
+			    "'off' to mark records as uncompressed (without "
+			    "decompressing).\n", argv[0]);
 			exit(2);
 		}
 		spec.cs_type = ct;
