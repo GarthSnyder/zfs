@@ -328,21 +328,6 @@ serial_null_output(void)
 	});
 }
 
-size_t
-constant_cost_of_one(drr_packet_t *packet, void *context)
-{
-	(void) context;
-	(void) packet;
-	return (1);
-}
-
-size_t
-payload_size_as_cost(drr_packet_t *packet, void *context)
-{
-	(void) context;
-	return (packet->dp_payload_size);
-}
-
 static boolean_t
 chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt, void *dummy)
 {

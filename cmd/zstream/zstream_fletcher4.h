@@ -30,43 +30,14 @@ extern "C" {
  * zstream_chain module for calculating, validating, and inscribing
  * Fletcher4 checksums.
  *
- * Checksums are calculated for the entire stream between a DRR_BEGIN record
- * and its corresponding DRR_END, so the final checksum assembly must be
- * performed as a serial step. However, we can precalculate the checksums
- * for individual payloads in parallel.
+ * serial_validate_fletcher4() validates record checksums against the
+ * running stream checksum and fails loudly on any mismatch.
  *
- * The normal sequence is a parallel_calc_fletcher4() step followed by a
- * serial_validate_fletcher4() or serial_add_fletcher4() step.
- *
- * Fletcher4 is just addition, so it's quite fast on its own. However, not
- * parallelizing these calculations reduces aggregate throughput because of
- * [Amdahl's Law](https://en.wikipedia.org/wiki/Amdahl%27s_law). Briefly
- * stated: nonparallelizable work limits the total speedup obtainable
- * through parallelization, often to a nonintuitive degree. Here, the effect
- * is magnified because parallelizable work such as recompression lies
- * beyond a Fletcher4 bottleneck.
+ * serial_add_fletcher4() inscribes record checksums from the running
+ * stream checksum, replacing whatever was there before.
  */
 
 #define MAX_FLETCHER_4 8	/* Max checksum ops in one chain */
-
-/*
- * Fletcher 4 incremental blocks are limited to 8MB in size, and some ZFS
- * payloads can be larger than this. The single preallocated checksum
- * block captures the majority of cases. If more checksum blocks are needed,
- * they must be allocated dynamically.
- *
- * It's likely pointless to precalculate the header checksum since the
- * amount of data involved is small. This allows payloadless records to
- * circumvent multithreaded dispatching altogether.
- */
-typedef struct {
-	drr_packet_t	dp_base;
-	zio_cksum_t	dp_fletcher4_payload;
-	zio_cksum_t	*dp_fletcher4_overflow;
-} drr_fletcher4_t;
-
-chain_step_t
-parallel_calc_fletcher4(int queue_length);
 
 chain_step_t
 serial_validate_fletcher4(void);

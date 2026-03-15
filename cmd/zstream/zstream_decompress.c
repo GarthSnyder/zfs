@@ -207,9 +207,9 @@ zstream_do_decompress(int argc, char *argv[])
 	}
 	ENABLE_OPTION(&attrs, CA_FORBID_DEDUP);
 	zstream_chain_t decompress_chain = {
-		STANDARD_INPUT_STACK(NULL, 1024),
+		STANDARD_INPUT_STACK(NULL),
 		serial_decompress_named_writes(),
-		STANDARD_OUTPUT_STACK(NULL, 512)
+		STANDARD_OUTPUT_STACK(NULL)
 	};
 
 	zstream_chain_exec(decompress_chain, &attrs);

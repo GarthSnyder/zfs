@@ -28,10 +28,10 @@ extern "C" {
 #include "zstream_io.h"
 
 chain_step_t
-parallel_decompress_writes(compression_spec_t *target);
+serial_decompress_writes(compression_spec_t *target);
 
 chain_step_t
-parallel_compress_writes(compression_spec_t *target);
+serial_compress_writes(compression_spec_t *target);
 
 #ifdef __cplusplus
 }
