@@ -36,8 +36,7 @@
 
 #include "zstream.h"		/* zstream_usage, zstream_do_recompress	*/
 #include "zstream_modules.h"	/* STANDARD_INPUT_STACK...		*/
-#include "zstream_queue.h"	/* zq_estimate_cost_f...		*/
-#include "zstream_recompress.h"	/* parallel_compress_writes		*/
+#include "zstream_recompress.h"	/* serial_compress_writes		*/
 #include "zstream_util.h"	/* compression_spec_t...		*/
 
 #define MAX_COMPRESSION_STEPS  4
@@ -46,14 +45,73 @@ static compression_spec_t	specs[MAX_COMPRESSION_STEPS];
 static int			next_spec = 0;
 
 /*
- * We can ignore the context here because it's already been evaluated by the
- * cost function. If the cost function returned something other than zero,
- * we have to decompress.
+ * These two functions determine which packets require processing. A packet
+ * that's already compressed with the target profile can be skipped.
  */
-static void
-chain_decompress_writes(drr_packet_t *item, void *context)
+static boolean_t
+needs_compression(drr_packet_t *item, compression_spec_t *context)
 {
-	(void) context;
+	dmu_replay_record_t *drr = &item->dp_drr;
+	struct drr_write *drrw	= &drr->drr_u.drr_write;
+	uint8_t cur_level;
+
+	if (drr->drr_type != DRR_WRITE) {
+		return (B_FALSE);
+	}
+	/*
+	 * In order to recompress an encrypted block, you have to decrypt,
+	 * decompress, recompress, and re-encrypt. That can be a future
+	 * enhancement (along with decryption or re-encryption), but for now
+	 * we skip encrypted blocks.
+	 */
+	for (int i = 0; i < ZIO_DATA_SALT_LEN; i++) {
+		if (drrw->drr_salt[i] != 0) {
+			return (0);
+		}
+	}
+	if (drrw->drr_compressiontype == context->cs_type) {
+		if (context->cs_type == ZIO_COMPRESS_ZSTD) {
+			cur_level = zfs_get_hdrlevel((void *)item->dp_payload);
+			if (context->cs_level != cur_level) {
+				return (B_TRUE);
+			}
+		}
+		return (B_FALSE);
+	}
+	return (B_TRUE);
+}
+
+/*
+ * Don't decompress packets that aren't compressed. And don't decompress
+ * them if their ultimate fate is to be recompressed using the compression
+ * profile that's already in use.
+ */
+static boolean_t
+needs_decompression(drr_packet_t *item, compression_spec_t *context)
+{
+	dmu_replay_record_t *drr = &item->dp_drr;
+	struct drr_write *drrw	= &drr->drr_u.drr_write;
+	enum zio_compress ctype	= drrw->drr_compressiontype;
+
+	if (drr->drr_type != DRR_WRITE ||
+	    zio_compress_table[ctype].ci_decompress == NULL)
+	{
+		return (B_FALSE);
+	}
+	if (context != NULL) {
+		return (needs_compression(item, context));
+	} else {
+		return (B_TRUE);
+	}
+}
+
+static boolean_t
+chain_decompress_writes(drr_packet_t *item, compression_spec_t *context,
+    chain_attrs_t *attrs)
+{
+	(void) attrs;
+	if (item == NULL || !needs_decompression(item, context))
+		return (B_TRUE);
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
@@ -75,11 +133,17 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 	item->dp_payload_size = drrw->drr_logical_size;
 	drrw->drr_compressed_size = 0;
 	drrw->drr_compressiontype = 0;
+	return (B_TRUE);
 }
 
-static void
-chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
+static boolean_t
+chain_compress_writes(drr_packet_t *item, compression_spec_t *context,
+    chain_attrs_t *attrs)
 {
+	(void) attrs;
+	if (item == NULL || !needs_compression(item, context))
+		return (B_TRUE);
+
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	 = &drr->drr_u.drr_write;
 	enum zio_compress ctype	 = drrw->drr_compressiontype;
@@ -89,7 +153,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
 	VERIFY0P(zio_compress_table[ctype].ci_decompress);
 	cbuff = compress_buffer(item->dp_payload, item->dp_payload_size,
-		*context, &csize);
+	    *context, &csize);
 	if (cbuff == NULL) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
@@ -100,70 +164,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 		drrw->drr_compressed_size = csize;
 		drrw->drr_compressiontype = context->cs_type;
 	}
-}
-
-/*
- * A cost of zero waives processing for the current item. If we want to
- * process it, the cost will always be item->dp_payload_size. So in these
- * two cost functions, we're mostly determining which packets need
- * attention. A packet that's already compressed with the target compression
- * profile can be ignored.
- */
-static size_t
-chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
-{
-	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw	= &drr->drr_u.drr_write;
-	uint8_t cur_level;
-
-	if (drr->drr_type != DRR_WRITE) {
-		return (0);
-	}
-	/*
-	 * In order to recompress an encrypted block, you have to decrypt,
-	 * decompress, recompress, and re-encrypt. That can be a future
-	 * enhancement (along with decryption or re-encryption), but for now
-	 * we skip encrypted blocks.
-	 */
-	for (int i = 0; i < ZIO_DATA_SALT_LEN; i++) {
-		if (drrw->drr_salt[i] != 0) {
-			return (0);
-		}
-	}
-	if (drrw->drr_compressiontype == context->cs_type) {
-		if (context->cs_type == ZIO_COMPRESS_ZSTD) {
-			cur_level = zfs_get_hdrlevel((void *)item->dp_payload);
-			if (context->cs_level != cur_level) {
-				return (item->dp_payload_size);
-			}
-		}
-		return (0);
-	}
-	return (item->dp_payload_size);
-}
-
-/*
- * Don't decompress packets that aren't compressed. And don't decompress
- * them if their ultimate fate is to be recompressed using the compression
- * profile that's already in use.
- */
-static size_t
-chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
-{
-	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw	= &drr->drr_u.drr_write;
-	enum zio_compress ctype	= drrw->drr_compressiontype;
-
-	if (drr->drr_type != DRR_WRITE ||
-	    zio_compress_table[ctype].ci_decompress == NULL)
-	{
-		return (0);
-	}
-	if (context != NULL) {
-		return (chain_compress_cost(item, context));
-	} else {
-		return (item->dp_payload_size);
-	}
+	return (B_TRUE);
 }
 
 /*
@@ -172,7 +173,7 @@ chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
  * uncompressed).
  */
 chain_step_t
-parallel_decompress_writes(compression_spec_t *target)
+serial_decompress_writes(compression_spec_t *target)
 {
 	int this_spec = next_spec++ % MAX_COMPRESSION_STEPS;
 	compression_spec_t *context = &specs[this_spec];
@@ -183,21 +184,19 @@ parallel_decompress_writes(compression_spec_t *target)
 		*context = *target;
 	}
 	return ((chain_step_t) {
-		.cs_type = CS_PARALLEL,
+		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
-		.cs_parallel = {
-			.queue_length = 256,
-			.batch_budget = 256 * 1024,
-			.process = (zq_process_item_f *)chain_decompress_writes,
-			.cost = (zq_estimate_cost_f *)chain_decompress_cost
+		.cs_serial = {
+			.process =
+			    (zc_serial_process_f *)chain_decompress_writes
 		}
 	});
 }
 
 chain_step_t
-parallel_compress_writes(compression_spec_t *target)
+serial_compress_writes(compression_spec_t *target)
 {
 	int this_spec = next_spec++ % MAX_COMPRESSION_STEPS;
 	compression_spec_t *context = &specs[this_spec];
@@ -205,15 +204,13 @@ parallel_compress_writes(compression_spec_t *target)
 	VERIFY3P(target, !=, NULL);
 	*context = *target;
 	return ((chain_step_t) {
-		.cs_type = CS_PARALLEL,
+		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
-		.cs_parallel = {
-			.queue_length = 1024,
-			.batch_budget = 32 * 1024,
-			.process = (zq_process_item_f *)chain_compress_writes,
-			.cost = (zq_estimate_cost_f *)chain_compress_cost
+		.cs_serial = {
+			.process =
+			    (zc_serial_process_f *)chain_compress_writes
 		}
 	});
 }
@@ -267,10 +264,10 @@ zstream_do_recompress(int argc, char *argv[])
 	}
 
 	zstream_chain_t recompress_chain = {
-		STANDARD_INPUT_STACK(NULL, 1024),
-		parallel_decompress_writes(&spec),
-		parallel_compress_writes(&spec),
-		STANDARD_OUTPUT_STACK(NULL, 512)
+		STANDARD_INPUT_STACK(NULL),
+		serial_decompress_writes(&spec),
+		serial_compress_writes(&spec),
+		STANDARD_OUTPUT_STACK(NULL)
 	};
 
 	zstream_chain_exec(recompress_chain, &attrs);
