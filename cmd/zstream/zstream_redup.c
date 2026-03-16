@@ -37,8 +37,7 @@
 #include <sys/zio_checksum.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
-#include "zstream_shared.h"
-
+#include "zstream_util.h"
 
 #define	MAX_RDT_PHYSMEM_PERCENT		20
 #define	SMALLEST_POSSIBLE_MAX_RDT_MB		128

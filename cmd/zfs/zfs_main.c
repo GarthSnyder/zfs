@@ -292,12 +292,13 @@ get_usage(zfs_help_t idx)
 {
 	switch (idx) {
 	case HELP_CLONE:
-		return (gettext("\tclone [-pu] [-o property=value] ... "
+		return (gettext("\tclone [-p[p]u] [-o property=value] ... "
 		    "<snapshot> <filesystem|volume>\n"));
 	case HELP_CREATE:
-		return (gettext("\tcreate [-Pnpuv] [-o property=value] ... "
+		return (gettext("\tcreate [-Pnp[p]uv] [-o property=value] ... "
 		    "<filesystem>\n"
-		    "\tcreate [-Pnpsv] [-b blocksize] [-o property=value] ... "
+		    "\tcreate [-Pnp[p]sv] [-b blocksize] "
+		    "[-o property=value] ... "
 		    "-V <size> <volume>\n"));
 	case HELP_DESTROY:
 		return (gettext("\tdestroy [-fnpRrv] <filesystem|volume>\n"
@@ -338,16 +339,17 @@ get_usage(zfs_help_t idx)
 	case HELP_RENAME:
 		return (gettext("\trename [-f] <filesystem|volume|snapshot> "
 		    "<filesystem|volume|snapshot>\n"
-		    "\trename -p [-f] <filesystem|volume> <filesystem|volume>\n"
+		    "\trename -p[p] [-f] <filesystem|volume> "
+		    "<filesystem|volume>\n"
 		    "\trename -u [-f] <filesystem> <filesystem>\n"
 		    "\trename -r <snapshot> <snapshot>\n"));
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DLPbcehnpsVvw] "
+		return (gettext("\tsend [-DLPbcehnpsUVvw] "
 		    "[-i|-I snapshot]\n"
 		    "\t     [-R [-X dataset[,dataset]...]]     <snapshot>\n"
-		    "\tsend [-DnVvPLecw] [-i snapshot|bookmark] "
+		    "\tsend [-DnVvPLecwU] [-i snapshot|bookmark] "
 		    "<filesystem|volume|snapshot>\n"
 		    "\tsend [-DnPpVvLec] [-i bookmark|snapshot] "
 		    "--redact <bookmark> <snapshot>\n"
@@ -766,6 +768,26 @@ finish_progress(const char *done)
 	pt_header = NULL;
 }
 
+static void
+makeprops_parents(nvlist_t **ptr, boolean_t parents_nomount)
+{
+	nvlist_t *props = NULL;
+
+	if (parents_nomount) {
+		if (nvlist_alloc(&props, NV_UNIQUE_NAME, 0) != 0)
+			nomem();
+
+		if (nvlist_add_string(props,
+		    zfs_prop_to_name(ZFS_PROP_CANMOUNT),
+		    "off") != 0) {
+			nvlist_free(props);
+			nomem();
+		}
+	}
+
+	*ptr = props;
+}
+
 static int
 zfs_mount_and_share(libzfs_handle_t *hdl, const char *dataset, zfs_type_t type)
 {
@@ -826,6 +848,7 @@ zfs_mount_and_share(libzfs_handle_t *hdl, const char *dataset, zfs_type_t type)
  * the clone exists.
  *
  * The '-p' flag creates all the non-existing ancestors of the target first.
+ * If repeated twice, the ancestors are created with `canmount=off`.
  *
  * The '-u' flag prevents the newly created file system from being mounted.
  */
@@ -834,8 +857,10 @@ zfs_do_clone(int argc, char **argv)
 {
 	zfs_handle_t *zhp = NULL;
 	boolean_t parents = B_FALSE;
+	boolean_t parents_nomount = B_FALSE;
 	boolean_t nomount = B_FALSE;
 	nvlist_t *props;
+	nvlist_t *props_parents = NULL;
 	int ret = 1;
 	int c;
 
@@ -852,7 +877,10 @@ zfs_do_clone(int argc, char **argv)
 			}
 			break;
 		case 'p':
-			parents = B_TRUE;
+			if (!parents)
+				parents = B_TRUE;
+			else
+				parents_nomount = B_TRUE;
 			break;
 		case 'u':
 			nomount = B_TRUE;
@@ -900,9 +928,11 @@ zfs_do_clone(int argc, char **argv)
 			ret = 0;
 			goto error;
 		}
-		if (zfs_create_ancestors(g_zfs, argv[1]) != 0) {
+
+		makeprops_parents(&props_parents, parents_nomount);
+		if (zfs_create_ancestors_props(g_zfs, argv[1],
+		    props_parents) != 0)
 			goto error;
-		}
 	}
 
 	/* pass to libzfs */
@@ -930,11 +960,13 @@ error:
 	zfs_close(zhp);
 error_open:
 	nvlist_free(props);
+	nvlist_free(props_parents);
 	return (!!ret);
 
 usage:
 	ASSERT0P(zhp);
 	nvlist_free(props);
+	nvlist_free(props_parents);
 	usage(B_FALSE);
 	return (-1);
 }
@@ -1068,6 +1100,7 @@ default_volblocksize(zpool_handle_t *zhp, nvlist_t *props)
  * SPA_VERSION_REFRESERVATION, we set a refreservation instead.
  *
  * The '-p' flag creates all the non-existing ancestors of the target first.
+ * If repeated twice, the ancestors are created with `canmount=off`.
  *
  * The '-n' flag is no-op (dry run) mode.  This will perform a user-space sanity
  * check of arguments and properties, but does not check for permissions,
@@ -1090,12 +1123,14 @@ zfs_do_create(int argc, char **argv)
 	boolean_t noreserve = B_FALSE;
 	boolean_t bflag = B_FALSE;
 	boolean_t parents = B_FALSE;
+	boolean_t parents_nomount = B_FALSE;
 	boolean_t dryrun = B_FALSE;
 	boolean_t nomount = B_FALSE;
 	boolean_t verbose = B_FALSE;
 	boolean_t parseable = B_FALSE;
 	int ret = 1;
 	nvlist_t *props;
+	nvlist_t *props_parents = NULL;
 	uint64_t intval;
 	const char *strval;
 
@@ -1124,7 +1159,10 @@ zfs_do_create(int argc, char **argv)
 			parseable = B_TRUE;
 			break;
 		case 'p':
-			parents = B_TRUE;
+			if (!parents)
+				parents = B_TRUE;
+			else
+				parents_nomount = B_TRUE;
 			break;
 		case 'b':
 			bflag = B_TRUE;
@@ -1274,6 +1312,8 @@ zfs_do_create(int argc, char **argv)
 	}
 
 	if (parents && zfs_name_valid(argv[0], type)) {
+		makeprops_parents(&props_parents, parents_nomount);
+
 		/*
 		 * Now create the ancestors of target dataset.  If the target
 		 * already exists and '-p' option was used we should not
@@ -1289,7 +1329,8 @@ zfs_do_create(int argc, char **argv)
 			    "create ancestors of %s\n", argv[0]);
 		}
 		if (!dryrun) {
-			if (zfs_create_ancestors(g_zfs, argv[0]) != 0) {
+			if (zfs_create_ancestors_props(g_zfs, argv[0],
+			    props_parents) != 0) {
 				goto error;
 			}
 		}
@@ -1348,9 +1389,11 @@ zfs_do_create(int argc, char **argv)
 	(void) zfs_mount_and_share(g_zfs, argv[0], ZFS_TYPE_DATASET);
 error:
 	nvlist_free(props);
+	nvlist_free(props_parents);
 	return (ret);
 badusage:
 	nvlist_free(props);
+	nvlist_free(props_parents);
 	usage(B_FALSE);
 	return (2);
 }
@@ -4039,6 +4082,8 @@ found3:;
  * Renames the given dataset to another of the same type.
  *
  * The '-p' flag creates all the non-existing ancestors of the target first.
+ * If repeated twice, the ancestors are created with `canmount=off`.
+ *
  * The '-u' flag prevents file systems from being remounted during rename.
  */
 static int
@@ -4050,12 +4095,17 @@ zfs_do_rename(int argc, char **argv)
 	int ret = 1;
 	int types;
 	boolean_t parents = B_FALSE;
+	boolean_t parents_nomount = B_FALSE;
+	nvlist_t *props_parents = NULL;
 
 	/* check options */
 	while ((c = getopt(argc, argv, "pruf")) != -1) {
 		switch (c) {
 		case 'p':
-			parents = B_TRUE;
+			if (parents)
+				parents_nomount = B_TRUE;
+			else
+				parents = B_TRUE;
 			break;
 		case 'r':
 			flags.recursive = B_TRUE;
@@ -4122,9 +4172,13 @@ zfs_do_rename(int argc, char **argv)
 		goto error_open;
 
 	/* If we were asked and the name looks good, try to create ancestors. */
-	if (parents && zfs_name_valid(argv[1], zfs_get_type(zhp)) &&
-	    zfs_create_ancestors(g_zfs, argv[1]) != 0) {
-		goto error;
+	if (parents && zfs_name_valid(argv[1], zfs_get_type(zhp))) {
+
+		makeprops_parents(&props_parents, parents_nomount);
+		if (zfs_create_ancestors_props(g_zfs, argv[1],
+		    props_parents) != 0) {
+			goto error;
+		}
 	}
 
 	ret = (zfs_rename(zhp, argv[1], flags) != 0);
@@ -4132,6 +4186,7 @@ zfs_do_rename(int argc, char **argv)
 error:
 	zfs_close(zhp);
 error_open:
+	nvlist_free(props_parents);
 	return (ret);
 }
 
@@ -4753,11 +4808,12 @@ zfs_do_send(int argc, char **argv)
 		{"holds",	no_argument,		NULL, 'h'},
 		{"saved",	no_argument,		NULL, 'S'},
 		{"exclude",	required_argument,	NULL, 'X'},
+		{"no-preserve-encryption",	no_argument,	NULL, 'U'},
 		{0, 0, 0, 0}
 	};
 
 	/* check options */
-	while ((c = getopt_long(argc, argv, ":i:I:RsDpVvnPLeht:cwbd:SX:",
+	while ((c = getopt_long(argc, argv, ":i:I:RsDpVvnPLeht:cwbd:SX:U",
 	    long_options, NULL)) != -1) {
 		switch (c) {
 		case 'X':
@@ -4842,6 +4898,9 @@ zfs_do_send(int argc, char **argv)
 			break;
 		case 'S':
 			flags.saved = B_TRUE;
+			break;
+		case 'U':
+			flags.no_preserve_encryption = B_TRUE;
 			break;
 		case ':':
 			/*
@@ -7635,14 +7694,10 @@ unshare_unmount_path(int op, char *path, int flags, boolean_t is_manual)
 	zfs_handle_t *zhp;
 	int ret = 0;
 	struct stat64 statbuf;
-	struct extmnttab entry;
+	struct mnttab entry;
 	const char *cmdname = (op == OP_SHARE) ? "unshare" : "unmount";
 	ino_t path_inode;
 	char *zfs_mntpnt, *entry_mntpnt;
-
-	/*
-	 * Search for the given (major,minor) pair in the mount table.
-	 */
 
 	if (getextmntent(path, &entry, &statbuf) != 0) {
 		if (op == OP_SHARE) {
@@ -9367,7 +9422,6 @@ main(int argc, char **argv)
 	/*
 	 * Run the appropriate command.
 	 */
-	libzfs_mnttab_cache(g_zfs, B_TRUE);
 	if (find_command_idx(cmdname, &i) == 0) {
 		current_command = &command_table[i];
 		ret = command_table[i].func(argc - 1, newargv + 1);

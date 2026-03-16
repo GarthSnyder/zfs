@@ -44,7 +44,7 @@
 #include <sys/zio.h>
 #include <zfs_fletcher.h>
 #include "zstream.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 /*
  * If dump mode is enabled, the number of bytes to print per line

@@ -1696,6 +1696,11 @@ zpool_create(libzfs_handle_t *hdl, const char *pool, nvlist_t *nvroot,
 			    "one or more devices could not be opened"));
 			return (zfs_error(hdl, EZFS_BADDEV, errbuf));
 
+		case EDOM:
+			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+			    "block size out of range or does not match"));
+			return (zfs_error(hdl, EZFS_BADDEV, errbuf));
+
 		default:
 			return (zpool_standard_error(hdl, errno, errbuf));
 		}
@@ -2863,8 +2868,11 @@ zpool_scan_range(zpool_handle_t *zhp, pool_scan_func_t func,
 	nvlist_t *args = fnvlist_alloc();
 	fnvlist_add_uint64(args, "scan_type", (uint64_t)func);
 	fnvlist_add_uint64(args, "scan_command", (uint64_t)cmd);
-	fnvlist_add_uint64(args, "scan_date_start", (uint64_t)date_start);
-	fnvlist_add_uint64(args, "scan_date_end", (uint64_t)date_end);
+	if (date_start != 0 || date_end != 0) {
+		fnvlist_add_uint64(args, "scan_date_start",
+		    (uint64_t)date_start);
+		fnvlist_add_uint64(args, "scan_date_end", (uint64_t)date_end);
+	}
 
 	err = lzc_scrub(ZFS_IOC_POOL_SCRUB, zhp->zpool_name, args, NULL);
 	fnvlist_free(args);
@@ -4407,7 +4415,8 @@ zpool_clear(zpool_handle_t *zhp, const char *path, nvlist_t *rewindnvl)
 	zc.zc_cookie = policy.zlp_rewind;
 
 	zcmd_alloc_dst_nvlist(hdl, &zc, zhp->zpool_config_size * 2);
-	zcmd_write_src_nvlist(hdl, &zc, rewindnvl);
+	if (rewindnvl != NULL)
+		zcmd_write_src_nvlist(hdl, &zc, rewindnvl);
 
 	while ((error = zfs_ioctl(hdl, ZFS_IOC_CLEAR, &zc)) != 0 &&
 	    errno == ENOMEM)

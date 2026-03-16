@@ -19,6 +19,7 @@ zstream_SOURCES = \
 	%D%/zstream_compress.h \
 	%D%/zstream_decompress.c \
 	%D%/zstream_dedup.c \
+	%D%/zstream_drop_record.c \
 	%D%/zstream_dump.c \
 	%D%/zstream_fletcher4.c \
 	%D%/zstream_fletcher4.h \
@@ -34,11 +35,11 @@ zstream_SOURCES = \
 	%D%/zstream_queue.c \
 	%D%/zstream_queue.h \
 	%D%/zstream_redup.c \
-	%D%/zstream_shared.c \
-	%D%/zstream_shared.h \
 	%D%/zstream_token.c \
 	%D%/zstream_validate.c \
 	%D%/zstream_validate.h
+	%D%/zstream_util.c \
+	%D%/zstream_util.h
 
 zstream_LDADD = \
 	libzfs.la \

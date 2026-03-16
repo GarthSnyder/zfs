@@ -37,7 +37,7 @@
 #include <sys/zstd/zstd.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 int
 zstream_do_decompress(int argc, char *argv[])

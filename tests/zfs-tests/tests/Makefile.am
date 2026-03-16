@@ -677,6 +677,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_clone/zfs_clone_008_neg.ksh \
 	functional/cli_root/zfs_clone/zfs_clone_009_neg.ksh \
 	functional/cli_root/zfs_clone/zfs_clone_010_pos.ksh \
+	functional/cli_root/zfs_clone/zfs_clone_011_pos.ksh \
 	functional/cli_root/zfs_clone/zfs_clone_deeply_nested.ksh \
 	functional/cli_root/zfs_clone/zfs_clone_encrypted.ksh \
 	functional/cli_root/zfs_clone/zfs_clone_nomount.ksh \
@@ -705,6 +706,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_create/zfs_create_012_pos.ksh \
 	functional/cli_root/zfs_create/zfs_create_013_pos.ksh \
 	functional/cli_root/zfs_create/zfs_create_014_pos.ksh \
+	functional/cli_root/zfs_create/zfs_create_015_pos.ksh \
 	functional/cli_root/zfs_create/zfs_create_crypt_combos.ksh \
 	functional/cli_root/zfs_create/zfs_create_dryrun.ksh \
 	functional/cli_root/zfs_create/zfs_create_encrypted.ksh \
@@ -864,6 +866,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_rename/zfs_rename_012_neg.ksh \
 	functional/cli_root/zfs_rename/zfs_rename_013_pos.ksh \
 	functional/cli_root/zfs_rename/zfs_rename_014_neg.ksh \
+	functional/cli_root/zfs_rename/zfs_rename_015_pos.ksh \
 	functional/cli_root/zfs_rename/zfs_rename_encrypted_child.ksh \
 	functional/cli_root/zfs_rename/zfs_rename_mountpoint.ksh \
 	functional/cli_root/zfs_rename/zfs_rename_nounmount.ksh \
@@ -1082,6 +1085,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_create/zpool_create_draid_004_pos.ksh \
 	functional/cli_root/zpool_create/zpool_create_dryrun_output.ksh \
 	functional/cli_root/zpool_create/zpool_create_encrypted.ksh \
+	functional/cli_root/zpool_create/zpool_create_edom_neg.ksh \
 	functional/cli_root/zpool_create/zpool_create_features_001_pos.ksh \
 	functional/cli_root/zpool_create/zpool_create_features_002_pos.ksh \
 	functional/cli_root/zpool_create/zpool_create_features_003_pos.ksh \
@@ -2047,6 +2051,8 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/rsend_029_neg.ksh \
 	functional/rsend/rsend_030_pos.ksh \
 	functional/rsend/rsend_031_pos.ksh \
+	functional/rsend/rsend-exclude_001_pos.ksh \
+	functional/rsend/rsend-exclude_002_pos.ksh \
 	functional/rsend/send-c_embedded_blocks.ksh \
 	functional/rsend/send-c_incremental.ksh \
 	functional/rsend/send-c_longname.ksh \
@@ -2090,6 +2096,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send_realloc_files.ksh \
 	functional/rsend/send_spill_block.ksh \
 	functional/rsend/send-wR_encrypted_zvol.ksh \
+	functional/rsend/send-zstream_drop_record.ksh \
 	functional/rsend/setup.ksh \
 	functional/scrub_mirror/cleanup.ksh \
 	functional/scrub_mirror/scrub_mirror_001_pos.ksh \

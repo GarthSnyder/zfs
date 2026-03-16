@@ -54,6 +54,8 @@ zstream_usage(void)
 	    "    zstream recompress [-l level] TYPE\n"
 	    "         -l  Compression level for types that support it (e.g., zstd)\n"
 	    "       TYPE  Compression type as specified in 'zfs set compression'\n"
+	    "\tzstream drop_record [-v] [OBJECT,OFFSET] ...\n"
+	    "\n"
 	    "\n"
 	    "    zstream token TOKEN\n"
 	    "      TOKEN  Resume token to be analyzed\n"
@@ -88,6 +90,8 @@ main(int argc, char *argv[])
 		return (zstream_do_dump(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "decompress") == 0) {
 		return (zstream_do_decompress(argc - 1, argv + 1));
+	} else if (strcmp(subcommand, "drop_record") == 0) {
+		return (zstream_do_drop_record(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "recompress") == 0) {
 		return (zstream_do_recompress(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "token") == 0) {
