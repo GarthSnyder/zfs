@@ -20,7 +20,7 @@
 #include <pthread.h>
 
 #include "zstream_queue.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 #define MIN_THREADS 	6
 #define MAX_QUEUES 	16	/* Greatest # of queues simultaneously active */

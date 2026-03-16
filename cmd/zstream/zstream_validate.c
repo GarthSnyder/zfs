@@ -24,7 +24,7 @@
 #include "zstream.h"
 #include "zstream_validate.h"
 #include "zstream_io.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 #define MAX_VALIDATIONS 4
 

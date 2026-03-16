@@ -40,7 +40,7 @@
 #include <sys/zstd/zstd.h>
 #include "zfs_fletcher.h"
 #include "zstream.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 #include "zstream_modules.h"
 
 #define MAX_COMPRESSION_STEPS  4

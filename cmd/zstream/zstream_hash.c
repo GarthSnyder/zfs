@@ -10,7 +10,7 @@
 #include "zstream_hash_debug.h"
 #include "zstream_hash_impl.h"
 #include "zstream_hash_stats.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 #define MAX_OCCUPANCY 0.75
 #define INITIAL_HASH_SUFFIX_LENGTH 10

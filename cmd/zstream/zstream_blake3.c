@@ -22,7 +22,7 @@
 #include <sys/zfs_ioctl.h>
 #include <sys/blake3.h>
 #include "zstream_blake3.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 static void
 chain_calc_blake3(drr_blake3_t *item, void *context)

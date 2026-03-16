@@ -29,7 +29,7 @@
 #include <sys/stat.h>
 
 #include "zstream_alloc.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 #ifndef MAP_ANONYMOUS
 #	ifdef MAP_ANON

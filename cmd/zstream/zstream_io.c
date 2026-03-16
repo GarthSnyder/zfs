@@ -25,7 +25,7 @@
 
 #include "zstream_io.h"
 #include "zstream_chain.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 #define STDIO_BUFSIZE 32 * 1024 * 1024
 

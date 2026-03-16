@@ -28,7 +28,7 @@
  */
 
 /*
- * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2015 by Delphix. All rightsb reserved.
  */
 
 #include <ctype.h>
@@ -100,7 +100,7 @@ read_hdr(dmu_replay_record_t *drr, zio_cksum_t *cksum)
 	if (do_cksum &&
 	    !ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum))
 	{
-		if (!validate_checksum(&saved_cksum, 
+		if (!validate_checksum(&saved_cksum,
 			&drr->drr_u.drr_checksum.drr_checksum, "at end of record"))
 		{
 			return (0);
@@ -342,7 +342,7 @@ zstream_do_dump(int argc, char *argv[])
 		total_records++;
 		payload_size = 0;
 		if (show_offsets) {
-			snprintf(offset_str, sizeof(offset_str), "(offset = %lu) ", 
+			snprintf(offset_str, sizeof(offset_str), "(offset = %lu) ",
 				stream_offset);
 		}
 
@@ -453,7 +453,7 @@ zstream_do_dump(int argc, char *argv[])
 			    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 
 			if (featureflags & DMU_BACKUP_FEATURE_RAW &&
-			    drro->drr_bonuslen > drro->drr_raw_bonuslen) 
+			    drro->drr_bonuslen > drro->drr_raw_bonuslen)
 			{
 				(void) fprintf(stderr,
 				    "Warning: Object %llu has bonuslen = "

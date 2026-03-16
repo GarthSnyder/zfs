@@ -23,7 +23,7 @@
 
 #include "zstream.h"
 #include "zstream_byteswap.h"
-#include "zstream_shared.h"
+#include "zstream_util.h"
 
 static boolean_t
 chain_btyeswap(drr_packet_t *item, void *context, chain_attrs_t chain)

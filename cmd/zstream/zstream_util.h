@@ -53,6 +53,21 @@ extern int
 dump_record(dmu_replay_record_t *drr, void *payload, size_t payload_len,
 	zio_cksum_t *zc, int outfd);
 
+extern void
+auto_unlock_mutex(pthread_mutex_t *mutex);
+
+extern void
+await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex);
+
+/* Static buffer, must use result before next call */
+extern char *
+checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
+
+/* Returns B_TRUE for valid, B_FALSE for invalid */
+boolean_t
+validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
+	const char *where);
+
 #ifdef __cplusplus
 }
 #endif
