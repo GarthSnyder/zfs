@@ -26,6 +26,7 @@
 #include <zfs_fletcher.h>	/* fletcher_4_incremental_native	*/
 
 #include "zstream_fletcher4.h"
+#include "zstream_chain.h"
 #include "zstream_io.h"		/* drr_packet_t...			*/
 #include "zstream_util.h"	/* validate_or_exit			*/
 
@@ -92,12 +93,16 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 	zio_cksum_t *record_cksum	= &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum		= &drre->drr_checksum;
 
-	boolean_t swap = ATTR_IS_SET(attrs, CA_BYTESWAPPED);
-	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
+	boolean_t is_swapped = context->fc_operation == F4_VALIDATE &&
+	    ATTR_IS_SET(attrs, CA_BYTESWAPPED);
+	boolean_t swap = is_swapped || (context->fc_operation == F4_SET &&
+	    OPTION_ENABLED(attrs, CA_BYTESWAPPED_OUT));
+	uint32_t drr_type = is_swapped ?
+	    BSWAP_32(drr->drr_type) : drr->drr_type;
 	off_t off = offsetof(dmu_replay_record_t,
 	    drr_u.drr_checksum.drr_checksum);
 	boolean_t is_conclusion_record =
-	    drr->drr_type == DRR_END &&
+	    drr_type == DRR_END &&
 	    drre->drr_toguid == 0 &&
 	    ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum);
 
@@ -110,28 +115,33 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 	} else if (drr_type == DRR_END) {
 		if (context->fc_operation == F4_VALIDATE) {
 			validate_or_exit(stream_cksum, end_cksum,
-			    swap, "in DRR_END record");
+			    is_swapped, "in DRR_END record");
 		} else {
 			*end_cksum = *stream_cksum;
+			if (swap) {
+				ZIO_CHECKSUM_BSWAP(end_cksum);
+			}
 		}
 	}
-	fletcher_4_incremental(swap, drr, off, stream_cksum);
-	if (drr->drr_type != DRR_BEGIN && !is_conclusion_record) {
+	fletcher_4_incremental(is_swapped, drr, off, stream_cksum);
+	if (drr_type != DRR_BEGIN && !is_conclusion_record) {
 		if (context->fc_operation == F4_VALIDATE) {
 			validate_or_exit(stream_cksum, record_cksum,
-			    swap, "at DRR record end");
+			    is_swapped, "at DRR record end");
 		} else {
-			*record_cksum = *stream_cksum;
+			if (swap) {
+				*record_cksum = *stream_cksum;
+			}
 		}
 	}
 	if (drr_type == DRR_END) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else {
-		fletcher_4_incremental(swap, record_cksum,
+		fletcher_4_incremental(is_swapped, record_cksum,
 		    sizeof (drr->drr_u.drr_checksum.drr_checksum),
 		    stream_cksum);
 		if (item->dp_payload_size > 0) {
-			fletcher_4_incremental(swap, item->dp_payload,
+			fletcher_4_incremental(is_swapped, item->dp_payload,
 			    item->dp_payload_size, stream_cksum);
 		}
 	}
@@ -141,10 +151,11 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 static chain_step_t
 fletcher4_serial_step(fletcher4_op_t operation)
 {
-	fletcher4_context_t *context = &fletcher4_contexts[next_context];
+	int context_ix = next_context++ % MAX_FLETCHER_4;
+	fletcher4_context_t *context = &fletcher4_contexts[context_ix];
+
 	context->fc_operation = operation;
 	ZIO_SET_CHECKSUM(&context->fc_stream_cksum, 0, 0, 0, 0);
-	next_context++;
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
