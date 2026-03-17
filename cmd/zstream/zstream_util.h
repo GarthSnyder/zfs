@@ -68,12 +68,14 @@ checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 
 /* Returns B_TRUE for valid, B_FALSE for invalid */
 boolean_t
-validate_checksum(zio_cksum_t *expect, zio_cksum_t *actual, const char *where);
+validate_checksum(zio_cksum_t *expect, zio_cksum_t *actual, boolean_t swap,
+	const char *where);
 
 static inline void
-validate_or_exit(zio_cksum_t *expect, zio_cksum_t *actual, const char *where)
+validate_or_exit(zio_cksum_t *expect, zio_cksum_t *actual, boolean_t swap,
+	const char *where)
 {
-	if (!validate_checksum(expect, actual, where)) {
+	if (!validate_checksum(expect, actual, swap, where)) {
 		exit(1);
 	}
 }
