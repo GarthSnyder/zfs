@@ -39,6 +39,16 @@ typedef struct {
 static fletcher4_context_t	fletcher4_contexts[MAX_FLETCHER_4];
 static int			next_context = 0;
 
+static inline int
+fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
+{
+	if (swap) {
+		return fletcher_4_incremental_byteswap(buff, size, cksum);
+	} else {
+		return fletcher_4_incremental_native(buff, size, cksum);
+	}
+}
+
 /*
  * Implements both validation and inscription, based on fc_operation.
  *
@@ -82,7 +92,10 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 	zio_cksum_t *record_cksum	= &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum		= &drre->drr_checksum;
 
-	off_t off = offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum);
+	boolean_t swap = ATTR_IS_SET(attrs, CA_BYTESWAPPED);
+	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
+	off_t off = offsetof(dmu_replay_record_t,
+	    drr_u.drr_checksum.drr_checksum);
 	boolean_t is_conclusion_record =
 	    drr->drr_type == DRR_END &&
 	    drre->drr_toguid == 0 &&
@@ -92,31 +105,33 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 		VERIFY3U(off, ==, sizeof (dmu_replay_record_t) -
 		    sizeof (zio_cksum_t));
 	}
-	if (drr->drr_type == DRR_BEGIN) {
+	if (drr_type == DRR_BEGIN) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
-	} else if (drr->drr_type == DRR_END) {
+	} else if (drr_type == DRR_END) {
 		if (context->fc_operation == F4_VALIDATE) {
-			validate_or_exit(stream_cksum, end_cksum, "in DRR_END record");
+			validate_or_exit(stream_cksum, end_cksum,
+			    swap, "in DRR_END record");
 		} else {
 			*end_cksum = *stream_cksum;
 		}
 	}
-	fletcher_4_incremental_native(drr, off, stream_cksum);
+	fletcher_4_incremental(swap, drr, off, stream_cksum);
 	if (drr->drr_type != DRR_BEGIN && !is_conclusion_record) {
 		if (context->fc_operation == F4_VALIDATE) {
-			validate_or_exit(stream_cksum, record_cksum, "at DRR record end");
+			validate_or_exit(stream_cksum, record_cksum,
+			    swap, "at DRR record end");
 		} else {
 			*record_cksum = *stream_cksum;
 		}
 	}
-	if (drr->drr_type == DRR_END) {
+	if (drr_type == DRR_END) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else {
-		fletcher_4_incremental_native(record_cksum,
+		fletcher_4_incremental(swap, record_cksum,
 		    sizeof (drr->drr_u.drr_checksum.drr_checksum),
 		    stream_cksum);
 		if (item->dp_payload_size > 0) {
-			fletcher_4_incremental_native(item->dp_payload,
+			fletcher_4_incremental(swap, item->dp_payload,
 			    item->dp_payload_size, stream_cksum);
 		}
 	}
