@@ -95,6 +95,10 @@ open_file(io_context_t *context)
  * byteswap-aware. However, with the exception of DRR_OBJECT_PAYLOAD_SIZE,
  * they happen to work with post-swapping since they are switching on either
  * a uint8_t value or 0.
+ *
+ * DRR_WRITE and DRR_SPILL use 64-bit sizes. The other two record types have
+ * 32-bit sizes. The drr_payloadlen field shared by all record types is also
+ * 32 bits.
  */
 static size_t
 calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
@@ -106,30 +110,29 @@ calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
 
 	boolean_t swap = ATTR_IS_SET(attrs, CA_BYTESWAPPED);
 	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
-	uint32_t size;
+	uint64_t size, size64 = 0;
+	uint32_t size32 = 0;
+	boolean_t round = B_FALSE;
 
-	switch (drr_type) {
-	case DRR_OBJECT:
-		if (swap && drro->drr_raw_bonuslen != 0) {
-			return (BSWAP_32(drro->drr_raw_bonuslen));
-		} else if (swap) {
-			return (P2ROUNDUP(BSWAP_32(drro->drr_bonuslen), 8));
-		} else {
-			return (DRR_OBJECT_PAYLOAD_SIZE(drro));
-		}
-	case DRR_WRITE:
-		size = DRR_WRITE_PAYLOAD_SIZE(drrw);
-		break;
-	case DRR_SPILL:
-		size = DRR_SPILL_PAYLOAD_SIZE(drrs);
-		break;
-	case DRR_WRITE_EMBEDDED:
-		uint32_t drr_psize = drrwe->drr_psize;
-		return (P2ROUNDUP((swap ? BSWAP_32(drr_psize) : drr_psize), 8));
-	default:
-		size = drr->drr_payloadlen;
+	if (drr_type == DRR_OBJECT) {
+		round = drro->drr_raw_bonuslen == 0;
+		size32 = round ? drro->drr_bonuslen : drro->drr_raw_bonuslen;
+	} else if (drr_type == DRR_WRITE) {
+		size64 = DRR_WRITE_PAYLOAD_SIZE(drrw);
+	} else if (drr_type == DRR_SPILL) {
+		size64 = DRR_SPILL_PAYLOAD_SIZE(drrs);
+	} else if (drr_type == DRR_WRITE_EMBEDDED) {
+		size32 = drrwe->drr_psize;
+		round = B_TRUE;
+	} else {
+		size32 = drr->drr_payloadlen;
 	}
-	return (swap ? BSWAP_32(size) : size);
+	if (size32 != 0) {
+		size = swap ? BSWAP_32(size32) : size32;
+	} else {
+		size = swap ? BSWAP_64(size64) : size64;
+	}
+	return round ? P2ROUNDUP(size, 8) : size;
 }
 
 static boolean_t
@@ -202,7 +205,10 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 
 	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
 
-	record_stats_t *stats = &attrs->ca_stats_in[drr->drr_type];
+	uint32_t drr_type = ATTR_IS_SET(attrs, CA_BYTESWAPPED) ?
+	    BSWAP_32(drr->drr_type) : drr->drr_type;
+
+	record_stats_t *stats = &attrs->ca_stats_in[drr_type];
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
