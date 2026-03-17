@@ -24,6 +24,7 @@
 #include <sys/stdtypes.h>		/* B_TRUE, boolean_t		*/
 #include <sys/zfs_ioctl.h>		/* dmu_replay_record...		*/
 
+#include "zstream_chain.h"
 #include "zstream_io.h"			/* drr_packet_t			*/
 #include "zstream_byteswap.h"		/* serial_byteswap		*/
 
@@ -34,21 +35,28 @@
 #define	DO64(X) (drr->drr_u.X = BSWAP_64(drr->drr_u.X))
 #define	DO32(X) (drr->drr_u.X = BSWAP_32(drr->drr_u.X))
 
-static boolean_t
-chain_byteswap(drr_packet_t *item, void *context, chain_attrs_t *attrs)
-{
-	(void) context;
-	struct dmu_replay_record *drr;
+typedef byteswap_stage_t byteswap_context_t;
 
-	if (item == NULL || !ATTR_IS_SET(attrs, CA_BYTESWAPPED)) {
+static byteswap_context_t byteswap_contexts[MAX_BYTESWAP];
+static int next_context = 0;
+
+static boolean_t
+chain_byteswap(drr_packet_t *item, byteswap_context_t *context,
+    chain_attrs_t *attrs)
+{
+	struct dmu_replay_record *drr = &item->dp_drr;
+	boolean_t is_swapped = *context == BS_INCOMING &&
+	    ATTR_IS_SET(attrs, CA_BYTESWAPPED);
+	boolean_t swap = is_swapped || (*context == BS_OUTGOING &&
+	    OPTION_ENABLED(attrs, CA_BYTESWAPPED_OUT));
+
+	if (item == NULL || !swap) {
 		return (B_TRUE);
 	}
 
-	drr = &item->dp_drr;
-	drr->drr_type = BSWAP_32(drr->drr_type);
-	drr->drr_payloadlen = BSWAP_32(drr->drr_payloadlen);
+	uint32_t type = is_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
 
-	switch (drr->drr_type) {
+	switch (type) {
 	case DRR_BEGIN:
 		DO64(drr_begin.drr_magic);
 		DO64(drr_begin.drr_versioninfo);
@@ -148,7 +156,10 @@ chain_byteswap(drr_packet_t *item, void *context, chain_attrs_t *attrs)
 		exit(1);
 	}
 
-	if (drr->drr_type != DRR_BEGIN) {
+	drr->drr_type = BSWAP_32(drr->drr_type);
+	drr->drr_payloadlen = BSWAP_32(drr->drr_payloadlen);
+
+	if (type != DRR_BEGIN) {
 		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_checksum.drr_checksum);
 	}
 
@@ -156,12 +167,17 @@ chain_byteswap(drr_packet_t *item, void *context, chain_attrs_t *attrs)
 }
 
 chain_step_t
-serial_byteswap(void)
+serial_byteswap(byteswap_stage_t stage)
 {
+	int context_ix = next_context++ % MAX_BYTESWAP;
+	byteswap_context_t *bsc = &byteswap_contexts[context_ix];
+
+	*bsc = stage;
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
+		.cs_context = bsc,
 		.cs_serial = {
 			.process = (zc_serial_process_f *)chain_byteswap,
 		}

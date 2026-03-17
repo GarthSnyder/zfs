@@ -26,8 +26,12 @@ extern "C" {
 
 #include "zstream_io.h"
 
+#define MAX_BYTESWAP 4		/* Most swapping ops in a chain */
+
+typedef enum { BS_INCOMING, BS_OUTGOING } byteswap_stage_t;
+
 chain_step_t
-serial_byteswap(void);
+serial_byteswap(byteswap_stage_t stage);
 
 #ifdef __cplusplus
 }

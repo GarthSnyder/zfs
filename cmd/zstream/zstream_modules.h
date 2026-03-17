@@ -42,10 +42,11 @@ extern "C" {
 #define STANDARD_INPUT_STACK(infile)					\
 	serial_read_stream(infile),					\
 	serial_validate_fletcher4(),					\
-	serial_byteswap(),						\
+	serial_byteswap(BS_INCOMING),					\
 	serial_validate_records()
 
 #define STANDARD_OUTPUT_STACK(outfile)					\
+	serial_byteswap(BS_OUTGOING),					\
 	serial_add_fletcher4(),						\
 	serial_write_stream(outfile),					\
 	chain_terminator()
