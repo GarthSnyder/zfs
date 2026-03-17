@@ -104,8 +104,8 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context,
 chain_step_t
 serial_validate_records(void)
 {
-	int which = next_context % MAX_VALIDATIONS;
-	validate_context_t *context = &contexts[which];
+	int context_ix = next_context++ % MAX_VALIDATIONS;
+	validate_context_t *context = &contexts[context_ix];
 
 	return (chain_step_t) {
 	    .cs_type = CS_SERIAL,
