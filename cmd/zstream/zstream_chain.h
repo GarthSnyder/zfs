@@ -110,6 +110,7 @@ extern "C" {
 #define CA_DO_NOT_VALIDATE	(1ULL << 5)
 #define CA_FORBID_DEDUP		(1ULL << 6)
 #define CA_REQUIRE_DEDUP	(1ULL << 7)
+#define CA_BYTESWAPPED_OUT	(1ULL << 8)
 
 #define OPTION_ENABLED(attrs, opt) (!!((attrs)->ca_command_opts & (opt)))
 #define STREAM_HAS_FEATURE(attrs, feat) (!!((attrs)->ca_feature_flags & (feat)))
