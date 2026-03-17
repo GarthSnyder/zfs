@@ -110,7 +110,7 @@ calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
 
 	switch (drr_type) {
 	case DRR_OBJECT:
-		if (swap && drro->drr_raw_bonuslen) {
+		if (swap && drro->drr_raw_bonuslen != 0) {
 			return (BSWAP_32(drro->drr_raw_bonuslen));
 		} else if (swap) {
 			return (P2ROUNDUP(BSWAP_32(drro->drr_bonuslen), 8));
@@ -144,7 +144,7 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 	if (!context->ic_fp) {
 		open_file(context);
 	}
-	if (fread(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) == 0) {
+	if (fread(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) != 1) {
 		if (ferror(context->ic_fp)) {
 			fprintf(stderr, "Error reading record header at "
 			    "offset %lu: %s\n", context->ic_offset,
@@ -167,10 +167,6 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 			exit(1);
 		}
 		attrs->ca_feature_flags = DMU_GET_FEATUREFLAGS(versioninfo);
-		if (ATTR_IS_SET(attrs, CA_BYTESWAPPED)) {
-			attrs->ca_feature_flags =
-			    BSWAP_64(attrs->ca_feature_flags);
-		}
 		if (OPTION_ENABLED(attrs, CA_FORBID_DEDUP) &&
 		    (STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUP) ||
 		    STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUPPROPS)))
