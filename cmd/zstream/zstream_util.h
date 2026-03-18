@@ -80,6 +80,9 @@ validate_or_exit(zio_cksum_t *expect, zio_cksum_t *actual, boolean_t swap,
 	}
 }
 
+boolean_t
+write_is_encrypted(struct drr_write *drrw);
+
 uint8_t *
 decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
 	enum zio_compress compress_type);
