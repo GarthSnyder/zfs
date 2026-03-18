@@ -93,9 +93,9 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 	zio_cksum_t *record_cksum	= &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum		= &drre->drr_checksum;
 
-	boolean_t is_swapped = context->fc_operation == F4_VALIDATE &&
-	    ATTR_IS_SET(attrs, CA_BYTESWAPPED);
-	boolean_t swap = is_swapped || (context->fc_operation == F4_SET &&
+	boolean_t is_swapped = (context->fc_operation == F4_VALIDATE &&
+	    ATTR_IS_SET(attrs, CA_BYTESWAPPED)) ||
+	    (context->fc_operation == F4_SET &&
 	    OPTION_ENABLED(attrs, CA_BYTESWAPPED_OUT));
 	uint32_t drr_type = is_swapped ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
@@ -121,7 +121,7 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 			    "in DRR_END record", stream_offset);
 		} else {
 			*end_cksum = *stream_cksum;
-			if (swap) {
+			if (is_swapped) {
 				ZIO_CHECKSUM_BSWAP(end_cksum);
 			}
 		}
@@ -135,8 +135,9 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 			validate_or_exit(stream_cksum, record_cksum,
 			    is_swapped, "at DRR record end", stream_offset);
 		} else {
-			if (swap) {
-				*record_cksum = *stream_cksum;
+			*record_cksum = *stream_cksum;
+			if (is_swapped) {
+				ZIO_CHECKSUM_BSWAP(record_cksum);
 			}
 		}
 	}
