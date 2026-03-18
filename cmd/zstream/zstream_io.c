@@ -254,7 +254,10 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		}
 	}
 
-	record_stats_t *stats = &attrs->ca_stats_out[drr->drr_type];
+	uint32_t drr_type = OPTION_ENABLED(attrs, CA_BYTESWAPPED_OUT) ?
+	    BSWAP_32(drr->drr_type) : drr->drr_type;
+
+	record_stats_t *stats = &attrs->ca_stats_out[drr_type];
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
