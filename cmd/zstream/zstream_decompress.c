@@ -68,8 +68,8 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 		return (B_TRUE);
 	}
 
-	enum zio_compress c = (enum zio_compress)(intptr_t)p->data;
-	if (c == ZIO_COMPRESS_OFF) {
+	enum zio_compress ctype = (enum zio_compress)(intptr_t)p->data;
+	if (IS_UNCOMPRESSED(ctype)) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
 		if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
@@ -81,8 +81,14 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 		return (B_TRUE);
 	}
 
+	if (write_is_encrypted(drrw)) {
+		fprintf(stderr, "The write for ino %zu offset %zu is marked "
+		    "as being encrypted. Attempting decompression anyway...\n",
+		    drrw->drr_object, drrw->drr_offset);
+	}
+
 	dcbuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
-		drrw->drr_logical_size, c);
+		drrw->drr_logical_size, ctype);
 
 	if (dcbuff == NULL) {
 		/*
@@ -101,7 +107,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 		drrw->drr_compressed_size = 0;
 		if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
 			fprintf(stderr,
-			    "successfully decompressed ino %zu offset %zu\n",
+			    "Successfully decompressed ino %zu offset %zu\n",
 			    drrw->drr_object, drrw->drr_offset);
 		}
 	}
