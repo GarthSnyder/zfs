@@ -142,20 +142,21 @@ checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size) {
 
 boolean_t
 validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
-	boolean_t swap, const char *where)
+	boolean_t swap, const char *where, off_t stream_offset)
 {
 	static char buff[128];
-	zio_cksum_t swapped_expected;
+	zio_cksum_t swapped_actual;
 
 	if (swap) {
-		swapped_expected = *expected;
-		expected = &swapped_expected;
-		ZIO_CHECKSUM_BSWAP(expected);
+		swapped_actual = *actual;
+		actual = &swapped_actual;
+		ZIO_CHECKSUM_BSWAP(actual);
 	}
 	if (ZIO_CHECKSUM_EQUAL(*expected, *actual)) {
 		return B_TRUE;
 	}
-	fprintf(stderr, "Incorrect checksum %s.\n", where);
+	fprintf(stderr, "Incorrect checksum %s (stream offset %zu)\n", where,
+		stream_offset);
 	fprintf(stderr, "Expected = %s\n", checksum_str(expected, buff,
 	    sizeof(buff)));
 	fprintf(stderr, "  Actual = %s\n", checksum_str(actual, buff,

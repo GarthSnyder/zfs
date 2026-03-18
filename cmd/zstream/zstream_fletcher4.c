@@ -114,8 +114,11 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else if (drr_type == DRR_END) {
 		if (context->fc_operation == F4_VALIDATE) {
-			validate_or_exit(stream_cksum, end_cksum,
-			    is_swapped, "in DRR_END record");
+			off_t stream_offset = item->dp_stream_offset +
+			    offsetof(dmu_replay_record_t,
+			    drr_u.drr_end.drr_checksum);
+			validate_or_exit(stream_cksum, end_cksum, is_swapped,
+			    "in DRR_END record", stream_offset);
 		} else {
 			*end_cksum = *stream_cksum;
 			if (swap) {
@@ -126,8 +129,11 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 	fletcher_4_incremental(is_swapped, drr, off, stream_cksum);
 	if (drr_type != DRR_BEGIN && !is_conclusion_record) {
 		if (context->fc_operation == F4_VALIDATE) {
+			off_t stream_offset = item->dp_stream_offset +
+			    offsetof(dmu_replay_record_t,
+			    drr_u.drr_checksum.drr_checksum);
 			validate_or_exit(stream_cksum, record_cksum,
-			    is_swapped, "at DRR record end");
+			    is_swapped, "at DRR record end", stream_offset);
 		} else {
 			if (swap) {
 				*record_cksum = *stream_cksum;
