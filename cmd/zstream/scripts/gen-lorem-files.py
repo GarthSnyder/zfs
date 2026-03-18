@@ -56,7 +56,7 @@ def main():
     )
     parser.add_argument("count", type=int, help="Number of files to create")
     parser.add_argument("-d", "--directory", default=".", help="Target directory (default: .)")
-    parser.add_argument("--min-size", type=int, default=2048, help="Minimum file size in bytes (default: 2048)")
+    parser.add_argument("--min-size", type=int, default=16384, help="Minimum file size in bytes (default: 2048)")
     parser.add_argument("--max-size", type=int, default=128000, help="Maximum file size in bytes (default: 128000)")
     args = parser.parse_args()
 
