@@ -67,7 +67,7 @@ needs_modification(drr_packet_t *item, compression_spec_t *target)
 	 * we skip encrypted blocks.
 	 */
 	if (write_is_encrypted(drrw)) {
-		return (B_TRUE);
+		return (B_FALSE);
 	}
 	if (ctype != target->cs_type) {
 		return (B_TRUE);
@@ -125,7 +125,7 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context,
 	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
 	    drrw->drr_logical_size, drrw->drr_compressiontype);
 	if (debuff == NULL) {
-		warnx("Decompression type %d failed for ino %zu offset %zu",
+		warnx("decompression type %d failed for ino %zu offset %zu",
 		    drrw->drr_compressiontype,
 		    drrw->drr_object,
 		    drrw->drr_offset);
