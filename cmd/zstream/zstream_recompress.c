@@ -66,10 +66,8 @@ needs_modification(drr_packet_t *item, compression_spec_t *target)
 	 * enhancement (along with decryption or re-encryption), but for now
 	 * we skip encrypted blocks.
 	 */
-	for (int i = 0; i < ZIO_DATA_SALT_LEN; i++) {
-		if (drrw->drr_salt[i] != 0) {
-			return (B_FALSE);
-		}
+	if (write_is_encrypted(drrw)) {
+		return (B_TRUE);
 	}
 	if (ctype != target->cs_type) {
 		return (B_TRUE);

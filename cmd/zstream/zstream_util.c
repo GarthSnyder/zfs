@@ -164,6 +164,17 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 	return B_FALSE;
 }
 
+boolean_t
+write_is_encrypted(struct drr_write *drrw)
+{
+	for (int i = 0; i < ZIO_DATA_SALT_LEN; i++) {
+		if (drrw->drr_salt[i] != 0) {
+			return (B_TRUE);
+		}
+	}
+	return (B_FALSE);
+}
+
 /*
  * The compress_type must reflect the buffer's current compression. Returns
  * an allocated buffer if decompression was successful, NULL otherwise.
