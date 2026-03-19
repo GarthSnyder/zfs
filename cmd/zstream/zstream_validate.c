@@ -43,14 +43,13 @@ static validate_context_t 	contexts[MAX_VALIDATIONS];
 static int			next_context = 0;
 
 static boolean_t
-chain_validate_records(drr_packet_t *item, validate_context_t *context,
-	chain_attrs_t *attrs)
+chain_validate_records(drr_packet_t *item, validate_context_t *context)
 {
 	struct dmu_replay_record *drr	 = &item->dp_drr;
 	struct drr_write *drrw		 = &drr->drr_u.drr_write;
 	struct drr_object *drro 	 = &drr->drr_u.drr_object;
 
-	if (item == NULL || !OPTION_ENABLED(attrs, CA_DO_NOT_VALIDATE)) {
+	if (item == NULL || !OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE)) {
 		return (B_TRUE);
 	}
 	if (item->dp_stream_offset == 0 && drr->drr_type != DRR_BEGIN) {
@@ -76,7 +75,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context,
 		break;
 
 	case DRR_OBJECT:
-		if (attrs->ca_feature_flags & DMU_BACKUP_FEATURE_RAW &&
+		if (chain_attrs->ca_feature_flags & DMU_BACKUP_FEATURE_RAW &&
 		    drro->drr_bonuslen > drro->drr_raw_bonuslen)
 		{
 			fprintf(stderr,
