@@ -107,19 +107,21 @@ needs_decompression(drr_packet_t *item, compression_spec_t *context)
 	return (needs_compression(item, context));
 }
 
-static boolean_t
-chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
+/*
+ * We can ignore the context here because it's already been evaluated by the
+ * cost function. If the cost function returned something other than zero,
+ * we have to decompress.
+ */
+static void
+chain_decompress_writes(drr_packet_t *item, void *context)
 {
+	(void) context;
+
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
 	uint8_t *debuff;
 
-	if (item == NULL || drr->drr_type != DRR_WRITE ||
-	    !needs_decompression(item, context))
-	{
-		return (B_TRUE);
-	}
-
+	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
 	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
 	    drrw->drr_logical_size, drrw->drr_compressiontype);
 	if (debuff == NULL) {
@@ -134,10 +136,13 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 	item->dp_payload_size = drrw->drr_logical_size;
 	drrw->drr_compressed_size = 0;
 	drrw->drr_compressiontype = 0;
-	return (B_TRUE);
 }
 
-static boolean_t
+/*
+ * As with chain_decompress_writes(), all the important decisions were made
+ * by the cost function. If we're here, we need to compress.
+ */
+static void
 chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
@@ -153,9 +158,11 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	uint8_t *cbuff;
 	size_t	csize;
 
+	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
 	VERIFY3B(IS_UNCOMPRESSED(ctype), ==, B_TRUE);
 	cbuff = compress_buffer(item->dp_payload, item->dp_payload_size,
 	    *context, &csize);
+
 	if (cbuff == NULL) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
@@ -166,7 +173,43 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 		drrw->drr_compressed_size = csize;
 		drrw->drr_compressiontype = context->cs_type;
 	}
-	return (B_TRUE);
+}
+
+/*
+ * A cost of zero waives processing for the current item. If we want to
+ * process it, the cost will always be item->dp_payload_size. So in these
+ * two cost functions, we're mostly determining which packets need
+ * attention. A packet that's already compressed with the target compression
+ * profile can be ignored.
+ */
+static size_t
+chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
+{
+	dmu_replay_record_t *drr = &item->dp_drr;
+	struct drr_write *drrw	= &drr->drr_u.drr_write;
+
+	if (!item || drr->drr_type != DRR_WRITE) {
+		return (0);
+	}
+	return (needs_modification(item, context) ? drrw->drr_logical_size : 0);
+}
+
+/*
+ * Don't decompress packets that aren't compressed. And don't decompress
+ * them if their ultimate fate is to be recompressed using the compression
+ * profile that's already in use.
+ */
+static size_t
+chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
+{
+	dmu_replay_record_t *drr = &item->dp_drr;
+	struct drr_write *drrw	= &drr->drr_u.drr_write;
+	enum zio_compress ctype	= drrw->drr_compressiontype;
+
+	if (drr->drr_type != DRR_WRITE || IS_UNCOMPRESSED(ctype)) {
+		return (0);
+	}
+	return (needs_modification(item, context) ? item->dp_payload_size : 0);
 }
 
 /*
@@ -175,7 +218,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
  * uncompressed).
  */
 chain_step_t
-serial_decompress_writes(compression_spec_t *target)
+parallel_decompress_writes(compression_spec_t *target)
 {
 	int this_spec = next_spec++ % MAX_COMPRESSION_STEPS;
 	compression_spec_t *context = &specs[this_spec];
@@ -186,19 +229,21 @@ serial_decompress_writes(compression_spec_t *target)
 		*context = *target;
 	}
 	return ((chain_step_t) {
-		.cs_type = CS_SERIAL,
+		.cs_type = CS_PARALLEL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
-		.cs_serial = {
-			.process =
-			    (zc_serial_process_f *)chain_decompress_writes
+		.cs_parallel = {
+			.queue_length = 256,
+			.batch_budget = 256 * 1024,
+			.process = (zq_process_item_f *)chain_decompress_writes,
+			.cost = (zq_estimate_cost_f *)chain_decompress_cost
 		}
 	});
 }
 
 chain_step_t
-serial_compress_writes(compression_spec_t *target)
+parallel_compress_writes(compression_spec_t *target)
 {
 	int this_spec = next_spec++ % MAX_COMPRESSION_STEPS;
 	compression_spec_t *context = &specs[this_spec];
@@ -206,13 +251,15 @@ serial_compress_writes(compression_spec_t *target)
 	VERIFY3P(target, !=, NULL);
 	*context = *target;
 	return ((chain_step_t) {
-		.cs_type = CS_SERIAL,
+		.cs_type = CS_PARALLEL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
-		.cs_serial = {
-			.process =
-			    (zc_serial_process_f *)chain_compress_writes
+		.cs_parallel = {
+			.queue_length = 1024,
+			.batch_budget = 32 * 1024,
+			.process = (zq_process_item_f *)chain_compress_writes,
+			.cost = (zq_estimate_cost_f *)chain_compress_cost
 		}
 	});
 }
@@ -265,10 +312,10 @@ zstream_do_recompress(int argc, char *argv[])
 	}
 
 	zstream_chain_t recompress_chain = {
-		STANDARD_INPUT_STACK(NULL),
-		serial_decompress_writes(&spec),
-		serial_compress_writes(&spec),
-		STANDARD_OUTPUT_STACK(NULL)
+		STANDARD_INPUT_STACK(NULL, 1024),
+		parallel_decompress_writes(&spec),
+		parallel_compress_writes(&spec),
+		STANDARD_OUTPUT_STACK(NULL, 512)
 	};
 
 	zstream_chain_exec(recompress_chain, &attrs);
