@@ -17,7 +17,7 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <errno.h>		/* errno				*/
+#include <err.h>		/* errno				*/
 #include <libzutil.h>		/* zfs_nicenum				*/
 #include <stdio.h>		/* fprintf, stderr, fclose, fread	*/
 #include <stdlib.h>		/* exit, free				*/
@@ -29,6 +29,7 @@
 #include <sys/zfs_ioctl.h>	/* drr_begin, dmu_replay_record_t	*/
 #include <time.h>		/* timespec, clock_gettime, CLOC...	*/
 #include <unistd.h>		/* isatty, STDIN_FILENO, STDOUT_...	*/
+#include <arpa/inet.h>
 
 #include "zstream_io.h"		/* drr_packet_t, zc_serial_process_f	*/
 #include "zstream_chain.h"
@@ -135,6 +136,74 @@ calc_payload_size(dmu_replay_record_t *drr)
 	return round ? P2ROUNDUP(size, 8) : size;
 }
 
+/*
+ * Must be called only with the first record in a stream. Must be a
+ * DRR_BEGIN record or we'll terminate with "invalid stream".
+ */
+static inline void
+set_stream_attributes(drr_packet_t *item)
+{
+	dmu_replay_record_t *drr = &item->dp_drr;
+	struct drr_begin *drrb = &drr->drr_u.drr_begin;
+	uint64_t magic = drrb->drr_magic;
+	uint64_t versioninfo = drrb->drr_versioninfo;
+	boolean_t i_am_big_endian = htonl(0xFF00) == 0xFF00;
+	boolean_t swap_on_output;
+
+	if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
+		SET_ATTR(chain_attrs, CA_BYTESWAPPED);
+		versioninfo = BSWAP_64(drrb->drr_versioninfo);
+	} else if (magic != DMU_BACKUP_MAGIC) {
+		errx(1, "invalid ZFS stream, bad magic number %lx", magic);
+	}
+	if (i_am_big_endian == ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) {
+		SET_ATTR(chain_attrs, CA_LITTLE_ENDIAN_INPUT);
+	} else {
+		SET_ATTR(chain_attrs, CA_BIG_ENDIAN_INPUT);
+	}
+	chain_attrs->ca_feature_flags = DMU_GET_FEATUREFLAGS(versioninfo);
+
+	boolean_t is_deduped =
+	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP) ||
+	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUPPROPS);
+
+	if (OPTION_ENABLED(chain_attrs,CA_FORBID_DEDUP) && is_deduped) {
+		warnx("input stream is deduplicated, but this subcommand "
+		    "does not support deduplicated streams.");
+		fprintf(stderr, "Use 'zstream redup' to reduplicate\n");
+		exit(1);
+	}
+	if (OPTION_ENABLED(chain_attrs, CA_REQUIRE_DEDUP) &&
+	    !STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP))
+	{
+		errx(1, "this subcommand requires a deduplicated input "
+		    "stream, but the stream is not deduplicated");
+	}
+
+	/* Figure out endianness */
+	if (OPTION_ENABLED(chain_attrs, CA_BIG_ENDIAN_OUT))
+		swap_on_output = !i_am_big_endian;
+	else if (OPTION_ENABLED(chain_attrs, CA_LITTLE_ENDIAN_OUT))
+		swap_on_output = i_am_big_endian;
+	else if (OPTION_ENABLED(chain_attrs, CA_OPPOSITE_ENDIAN_OUT))
+		swap_on_output = !ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+	else
+		swap_on_output = B_FALSE;
+
+	if (swap_on_output && ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED) &&
+	    !OPTION_ENABLED(chain_attrs, CA_SILENT))
+	{
+		warnx("input stream already has desired byte order");
+		fprintf(stderr, "Add the -s option to silence this warning "
+		    "and process the stream anyway.");
+		exit(1);
+	}
+
+	if (swap_on_output) {
+		ENABLE_OPTION(chain_attrs, CA_BYTESWAP_ON_OUTPUT);
+	}
+}
+
 static boolean_t
 chain_read(drr_packet_t *item, io_context_t *context)
 {
@@ -142,63 +211,30 @@ chain_read(drr_packet_t *item, io_context_t *context)
 		return (B_TRUE);
 
 	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_begin *drrb = &drr->drr_u.drr_begin;
-	boolean_t is_deduped =
-	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP) ||
-	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUPPROPS);
 
-	if (!context->ic_fp) {
+	if (!context->ic_fp)
 		open_file(context);
-	}
+
 	if (fread(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) != 1) {
 		if (ferror(context->ic_fp)) {
-			fprintf(stderr, "Error reading record header at "
-			    "offset %lu: %s\n", context->ic_offset,
-			    strerror(errno));
-			exit(1);
-		} else {
-			fclose(context->ic_fp);
-			return (B_FALSE);
+			err(1, "Error reading record header at offset %lu",
+			    context->ic_offset);
 		}
+		fclose(context->ic_fp);
+		return (B_FALSE);
 	}
-	if (context->ic_offset == 0) {
-		uint64_t magic = drrb->drr_magic;
-		uint64_t versioninfo = drrb->drr_versioninfo;
-		if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
-			SET_ATTR(chain_attrs, CA_BYTESWAPPED);
-			versioninfo = BSWAP_64(drrb->drr_versioninfo);
-		} else if (magic != DMU_BACKUP_MAGIC) {
-			fprintf(stderr, "Invalid ZFS stream, bad magic number "
-			    "%lx\n", magic);
-			exit(1);
-		}
-		chain_attrs->ca_feature_flags =
-		    DMU_GET_FEATUREFLAGS(versioninfo);
-		if (OPTION_ENABLED(chain_attrs,CA_FORBID_DEDUP) && is_deduped) {
-			fprintf(stderr, "The input stream is deduplicated, "
-			    "but this subcommand does not support deduplicated "
-			    "streams. Use zstream redup to reduplicate.\n");
-			exit(1);
-		}
-		if (OPTION_ENABLED(chain_attrs, CA_REQUIRE_DEDUP) &&
-		    !STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP))
-		{
-			fprintf(stderr, "This subcommand requires a "
-			    "deduplicated input stream, but the provided "
-			    "stream is not deduplicated.\n");
-			exit(1);
-		}
-	}
-	item->dp_payload_size =
-	    calc_payload_size(&item->dp_drr);
+
+	if (context->ic_offset == 0)
+		set_stream_attributes(item);
+
+	item->dp_payload_size = calc_payload_size(&item->dp_drr);
 	if (item->dp_payload_size > 0) {
 		item->dp_payload = safe_malloc(item->dp_payload_size);
-		size_t items_read = fread(item->dp_payload,
-		    item->dp_payload_size, 1, context->ic_fp);
-		if (items_read != 1) {
-			fprintf(stderr, "Error reading record payload "
-			    " at offset %lu\n", context->ic_offset);
-			exit(1);
+		if (fread(item->dp_payload, item->dp_payload_size, 1,
+		    context->ic_fp) != 1)
+		{
+			err(1, "Error reading record payload at offset %lu",
+			    context->ic_offset);
 		}
 	} else {
 		item->dp_payload = NULL;
@@ -255,7 +291,7 @@ chain_write(drr_packet_t *item, io_context_t *context)
 		}
 	}
 
-	uint32_t drr_type = OPTION_ENABLED(chain_attrs, CA_BYTESWAPPED_OUT) ?
+	uint32_t drr_type = OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT) ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	record_stats_t *stats = &chain_attrs->ca_stats_out[drr_type];
