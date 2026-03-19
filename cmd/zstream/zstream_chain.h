@@ -136,7 +136,7 @@ typedef struct {
 } chain_attrs_t;
 
 typedef boolean_t
-zc_serial_process_f(void *item, void *context, chain_attrs_t *chain);
+zc_serial_process_f(void *item, void *context);
 
 typedef enum { CS_SERIAL, CS_TERMINATE } step_type_t;
 
@@ -152,6 +152,14 @@ typedef struct chain_step
 } chain_step_t;
 
 typedef chain_step_t zstream_chain_t[];
+
+/*
+ * Chain attributes accessible to any step on the chain. In theory this
+ * could cause a race condition between reading and setting, but all
+ * attributes are typically set by the time the first record is read. Ergo,
+ * nobody else can be executing while that first chain_read() runs.
+ */
+extern chain_attrs_t *chain_attrs;
 
 /*
  * Execute a chain. Returns once execution is complete. You can pass NULL

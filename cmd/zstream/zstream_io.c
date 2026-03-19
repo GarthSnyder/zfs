@@ -101,14 +101,14 @@ open_file(io_context_t *context)
  * 32 bits.
  */
 static size_t
-calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
+calc_payload_size(dmu_replay_record_t *drr)
 {
 	struct drr_object *drro		 = &drr->drr_u.drr_object;
 	struct drr_write *drrw		 = &drr->drr_u.drr_write;
 	struct drr_spill *drrs		 = &drr->drr_u.drr_spill;
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 
-	boolean_t swap = ATTR_IS_SET(attrs, CA_BYTESWAPPED);
+	boolean_t swap = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
 	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
 	uint64_t size, size64 = 0;
 	uint32_t size32 = 0;
@@ -136,13 +136,16 @@ calc_payload_size(dmu_replay_record_t *drr, chain_attrs_t *attrs)
 }
 
 static boolean_t
-chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
+chain_read(drr_packet_t *item, io_context_t *context)
 {
 	if (item == NULL)
 		return (B_TRUE);
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_begin *drrb = &drr->drr_u.drr_begin;
+	boolean_t is_deduped =
+	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP) ||
+	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUPPROPS);
 
 	if (!context->ic_fp) {
 		open_file(context);
@@ -162,25 +165,23 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		uint64_t magic = drrb->drr_magic;
 		uint64_t versioninfo = drrb->drr_versioninfo;
 		if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
-			SET_ATTR(attrs, CA_BYTESWAPPED);
+			SET_ATTR(chain_attrs, CA_BYTESWAPPED);
 			versioninfo = BSWAP_64(drrb->drr_versioninfo);
 		} else if (magic != DMU_BACKUP_MAGIC) {
 			fprintf(stderr, "Invalid ZFS stream, bad magic number "
 			    "%lx\n", magic);
 			exit(1);
 		}
-		attrs->ca_feature_flags = DMU_GET_FEATUREFLAGS(versioninfo);
-		if (OPTION_ENABLED(attrs, CA_FORBID_DEDUP) &&
-		    (STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUP) ||
-		    STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUPPROPS)))
-		{
+		chain_attrs->ca_feature_flags =
+		    DMU_GET_FEATUREFLAGS(versioninfo);
+		if (OPTION_ENABLED(chain_attrs,CA_FORBID_DEDUP) && is_deduped) {
 			fprintf(stderr, "The input stream is deduplicated, "
 			    "but this subcommand does not support deduplicated "
 			    "streams. Use zstream redup to reduplicate.\n");
 			exit(1);
 		}
-		if (OPTION_ENABLED(attrs, CA_REQUIRE_DEDUP) &&
-		    !STREAM_HAS_FEATURE(attrs, DMU_BACKUP_FEATURE_DEDUP))
+		if (OPTION_ENABLED(chain_attrs, CA_REQUIRE_DEDUP) &&
+		    !STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP))
 		{
 			fprintf(stderr, "This subcommand requires a "
 			    "deduplicated input stream, but the provided "
@@ -188,7 +189,8 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 			exit(1);
 		}
 	}
-	item->dp_payload_size = calc_payload_size(&item->dp_drr, attrs);
+	item->dp_payload_size =
+	    calc_payload_size(&item->dp_drr);
 	if (item->dp_payload_size > 0) {
 		item->dp_payload = safe_malloc(item->dp_payload_size);
 		size_t items_read = fread(item->dp_payload,
@@ -205,15 +207,15 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 
 	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
 
-	uint32_t drr_type = ATTR_IS_SET(attrs, CA_BYTESWAPPED) ?
+	uint32_t drr_type = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED) ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 
-	record_stats_t *stats = &attrs->ca_stats_in[drr_type];
+	record_stats_t *stats = &chain_attrs->ca_stats_in[drr_type];
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
-	stats = &attrs->ca_totals_in;
+	stats = &chain_attrs->ca_totals_in;
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
@@ -222,9 +224,8 @@ chain_read(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 }
 
 static boolean_t
-chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
+chain_write(drr_packet_t *item, io_context_t *context)
 {
-	(void) attrs;
 	if (item == NULL) {
 		if (context->ic_fp)
 			fclose(context->ic_fp);
@@ -254,15 +255,15 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 		}
 	}
 
-	uint32_t drr_type = OPTION_ENABLED(attrs, CA_BYTESWAPPED_OUT) ?
+	uint32_t drr_type = OPTION_ENABLED(chain_attrs, CA_BYTESWAPPED_OUT) ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 
-	record_stats_t *stats = &attrs->ca_stats_out[drr_type];
+	record_stats_t *stats = &chain_attrs->ca_stats_out[drr_type];
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
-	stats = &attrs->ca_totals_out;
+	stats = &chain_attrs->ca_totals_out;
 	stats->rs_num_records++;
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
@@ -271,9 +272,9 @@ chain_write(drr_packet_t *item, io_context_t *context, chain_attrs_t *attrs)
 }
 
 static boolean_t
-chain_null_output(drr_packet_t *item, void *ctxt, chain_attrs_t *attrs)
+chain_null_output(drr_packet_t *item, void *ctxt)
 {
-	(void) ctxt; (void) attrs;
+	(void) ctxt;
 	if (item && item->dp_payload != NULL && item->dp_payload_size > 0) {
 		free(item->dp_payload);
 		item->dp_payload = NULL;
@@ -334,10 +335,8 @@ serial_null_output(void)
 }
 
 static boolean_t
-chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt, void *dummy)
+chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt)
 {
-	(void) dummy;
-
 	struct timespec now;
 	char buff[32];
 	uint64_t delta_b, dbdt;

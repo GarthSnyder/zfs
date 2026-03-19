@@ -78,11 +78,10 @@ fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
  * input and output streams.
  */
 static boolean_t
-chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
-    chain_attrs_t *attrs)
+chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 {
 	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
-	    OPTION_ENABLED(attrs, CA_IGNORE_CKSUMS)))
+	    OPTION_ENABLED(chain_attrs, CA_IGNORE_CKSUMS)))
 	{
 		return (B_TRUE);
 	}
@@ -94,9 +93,9 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context,
 	zio_cksum_t *end_cksum		= &drre->drr_checksum;
 
 	boolean_t is_swapped = (context->fc_operation == F4_VALIDATE &&
-	    ATTR_IS_SET(attrs, CA_BYTESWAPPED)) ||
+	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) ||
 	    (context->fc_operation == F4_SET &&
-	    OPTION_ENABLED(attrs, CA_BYTESWAPPED_OUT));
+	    OPTION_ENABLED(chain_attrs, CA_BYTESWAPPED_OUT));
 	uint32_t drr_type = is_swapped ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 	off_t off = offsetof(dmu_replay_record_t,

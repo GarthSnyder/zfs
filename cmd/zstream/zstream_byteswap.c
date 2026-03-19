@@ -41,14 +41,13 @@ static byteswap_context_t byteswap_contexts[MAX_BYTESWAP];
 static int next_context = 0;
 
 static boolean_t
-chain_byteswap(drr_packet_t *item, byteswap_context_t *context,
-    chain_attrs_t *attrs)
+chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 {
 	struct dmu_replay_record *drr = &item->dp_drr;
 	boolean_t is_swapped = *context == BS_INCOMING &&
-	    ATTR_IS_SET(attrs, CA_BYTESWAPPED);
+	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
 	boolean_t swap = is_swapped || (*context == BS_OUTGOING &&
-	    OPTION_ENABLED(attrs, CA_BYTESWAPPED_OUT));
+	    OPTION_ENABLED(chain_attrs, CA_BYTESWAPPED_OUT));
 
 	if (item == NULL || !swap) {
 		return (B_TRUE);
