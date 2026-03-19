@@ -108,10 +108,8 @@ needs_decompression(drr_packet_t *item, compression_spec_t *context)
 }
 
 static boolean_t
-chain_decompress_writes(drr_packet_t *item, compression_spec_t *context,
-    chain_attrs_t *attrs)
+chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 {
-	(void) attrs;
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
 	uint8_t *debuff;
@@ -140,10 +138,8 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context,
 }
 
 static boolean_t
-chain_compress_writes(drr_packet_t *item, compression_spec_t *context,
-    chain_attrs_t *attrs)
+chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 {
-	(void) attrs;
 	dmu_replay_record_t *drr = &item->dp_drr;
 
 	if (item == NULL || drr->drr_type != DRR_WRITE ||

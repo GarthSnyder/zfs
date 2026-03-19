@@ -61,7 +61,7 @@ typedef struct {
 	uint8_t drr_mac[ZIO_DATA_MAC_LEN];
 } crypto_fields_t;
 
-typedef void dumper_f(drr_packet_t *item, chain_attrs_t *attrs);
+typedef void dumper_f(drr_packet_t *item);
 
 typedef struct {
 	const char	*rt_typename;
@@ -150,9 +150,9 @@ sprintf_bytes(char *str, uint8_t *buf, uint_t buf_len)
 }
 
 static void
-maybe_dump_payload(drr_packet_t *item, chain_attrs_t *attrs)
+maybe_dump_payload(drr_packet_t *item)
 {
-	if (OPTION_ENABLED(attrs, CA_DUMP_DATA)) {
+	if (OPTION_ENABLED(chain_attrs, CA_DUMP_DATA)) {
 		print_block(item->dp_payload, item->dp_payload_size);
 	}
 }
@@ -175,7 +175,7 @@ stringify_encryption_fields(void *crypto_in)
 }
 
 static void
-dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_begin_record(drr_packet_t *item)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_begin *drrb = &item->dp_drr.drr_u.drr_begin;
@@ -194,7 +194,7 @@ dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
 	printf("\ttoname = %s\n", drrb->drr_toname);
 	printf("\tpayloadlen = %u\n", drr->drr_payloadlen);
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE))
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE))
 		printf("\n");
 
 	if (drr->drr_payloadlen != 0) {
@@ -211,9 +211,8 @@ dump_begin_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static void
-dump_end_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_end_record(drr_packet_t *item)
 {
-	(void) attrs;
 	struct drr_end *drre = &item->dp_drr.drr_u.drr_end;
 
 	printf("END checksum = %zx/%zx/%zx/%zx\n",
@@ -224,11 +223,11 @@ dump_end_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static void
-dump_object_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_object_record(drr_packet_t *item)
 {
 	struct drr_object *drro = &item->dp_drr.drr_u.drr_object;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("OBJECT object = %zu type = %u "
 		    "bonustype = %u blksz = %u bonuslen = %u "
 		    "dn_slots = %u raw_bonuslen = %u "
@@ -249,27 +248,27 @@ dump_object_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    drro->drr_nblkptr);
 	}
 	if (drro->drr_bonuslen > 0) {
-		maybe_dump_payload(item, attrs);
+		maybe_dump_payload(item);
 	}
 }
 
 static void
-dump_freeobjects_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_freeobjects_record(drr_packet_t *item)
 {
 	struct drr_freeobjects *drrfo = &item->dp_drr.drr_u.drr_freeobjects;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("FREEOBJECTS firstobj = %zu numobjs = %zu\n",
 		    drrfo->drr_firstobj, drrfo->drr_numobjs);
 	}
 }
 
 static void
-dump_write_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_write_record(drr_packet_t *item)
 {
 	struct drr_write *drrw = &item->dp_drr.drr_u.drr_write;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("WRITE object = %zu type = %u "
 		    "checksum type = %u compression type = %u "
 		    "flags = %u offset = %zu "
@@ -289,15 +288,15 @@ dump_write_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    drrw->drr_key.ddk_prop,
 		    stringify_encryption_fields(&drrw->drr_salt));
 	}
-	maybe_dump_payload(item, attrs);
+	maybe_dump_payload(item);
 }
 
 static void
-dump_write_byref_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_write_byref_record(drr_packet_t *item)
 {
 	struct drr_write_byref *drrwbr = &item->dp_drr.drr_u.drr_write_byref;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("WRITE_BYREF object = %zu "
 		    "checksum type = %u props = %zx "
 		    "offset = %zu length = %zu "
@@ -316,11 +315,11 @@ dump_write_byref_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static void
-dump_free_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_free_record(drr_packet_t *item)
 {
 	struct drr_free *drrf = &item->dp_drr.drr_u.drr_free;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("FREE object = %zu "
 		    "offset = %zu length = %zd\n",
 		    drrf->drr_object,
@@ -330,11 +329,11 @@ dump_free_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static void
-dump_spill_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_spill_record(drr_packet_t *item)
 {
 	struct drr_spill *drrs = &item->dp_drr.drr_u.drr_spill;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("SPILL block for object = %zu "
 		    "length = %zu flags = %u "
 		    "compression type = %u "
@@ -349,16 +348,16 @@ dump_spill_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    item->dp_payload_size,
 		    stringify_encryption_fields(&drrs->drr_salt));
 	}
-	maybe_dump_payload(item, attrs);
+	maybe_dump_payload(item);
 }
 
 static void
-dump_write_embedded_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_write_embedded_record(drr_packet_t *item)
 {
 	struct drr_write_embedded *drrwe =
 	    &item->dp_drr.drr_u.drr_write_embedded;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("WRITE_EMBEDDED object = %zu "
 		    "offset = %zu length = %zu "
 		    "toguid = %zx comp = %u etype = %u "
@@ -372,15 +371,15 @@ dump_write_embedded_record(drr_packet_t *item, chain_attrs_t *attrs)
 		    drrwe->drr_lsize,
 		    drrwe->drr_psize);
 	}
-	maybe_dump_payload(item, attrs);
+	maybe_dump_payload(item);
 }
 
 static void
-dump_object_range_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_object_range_record(drr_packet_t *item)
 {
 	struct drr_object_range *drror = &item->dp_drr.drr_u.drr_object_range;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("OBJECT_RANGE firstobj = %zu "
 		    "numslots = %zu flags = %u "
 		    "%s\n",
@@ -392,11 +391,11 @@ dump_object_range_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static void
-dump_redact_record(drr_packet_t *item, chain_attrs_t *attrs)
+dump_redact_record(drr_packet_t *item)
 {
 	struct drr_redact *drrr = &item->dp_drr.drr_u.drr_redact;
 
-	if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 		printf("REDACT object = %zu offset = "
 		    "%zu length = %zu\n",
 		    drrr->drr_object,
@@ -406,8 +405,7 @@ dump_redact_record(drr_packet_t *item, chain_attrs_t *attrs)
 }
 
 static boolean_t
-chain_dump_record(drr_packet_t *item, record_type_t *context,
-    chain_attrs_t *attrs)
+chain_dump_record(drr_packet_t *item, record_type_t *context)
 {
 	if (!item) {
 		return (B_TRUE);
@@ -417,9 +415,9 @@ chain_dump_record(drr_packet_t *item, record_type_t *context,
 	zio_cksum_t *cksum = &drr->drr_u.drr_checksum.drr_checksum;
 	int type = (int)drr->drr_type;
 
-	context[type].rt_dumper(item, attrs);
+	context[type].rt_dumper(item);
 
-	if (type != DRR_BEGIN && OPTION_ENABLED(attrs, CA_VERY_VERBOSE)) {
+	if (type != DRR_BEGIN && OPTION_ENABLED(chain_attrs, CA_VERY_VERBOSE)) {
 		printf("    checksum = %zx/%zx/%zx/%zx\n",
 		    cksum->zc_word[0],
 		    cksum->zc_word[1],
