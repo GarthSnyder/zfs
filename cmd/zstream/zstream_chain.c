@@ -42,6 +42,8 @@
 
 #define MAX_CHAIN_LENGTH 32
 
+chain_attrs_t *chain_attrs;
+
 chain_step_t
 serial_null_step(void)
 {
@@ -81,9 +83,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 	size_t max_size = 0;
 	chain_attrs_t backup_attrs = {0};
 
-	if (!attrs) {
-		attrs = &backup_attrs;
-	}
+	chain_attrs = attrs ? attrs : &backup_attrs;
 
 	while (chain[num_steps].cs_type != CS_TERMINATE) {
 		if (num_steps > MAX_CHAIN_LENGTH) {
@@ -120,7 +120,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 		for (int i = 0; i < num_steps; i++) {
 			uint8_t *arg = done ? NULL : buffer;
 			done = !chain[i].cs_serial.process(arg,
-			    chain[i].cs_context, attrs) || done;
+			    chain[i].cs_context) || done;
 		}
 	}
 

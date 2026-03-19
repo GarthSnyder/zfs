@@ -48,8 +48,7 @@
 #define KEYSIZE 64
 
 static boolean_t
-chain_decompress_named_writes(drr_packet_t *item, void *context,
-    chain_attrs_t *attrs)
+chain_decompress_named_writes(drr_packet_t *item, void *context)
 {
 	(void) context;
 	dmu_replay_record_t *drr = &item->dp_drr;
@@ -72,7 +71,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 	if (IS_UNCOMPRESSED(ctype)) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
-		if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 			fprintf(stderr,
 			    "Resetting compression type to "
 			    "off for ino %zu offset %zu\n",
@@ -105,7 +104,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context,
 		item->dp_payload_size = drrw->drr_logical_size;
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
-		if (OPTION_ENABLED(attrs, CA_VERBOSE)) {
+		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 			fprintf(stderr,
 			    "Successfully decompressed ino %zu offset %zu\n",
 			    drrw->drr_object, drrw->drr_offset);

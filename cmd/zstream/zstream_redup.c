@@ -101,10 +101,8 @@ rdt_lookup(redup_table_t *rdt,
 }
 
 static boolean_t
-chain_redup_writes(drr_packet_t *item, redup_context_t *context,
-    chain_attrs_t *attrs)
+chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 {
-	(void) attrs;
 	if (!item) {
 		return (B_TRUE);
 	}
