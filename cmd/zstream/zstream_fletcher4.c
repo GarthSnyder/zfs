@@ -122,7 +122,7 @@ chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
 	zio_cksum_t *fragment = &item->dp_fletcher4_payload;
 	boolean_t swap = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
 
-	fletcher_4(swap, data, write_size, NULL, fragment);
+	fletcher_4(swap, data, write_size, fragment);
 	if (num_overflow) {
 		fragment = safe_calloc(num_overflow * sizeof (zio_cksum_t));
 		item->dp_fletcher4_overflow = fragment;
@@ -132,7 +132,7 @@ chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
 	while (remaining -= write_size) {
 		data += write_size;
 		write_size = MIN(remaining, MAX_FLETCHER_BLOCK);
-		fletcher_4(swap, write_size, NULL, fragment);
+		fletcher_4(swap, data, write_size, fragment);
 		fragment++;
 	}
 }
@@ -191,7 +191,7 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
  * input and output streams.
  */
 static boolean_t
-chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
+chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context)
 {
 	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
 	    OPTION_ENABLED(chain_attrs, CA_IGNORE_CKSUMS)))
@@ -200,8 +200,8 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 	}
 
 	zio_cksum_t *stream_cksum	= &context->fc_stream_cksum;
-	dmu_replay_record_t *drr	= &item->dp_drr;
-	struct drr_end *drre		= &item->dp_drr.drr_u.drr_end;
+	dmu_replay_record_t *drr	= &item->dp_base.dp_drr;
+	struct drr_end *drre		= &drr->drr_u.drr_end;
 	zio_cksum_t *record_cksum	= &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum		= &drre->drr_checksum;
 
@@ -217,7 +217,7 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 	    drre->drr_toguid == 0 &&
 	    ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum);
 
-	if (item->dp_stream_offset == 0) {
+	if (item->dp_base.dp_stream_offset == 0) {
 		VERIFY3U(ck_offset, ==, sizeof (dmu_replay_record_t) -
 		    sizeof (zio_cksum_t));
 	}
@@ -225,7 +225,7 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else if (drr_type == DRR_END) {
 		if (context->fc_operation == F4_VALIDATE) {
-			off_t stream_offset = item->dp_stream_offset +
+			off_t stream_offset = item->dp_base.dp_stream_offset +
 			    offsetof(dmu_replay_record_t,
 			    drr_u.drr_end.drr_checksum);
 			validate_or_exit(stream_cksum, end_cksum, swap,
@@ -240,7 +240,7 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 	fletcher_4_incremental(swap, drr, ck_offset, stream_cksum);
 	if (drr_type != DRR_BEGIN && !is_conclusion_record) {
 		if (context->fc_operation == F4_VALIDATE) {
-			off_t stream_offset = item->dp_stream_offset +
+			off_t stream_offset = item->dp_base.dp_stream_offset +
 			    offsetof(dmu_replay_record_t,
 			    drr_u.drr_checksum.drr_checksum);
 			validate_or_exit(stream_cksum, record_cksum,

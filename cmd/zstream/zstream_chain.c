@@ -63,7 +63,6 @@ typedef struct chain_info {
 	int		ci_num_steps;
 	zstream_queue_t	**ci_queues;	/* Sparse */
 	size_t		ci_item_size;
-	chain_attrs_t	*ci_attrs;
 } chain_info_t;
 
 typedef struct {
@@ -167,7 +166,6 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 		.ci_num_steps	= num_steps,
 		.ci_queues	= queues,
 		.ci_item_size	= max_size,
-		.ci_attrs	= attrs
 	};
 
 	if (serialize_chains) {
@@ -176,13 +174,6 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 		return;
 	}
 
-<<<<<<< HEAD
-	while (!done) {
-		for (int i = 0; i < num_steps; i++) {
-			uint8_t *arg = done ? NULL : buffer;
-			done = !chain[i].cs_serial.process(arg,
-			    chain[i].cs_context) || done;
-=======
 	/* Create parallel queues */
 	for (int i = 0; i < num_steps; i++) {
 		if (chain[i].cs_type == CS_PARALLEL) {
@@ -196,7 +187,6 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 				.qp_context	 = ci->cs_context
 			};
 			queues[i] = zstream_queue_create(&queue_params);
->>>>>>> 2b8573931 (Recover multithreaded zstream_chain.[ch])
 		}
 	}
 
@@ -248,8 +238,7 @@ zstream_chain_worker(worker_context_t *ctxt)
 			if (step->cs_type == CS_SERIAL) {
 				done = !step->cs_serial.process(
 				    done ? NULL : buffer,
-				    step->cs_context,
-				    ci->ci_attrs) || done;
+				    step->cs_context) || done;
 			} else if (i == ctxt->wc_first_step) {
 				done = done || !zstream_dequeue(queue, buffer);
 			} else if (done) {
@@ -278,7 +267,7 @@ chain_exec_serialized(chain_info_t *ci)
 		if (ci->ci_chain[i].cs_type == CS_SERIAL) {
 			uint8_t *arg = done ? NULL : buffer;
 			done = !ci->ci_chain[i].cs_serial.process(arg,
-			    ci->ci_chain[i].cs_context, ci->ci_attrs) || done;
+			    ci->ci_chain[i].cs_context) || done;
 		} else if (!done) {
 			size_t cost = ci->ci_chain[i].cs_parallel.cost(buffer,
 			    ci->ci_chain[i].cs_context);

@@ -147,12 +147,6 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
 
-	if (item == NULL || drr->drr_type != DRR_WRITE ||
-	    !needs_compression(item, context))
-	{
-		return (B_TRUE);
-	}
-
 	struct drr_write *drrw = &drr->drr_u.drr_write;
 	enum zio_compress ctype = drrw->drr_compressiontype;
 	uint8_t *cbuff;
@@ -191,7 +185,7 @@ chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
 	if (!item || drr->drr_type != DRR_WRITE) {
 		return (0);
 	}
-	return (needs_modification(item, context) ? drrw->drr_logical_size : 0);
+	return (needs_compression(item, context) ? drrw->drr_logical_size : 0);
 }
 
 /*
@@ -209,7 +203,7 @@ chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
 	if (drr->drr_type != DRR_WRITE || IS_UNCOMPRESSED(ctype)) {
 		return (0);
 	}
-	return (needs_modification(item, context) ? item->dp_payload_size : 0);
+	return (needs_decompression(item, context) ? item->dp_payload_size : 0);
 }
 
 /*
