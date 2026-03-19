@@ -180,3 +180,50 @@ serial_byteswap(byteswap_stage_t stage)
 		}
 	});
 }
+
+int
+zstream_do_byteswap(int argc, char *argv[])
+{
+	chain_attrs_t attrs = {0};
+	const char *input_file = NULL;
+	int c;
+
+	while ((c = getopt(argc, argv, "slb")) != -1) {
+		switch (c) {
+		case 'l':
+			if (OPTION_ENABLED(&attrs, CA_BIG_ENDIAN_OUT))
+				errx(1, "-l and -b can't be used together");
+			ENABLE_OPTION(&attrs, CA_LITTLE_ENDIAN_OUT);
+			break;
+		case 'b':
+			if (OPTION_ENABLED(&attrs, CA_LITTLE_ENDIAN_OUT)) {
+				errx(1, "-l and -b can't be used together");
+			}
+			ENABLE_OPTION(&attrs, CA_BIG_ENDIAN_OUT);
+			break;
+		case 's':
+			ENABLE_OPTION(&attrs, CA_SILENT);
+			break;
+		case '?':
+			warnx("invalid option '%c'\n", optopt);
+			zstream_usage();
+			break;
+		}
+	}
+	if (argc > optind) {
+		input_file = argv[optind];
+	}
+	if (!OPTION_ENABLED(&attrs, CA_BIG_ENDIAN_OUT) &&
+	    !OPTION_ENABLED(&attrs, CA_LITTLE_ENDIAN_OUT))
+	{
+		ENABLE_OPTION(&attrs, CA_OPPOSITE_ENDIAN_OUT);
+	}
+
+	zstream_chain_t dump_chain = {
+		STANDARD_INPUT_STACK(input_file),
+		STANDARD_OUTPUT_STACK(NULL)
+	};
+
+	zstream_chain_exec(dump_chain, &attrs);
+	return (0);
+}

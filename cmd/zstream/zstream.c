@@ -32,6 +32,8 @@ zstream_usage(void)
 	    "usage: zstream command args ...\n"
 	    "Available commands are:\n"
 	    "\n"
+	    "\tzstream byteswap [-l | -b]"
+	    "\n"
 	    "\tzstream dump [-vCd] FILE\n"
 	    "\t... | zstream dump [-vCd]\n"
 	    "\n"
@@ -72,6 +74,8 @@ main(int argc, char *argv[])
 		return (zstream_do_token(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "redup") == 0) {
 		return (zstream_do_redup(argc - 1, argv + 1));
+	} else if (strcmp(subcommand, "byteswap") == 0) {
+		return (zstream_do_byteswap(argc - 1, argv + 1));
 	} else {
 		zstream_usage();
 	}
