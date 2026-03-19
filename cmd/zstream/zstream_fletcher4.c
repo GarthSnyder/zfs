@@ -30,6 +30,12 @@
 #include "zstream_io.h"		/* drr_packet_t...			*/
 #include "zstream_util.h"	/* validate_or_exit			*/
 
+/*
+ * Copied from zfs_fletcher.c. See comments below regarding the
+ * fletcher_4_incremental_combine function.
+ */
+#define	MAX_FLETCHER_BLOCK	(8ULL << 20)
+
 typedef enum { F4_SET, F4_VALIDATE } fletcher4_op_t;
 
 typedef struct {
@@ -47,6 +53,112 @@ fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
 		return fletcher_4_incremental_byteswap(buff, size, cksum);
 	} else {
 		return fletcher_4_incremental_native(buff, size, cksum);
+	}
+}
+
+static inline int
+fletcher_4(boolean_t swap, void *buff, size_t size, void *cksum)
+{
+	if (swap) {
+		return fletcher_4_byteswap(buff, size, cksum);
+	} else {
+		return fletcher_4_native(buff, size, cksum);
+	}
+}
+
+/*
+ * The function below (and the MAX_FLETCHER_BLOCK define) are
+ * copied from zfs_fletcher.c, where they're internal.
+ *
+ * Fletcher checksums CAN be computed in parallel, with the segments later
+ * being reassembled. However, the combine function needs to know the
+ * original length of each segment, and there's a hard limit as to how long
+ * any given segment can be because 64-bit coefficients used in the combine
+ * operation may overflow if the size is larger than 8MB.
+ *
+ * My understanding of this is that the checksum fields themselves can and
+ * will overflow for long hash texts. However, they still function properly
+ * as checksums when this happens. It's just that overflow has to be
+ * handled correctly in a structured fashion, not by allowing intermediate
+ * calculations to overflow.
+ */
+static inline void
+fletcher4_incremental_combine(zio_cksum_t *zcp, const uint64_t size,
+    const zio_cksum_t *nzcp)
+{
+	const uint64_t c1 = size / sizeof (uint32_t);
+	const uint64_t c2 = c1 * (c1 + 1) / 2;
+	const uint64_t c3 = c2 * (c1 + 2) / 3;
+
+	/*
+	 * Value of 'c3' overflows on buffer sizes close to 16MiB. For that
+	 * reason we split incremental fletcher4 computation of large buffers
+	 * to steps of (MAX_FLETCHER_BLOCK) size.
+	 */
+	ASSERT3U(size, <=, MAX_FLETCHER_BLOCK);
+
+	zcp->zc_word[3] += nzcp->zc_word[3] + c1 * zcp->zc_word[2] +
+	    c2 * zcp->zc_word[1] + c3 * zcp->zc_word[0];
+	zcp->zc_word[2] += nzcp->zc_word[2] + c1 * zcp->zc_word[1] +
+	    c2 * zcp->zc_word[0];
+	zcp->zc_word[1] += nzcp->zc_word[1] + c1 * zcp->zc_word[0];
+	zcp->zc_word[0] += nzcp->zc_word[0];
+}
+
+/*
+ * This is the parallel calculation.
+ */
+static void
+chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
+{
+	(void) context;
+	VERIFY3U(item->dp_base.dp_payload_size, >, 0);
+
+	ssize_t remaining = item->dp_base.dp_payload_size;
+	uint8_t *data = item->dp_base.dp_payload;
+	size_t write_size = MIN(remaining, MAX_FLETCHER_BLOCK);
+	int num_overflow = DIV_ROUND_UP(remaining, MAX_FLETCHER_BLOCK) - 1;
+	zio_cksum_t *fragment = &item->dp_fletcher4_payload;
+	boolean_t swap = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+
+	fletcher_4(swap, data, write_size, NULL, fragment);
+	if (num_overflow) {
+		fragment = safe_calloc(num_overflow * sizeof (zio_cksum_t));
+		item->dp_fletcher4_overflow = fragment;
+	} else {
+		item->dp_fletcher4_overflow = NULL;
+	}
+	while (remaining -= write_size) {
+		data += write_size;
+		write_size = MIN(remaining, MAX_FLETCHER_BLOCK);
+		fletcher_4(swap, write_size, NULL, fragment);
+		fragment++;
+	}
+}
+
+/*
+ * Used by the serial validation or inscription step. Combine the payload
+ * checksum(s) produced by the parallel phase into the stream checksum.
+ */
+static void
+assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
+{
+	ssize_t remaining = item->dp_base.dp_payload_size;
+	size_t read_size = MIN(remaining, MAX_FLETCHER_BLOCK);
+	zio_cksum_t *fragment = item->dp_fletcher4_overflow;
+
+	if (remaining == 0)
+		return;
+	fletcher4_incremental_combine(stream_ck, read_size,
+	    &item->dp_fletcher4_payload);
+	while (remaining -= read_size) {
+		read_size = MIN(remaining, MAX_FLETCHER_BLOCK);
+		fletcher4_incremental_combine(stream_ck, read_size, fragment);
+		fragment++;
+	}
+	if (item->dp_fletcher4_overflow != NULL) {
+		free(item->dp_fletcher4_overflow);
+		item->dp_fletcher4_overflow = NULL;
 	}
 }
 
@@ -92,13 +204,12 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 	zio_cksum_t *record_cksum	= &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum		= &drre->drr_checksum;
 
-	boolean_t is_swapped = (context->fc_operation == F4_VALIDATE &&
+	boolean_t swap = (context->fc_operation == F4_VALIDATE &&
 	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) ||
 	    (context->fc_operation == F4_SET &&
 	    OPTION_ENABLED(chain_attrs, CA_BYTESWAPPED_OUT));
-	uint32_t drr_type = is_swapped ?
-	    BSWAP_32(drr->drr_type) : drr->drr_type;
-	off_t off = offsetof(dmu_replay_record_t,
+	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
+	off_t ck_offset = offsetof(dmu_replay_record_t,
 	    drr_u.drr_checksum.drr_checksum);
 	boolean_t is_conclusion_record =
 	    drr_type == DRR_END &&
@@ -106,7 +217,7 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 	    ZIO_CHECKSUM_IS_ZERO(&drr->drr_u.drr_checksum.drr_checksum);
 
 	if (item->dp_stream_offset == 0) {
-		VERIFY3U(off, ==, sizeof (dmu_replay_record_t) -
+		VERIFY3U(ck_offset, ==, sizeof (dmu_replay_record_t) -
 		    sizeof (zio_cksum_t));
 	}
 	if (drr_type == DRR_BEGIN) {
@@ -116,26 +227,26 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 			off_t stream_offset = item->dp_stream_offset +
 			    offsetof(dmu_replay_record_t,
 			    drr_u.drr_end.drr_checksum);
-			validate_or_exit(stream_cksum, end_cksum, is_swapped,
+			validate_or_exit(stream_cksum, end_cksum, swap,
 			    "in DRR_END record", stream_offset);
 		} else {
 			*end_cksum = *stream_cksum;
-			if (is_swapped) {
+			if (swap) {
 				ZIO_CHECKSUM_BSWAP(end_cksum);
 			}
 		}
 	}
-	fletcher_4_incremental(is_swapped, drr, off, stream_cksum);
+	fletcher_4_incremental(swap, drr, ck_offset, stream_cksum);
 	if (drr_type != DRR_BEGIN && !is_conclusion_record) {
 		if (context->fc_operation == F4_VALIDATE) {
 			off_t stream_offset = item->dp_stream_offset +
 			    offsetof(dmu_replay_record_t,
 			    drr_u.drr_checksum.drr_checksum);
 			validate_or_exit(stream_cksum, record_cksum,
-			    is_swapped, "at DRR record end", stream_offset);
+			    swap, "at DRR record end", stream_offset);
 		} else {
 			*record_cksum = *stream_cksum;
-			if (is_swapped) {
+			if (swap) {
 				ZIO_CHECKSUM_BSWAP(record_cksum);
 			}
 		}
@@ -143,15 +254,31 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 	if (drr_type == DRR_END) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
 	} else {
-		fletcher_4_incremental(is_swapped, record_cksum,
+		fletcher_4_incremental(swap, record_cksum,
 		    sizeof (drr->drr_u.drr_checksum.drr_checksum),
 		    stream_cksum);
-		if (item->dp_payload_size > 0) {
-			fletcher_4_incremental(is_swapped, item->dp_payload,
-			    item->dp_payload_size, stream_cksum);
-		}
+		assemble_payload_cksum(item, stream_cksum);
 	}
 	return (B_TRUE);
+}
+
+/*
+ * These queues double as I/O buffers, so default queue length is long.
+ */
+chain_step_t
+parallel_calc_fletcher4(int queue_length)
+{
+	return ((chain_step_t) {
+		.cs_type = CS_PARALLEL,
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_fletcher4_t),
+		.cs_parallel = {
+			.queue_length = queue_length,
+			.batch_budget = 256 * 1024,
+			.process = (zq_process_item_f *)chain_calc_fletcher4,
+			.cost = (zq_estimate_cost_f *)payload_size_as_cost
+		}
+	});
 }
 
 static chain_step_t
