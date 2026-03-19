@@ -41,6 +41,7 @@ typedef enum { F4_SET, F4_VALIDATE } fletcher4_op_t;
 typedef struct {
 	zio_cksum_t	fc_stream_cksum;
 	fletcher4_op_t	fc_operation;
+	chain_attrs_t	*fc_attrs;
 } fletcher4_context_t;
 
 static fletcher4_context_t	fletcher4_contexts[MAX_FLETCHER_4];
@@ -56,13 +57,13 @@ fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
 	}
 }
 
-static inline int
+static void
 fletcher_4(boolean_t swap, void *buff, size_t size, void *cksum)
 {
 	if (swap) {
-		return fletcher_4_byteswap(buff, size, cksum);
+		fletcher_4_byteswap(buff, size, NULL, cksum);
 	} else {
-		return fletcher_4_native(buff, size, cksum);
+		fletcher_4_native(buff, size, NULL, cksum);
 	}
 }
 

@@ -119,6 +119,7 @@ extern "C" {
 #define CA_DO_NOT_VALIDATE	(1ULL << 5)
 #define CA_FORBID_DEDUP		(1ULL << 6)
 #define CA_REQUIRE_DEDUP	(1ULL << 7)
+#define CA_BYTESWAPPED_OUT      (1ULL << 8)
 
 #define OPTION_ENABLED(attrs, opt) (!!((attrs)->ca_command_opts & (opt)))
 #define STREAM_HAS_FEATURE(attrs, feat) (!!((attrs)->ca_feature_flags & (feat)))
@@ -189,6 +190,14 @@ extern chain_attrs_t *chain_attrs;
  * If it does not yield identical results, there's a problem somewhere.
  */
 extern boolean_t serialize_chains;
+
+/*
+ * Chain attributes accessible to any step on the chain. In theory this
+ * could cause a race condition between reading and setting, but all
+ * attributes are typically set by the time the first record is read. Ergo,
+ * nobody else can be executing while that first chain_read() runs.
+ */
+extern chain_attrs_t *attrs;
 
 /*
  * Execute a chain. Returns once execution is complete. You can pass NULL

@@ -55,6 +55,8 @@ static int next_io_context = 0;
 static checkpoint_context_t checkpoint_contexts[MAX_IO_STREAMS];
 static int next_checkpoint_context = 0;
 
+chain_attrs_t	*chain_attrs;
+
 /*
  * Run from within chain execution to initialize I/O. A NULL filename
  * indicates stdin or stdout.
