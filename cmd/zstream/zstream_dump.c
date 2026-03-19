@@ -497,7 +497,7 @@ zstream_do_dump(int argc, char *argv[])
 	}
 
 	zstream_chain_t dump_chain = {
-		STANDARD_INPUT_STACK(input_file),
+		STANDARD_INPUT_STACK(input_file, 1024),
 		serial_dump_records(record_types),
 		NULL_OUTPUT_STACK()
 	};
