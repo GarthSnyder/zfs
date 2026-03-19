@@ -95,7 +95,7 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 	boolean_t is_swapped = (context->fc_operation == F4_VALIDATE &&
 	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) ||
 	    (context->fc_operation == F4_SET &&
-	    OPTION_ENABLED(chain_attrs, CA_BYTESWAPPED_OUT));
+	    OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT));
 	uint32_t drr_type = is_swapped ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 	off_t off = offsetof(dmu_replay_record_t,

@@ -17,16 +17,15 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <stdio.h>			/* fprintf, NULL, stderr	*/
+#include <err.h>			/* fprintf, NULL, stderr	*/
 #include <stdlib.h>			/* exit				*/
 #include <sys/byteorder.h>		/* BSWAP_64, BSWAP_32		*/
 #include <sys/spa_checksum.h>		/* ZIO_CHECKSUM_BSWAP		*/
 #include <sys/stdtypes.h>		/* B_TRUE, boolean_t		*/
 #include <sys/zfs_ioctl.h>		/* dmu_replay_record...		*/
 
-#include "zstream_chain.h"
-#include "zstream_io.h"			/* drr_packet_t			*/
-#include "zstream_byteswap.h"		/* serial_byteswap		*/
+#include "zstream.h"
+#include "zstream_modules.h"
 
 /*
  * Mostly from dmu_recv.c
@@ -44,16 +43,16 @@ static boolean_t
 chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 {
 	struct dmu_replay_record *drr = &item->dp_drr;
-	boolean_t is_swapped = *context == BS_INCOMING &&
+	boolean_t input_swapped = *context == BS_INCOMING &&
 	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
-	boolean_t swap = is_swapped || (*context == BS_OUTGOING &&
-	    OPTION_ENABLED(chain_attrs, CA_BYTESWAPPED_OUT));
+	boolean_t swap = input_swapped || (*context == BS_OUTGOING &&
+	    OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT));
 
 	if (item == NULL || !swap) {
 		return (B_TRUE);
 	}
 
-	uint32_t type = is_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
+	uint32_t type = input_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	switch (type) {
 	case DRR_BEGIN:
@@ -151,8 +150,7 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 		break;
 
 	default:
-		(void) fprintf(stderr, "Unknown record type, aborting...\n");
-		exit(1);
+		errx(1, "unknown record type, aborting...");
 	}
 
 	drr->drr_type = BSWAP_32(drr->drr_type);
