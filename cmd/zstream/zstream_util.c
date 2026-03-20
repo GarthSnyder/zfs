@@ -28,14 +28,20 @@
  * Copyright (c) 2024, Klara, Inc.
  */
 
-#include <errno.h>		/* errno				*/
-#include <stdio.h>		/* fprintf, size_t, stderr, NULL...	*/
-#include <stdlib.h>		/* exit, free, calloc, malloc		*/
-#include <string.h>		/* strerror				*/
-#include <assert.h>		/* VERIFY3U				*/
-#include <sys/abd.h>		/* abd_free, abd_get_from_buf_struct...	*/
-#include <sys/fs/zfs.h>		/* SPA_MINBLOCKSIZE			*/
-#include <sys/sysmacros.h>	/* P2ROUNDUP				*/
+#include <assert.h>
+#include <errno.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/abd.h>
+#include <sys/fs/zfs.h>
+#include <sys/sysmacros.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/zio.h>
+#include <sys/zio_compress.h>
+#include <unistd.h>
+#include <zfs_fletcher.h>
 
 #include "zstream_util.h"
 

@@ -17,23 +17,23 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <err.h>		/* errno				*/
-#include <libzutil.h>		/* zfs_nicenum				*/
-#include <stdio.h>		/* fprintf, stderr, fclose, fread	*/
-#include <stdlib.h>		/* exit, free				*/
-#include <string.h>		/* strerror				*/
-#include <sys/byteorder.h>	/* BSWAP_32, BSWAP_64			*/
-#include <sys/stdtypes.h>	/* B_TRUE, boolean_t, B_FALSE		*/
-#include <sys/sysmacros.h>	/* P2ROUNDUP				*/
-#include <sys/types.h>		/* off_t				*/
-#include <sys/zfs_ioctl.h>	/* drr_begin, dmu_replay_record_t	*/
-#include <time.h>		/* timespec, clock_gettime, CLOC...	*/
-#include <unistd.h>		/* isatty, STDIN_FILENO, STDOUT_...	*/
 #include <arpa/inet.h>
+#include <err.h>
+#include <errno.h>
+#include <libzutil.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/byteorder.h>
+#include <sys/stdtypes.h>
+#include <sys/sysmacros.h>
+#include <sys/types.h>
+#include <sys/zfs_ioctl.h>
+#include <time.h>
+#include <unistd.h>
 
-#include "zstream_io.h"		/* drr_packet_t, zc_serial_process_f	*/
-#include "zstream_chain.h"
-#include "zstream_util.h"	/* safe_malloc				*/
+#include "zstream_modules.h"
+#include "zstream_util.h"
 
 /* Init only the filename, chain_read() will prepare the FILE *. */
 typedef struct {
