@@ -26,19 +26,18 @@
  */
 
 #include <err.h>
+#include <errno.h>
 #include <search.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
+#include <string.h>
+#include <sys/stdtypes.h>
 #include <sys/zfs_ioctl.h>
-#include <sys/zio_checksum.h>
-#include <sys/zstd/zstd.h>
-#include "zfs_fletcher.h"
+#include <unistd.h>
+
 #include "zstream.h"
-#include "zstream_chain.h"
-#include "zstream_io.h"
 #include "zstream_modules.h"
-#include "zstream_util.h"
 
 #define KEYSIZE 64
 

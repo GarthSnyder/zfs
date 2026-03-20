@@ -28,22 +28,21 @@
  * Copyright (c) 2026 by Garth Snyder
  */
 
-#include <err.h>		/* errx, err, warnx			*/
-#include <errno.h>		/* errno				*/
-#include <search.h>		/* ENTRY, hsearch, hcreate, hdestroy	*/
-#include <stdint.h>		/* intptr_t, uint64_t, uint8_t		*/
-#include <stdio.h>		/* NULL, fprintf, stderr, asprintf	*/
-#include <stdlib.h>		/* exit, free, strtoull			*/
-#include <string.h>		/* strcmp, strsep			*/
-#include <sys/stdtypes.h>	/* B_TRUE, u_longlong_t, boolean_t	*/
-#include <sys/zfs_ioctl.h>	/* drr_write, dmu_replay_record...	*/
-#include <sys/zio_compress.h>	/* zio_compress				*/
-#include <unistd.h>		/* getopt, optind, optopt		*/
+#include <err.h>
+#include <errno.h>
+#include <search.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stdtypes.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/zio_compress.h>
+#include <unistd.h>
 
-#include "zstream.h"		/* zstream_do_decompress...		*/
-#include "zstream_chain.h"	/* zc_serial_process_f, CA_VERBOSE	*/
-#include "zstream_modules.h"	/* STANDARD_INPUT_STACK...		*/
-#include "zstream_util.h"	/* decompress_buffer			*/
+#include "zstream.h"
+#include "zstream_modules.h"
+#include "zstream_util.h"
 
 #define KEYSIZE 64
 

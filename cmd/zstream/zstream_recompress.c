@@ -22,22 +22,21 @@
  * Copyright (c) 2026 by Garth Snyder
  */
 
-#include <assert.h>		/* VERIFY3U, VERIFY0P, VERIFY3P		*/
-#include <err.h>		/* warnx				*/
-#include <stdint.h>		/* uint8_t				*/
-#include <stdio.h>		/* NULL, fprintf, size_t		*/
-#include <stdlib.h>		/* exit, free				*/
-#include <string.h>		/* strcmp				*/
-#include <sys/zfs_ioctl.h>	/* drr_write, dmu_replay_record_t	*/
-#include <sys/zio.h>		/* ZIO_DATA_SALT_LEN			*/
-#include <sys/zio_compress.h>	/* zio_compress, zio_compre...		*/
-#include <sys/zstd/zstd.h>	/* zfs_get_hdrlevel			*/
-#include <unistd.h>		/* getopt, optarg, optind		*/
+#include <assert.h>
+#include <err.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/zio_compress.h>
+#include <sys/zstd/zstd.h>
+#include <unistd.h>
+#include <sys/stdtypes.h>
 
-#include "zstream.h"		/* zstream_usage, zstream_do_recompress	*/
-#include "zstream_modules.h"	/* STANDARD_INPUT_STACK...		*/
-#include "zstream_recompress.h"	/* serial_compress_writes		*/
-#include "zstream_util.h"	/* compression_spec_t...		*/
+#include "zstream.h"
+#include "zstream_modules.h"
+#include "zstream_util.h"
 
 #define MAX_COMPRESSION_STEPS  4
 

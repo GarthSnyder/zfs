@@ -17,17 +17,19 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <err.h>		/* fprintf, stderr			*/
-#include <stdlib.h>		/* exit					*/
-#include <sys/abd.h>		/* abd_fini, abd_init			*/
-#include <sys/param.h>		/* MAX					*/
-#include <sys/zio.h>		/* zio_fini, zio_init			*/
-#include <sys/zstd/zstd.h>	/* zstd_fini, zstd_init			*/
-#include <zfs_fletcher.h>	/* fletcher_4_fini, fletcher_4_init	*/
-#include <assert.h>		/* VERIFY3U				*/
-#include <libspl.h>		/* libspl_fini, libspl_init		*/
+#include <assert.h>
+#include <err.h>
+#include <libspl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/abd.h>
+#include <sys/param.h>
+#include <sys/stdtypes.h>
+#include <sys/zio.h>
+#include <sys/zstd/zstd.h>
+#include <zfs_fletcher.h>
 
-#include "zstream_chain.h"	/* chain_attrs_t, record_stats_t...	*/
+#include "zstream_chain.h"
 
 /*
  * Execute a chain of serial processing steps.

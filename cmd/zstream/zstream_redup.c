@@ -18,25 +18,24 @@
  * Copyright (c) 2020 by Delphix. All rights reserved.
  */
 
-#include <assert.h>		/* VERIFY3U, assert			*/
-#include <cityhash.h>		/* cityhash3				*/
-#include <errno.h>		/* errno				*/
-#include <libzutil.h>		/* zfs_nicenum				*/
-#include <stdint.h>		/* uint64_t				*/
-#include <stdio.h>		/* fprintf, NULL, stderr, fread, fclose	*/
-#include <stdlib.h>		/* exit, free				*/
-#include <string.h>		/* strerror				*/
-#include <sys/bitops.h>		/* BF64_GET				*/
-#include <sys/param.h>		/* MAX					*/
-#include <sys/stdtypes.h>	/* B_TRUE, boolean_t			*/
-#include <sys/sysmacros.h>	/* highbit64, ISP2			*/
-#include <sys/zfs_ioctl.h>	/* drr_write_byref, drr_write...	*/
-#include <umem.h>		/* umem_cache_alloc, umem_cache_create	*/
-#include <unistd.h>		/* sysconf, getopt, optind...		*/
+#include <assert.h>
+#include <cityhash.h>
+#include <errno.h>
+#include <libzutil.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/bitops.h>
+#include <sys/param.h>
+#include <sys/sysmacros.h>
+#include <sys/zfs_ioctl.h>
+#include <umem.h>
+#include <unistd.h>
 
-#include "zstream.h"		/* zstream_usage, zstream_do_redup	*/
-#include "zstream_util.h"	/* safe_calloc, safe_malloc		*/
-#include "zstream_modules.h"	/* STANDARD_INPUT_STACK...		*/
+#include "zstream.h"
+#include "zstream_modules.h"
+#include "zstream_util.h"
 
 #define	MAX_RDT_PHYSMEM_PERCENT		20
 #define	SMALLEST_POSSIBLE_MAX_RDT_MB	128

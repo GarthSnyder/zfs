@@ -17,14 +17,14 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <err.h>			/* fprintf, NULL, stderr	*/
-#include <stdlib.h>			/* exit				*/
-#include <sys/byteorder.h>		/* BSWAP_64, BSWAP_32		*/
-#include <sys/spa_checksum.h>		/* ZIO_CHECKSUM_BSWAP		*/
-#include <sys/stdtypes.h>		/* B_TRUE, boolean_t		*/
-#include <sys/zfs_ioctl.h>		/* dmu_replay_record...		*/
+#include <err.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/byteorder.h>
+#include <sys/spa_checksum.h>
+#include <sys/stdtypes.h>
+#include <sys/zfs_ioctl.h>
 
-#include "zstream.h"
 #include "zstream_modules.h"
 
 /*

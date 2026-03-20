@@ -29,22 +29,21 @@
  * Portions copyright 2026 by Garth Snyder <garth@garthsnyder.com>
  */
 
-#include <ctype.h>		/* isprint				*/
-#include <libnvpair.h>		/* nvlist_print				*/
-#include <stdint.h>		/* uint8_t, uint64_t, uint32_t		*/
-#include <stdio.h>		/* printf, fprintf, perror...		*/
-#include <string.h>		/* strerror				*/
-#include <sys/param.h>		/* MIN					*/
-#include <sys/nvpair.h>		/* nvlist_free, nvlist_unpack		*/
-#include <sys/spa_checksum.h>	/* zio_cksum_t				*/
-#include <sys/stdtypes.h>	/* B_TRUE, boolean_t, uint_t		*/
-#include <sys/zio.h>		/* ZIO_DATA_IV_LEN...			*/
-#include <sys/zfs_ioctl.h>	/* drr_object, dmu_replay_record...	*/
-#include <unistd.h>		/* getopt, optind, optopt		*/
+#include <ctype.h>
+#include <libnvpair.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/nvpair.h>
+#include <sys/param.h>
+#include <sys/spa_checksum.h>
+#include <sys/stdtypes.h>
+#include <sys/zfs_ioctl.h>
+#include <sys/zio.h>
+#include <unistd.h>
 
-#include "zstream.h"		/* zstream_usage, zstream_do_dump	*/
-#include "zstream_chain.h"
-#include "zstream_modules.h"	/* STANDARD_INPUT_STACK			*/
+#include "zstream.h"
+#include "zstream_modules.h"
 
 /*
  * If dump mode is enabled, the number of bytes to print per line
