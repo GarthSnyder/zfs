@@ -43,6 +43,7 @@
 #include <unistd.h>		/* getopt, optind, optopt		*/
 
 #include "zstream.h"		/* zstream_usage, zstream_do_dump	*/
+#include "zstream_chain.h"
 #include "zstream_modules.h"	/* STANDARD_INPUT_STACK			*/
 
 /*
@@ -198,14 +199,20 @@ dump_begin_record(drr_packet_t *item)
 		printf("\n");
 
 	if (drr->drr_payloadlen != 0) {
-		nvlist_t *nv;
-		size_t sz = drr->drr_payloadlen;
-		int err = nvlist_unpack((char *)item->dp_payload, sz, &nv, 0);
-		if (err) {
-			perror(strerror(err));
+		if (ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) {
+			printf("\tnote: nvlist not unpacked; sender has "
+			    "opposite endianness\n");
 		} else {
-			nvlist_print(stdout, nv);
-			nvlist_free(nv);
+			nvlist_t *nv;
+			size_t sz = drr->drr_payloadlen;
+			int err = nvlist_unpack((char *)item->dp_payload,
+			    sz, &nv, 0);
+			if (err) {
+				perror(strerror(err));
+			} else {
+				nvlist_print(stdout, nv);
+				nvlist_free(nv);
+			}
 		}
 	}
 }
