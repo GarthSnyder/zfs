@@ -17,7 +17,7 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <stdio.h>		/* fprintf, stderr			*/
+#include <err.h>		/* fprintf, stderr			*/
 #include <stdlib.h>		/* exit					*/
 #include <sys/abd.h>		/* abd_fini, abd_init			*/
 #include <sys/param.h>		/* MAX					*/
@@ -93,7 +93,6 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 		max_size = MAX(max_size, chain[num_steps].cs_out_size);
 		num_steps++;
 	}
-
 	VERIFY3U(num_steps, >, 0);
 
 	/*
@@ -106,8 +105,8 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 		    chain[i-1].cs_out_size != 0 &&
 		    chain[i].cs_in_size != chain[i-1].cs_out_size)
 		{
-			fprintf(stderr, "Warning: chain steps %d and %d have "
-			    "mismatched packet sizes\n", i - 1, i);
+			warnx("note - chain steps %d and %d have "
+			    "mismatched packet sizes", i - 1, i);
 		}
 	}
 
@@ -118,9 +117,19 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 
 	while (!done) {
 		for (int i = 0; i < num_steps; i++) {
-			uint8_t *arg = done ? NULL : buffer;
-			done = !chain[i].cs_serial.process(arg,
-			    chain[i].cs_context) || done;
+			if (done) {
+				(void) chain[i].cs_serial.process(NULL,
+					chain[i].cs_context);
+			} else {
+				disposition_t dispo =
+				    chain[i].cs_serial.process(buffer,
+				    chain[i].cs_context);
+				if (dispo == D_EOF) {
+					done = B_TRUE;
+				} else if (dispo == D_DROP) {
+					break;
+				}
+			}
 		}
 	}
 

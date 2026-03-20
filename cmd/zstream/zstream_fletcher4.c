@@ -77,13 +77,13 @@ fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
  * checksumming practices just to minimize spurious differences between
  * input and output streams.
  */
-static boolean_t
+static disposition_t
 chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 {
 	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
 	    OPTION_ENABLED(chain_attrs, CA_IGNORE_CKSUMS)))
 	{
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	zio_cksum_t *stream_cksum	= &context->fc_stream_cksum;
@@ -151,7 +151,7 @@ chain_fletcher4(drr_packet_t *item, fletcher4_context_t *context)
 			    item->dp_payload_size, stream_cksum);
 		}
 	}
-	return (B_TRUE);
+	return (D_OK);
 }
 
 static chain_step_t

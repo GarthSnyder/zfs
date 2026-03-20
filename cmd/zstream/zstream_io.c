@@ -35,7 +35,7 @@
 #include "zstream_chain.h"
 #include "zstream_util.h"	/* safe_malloc				*/
 
-/* Init only the filename, chain_read_stream will prepare the FILE *. */
+/* Init only the filename, chain_read() will prepare the FILE *. */
 typedef struct {
 	const char	*ic_filename;
 	FILE		*ic_fp;
@@ -204,11 +204,11 @@ set_stream_attributes(drr_packet_t *item)
 	}
 }
 
-static boolean_t
+static disposition_t
 chain_read(drr_packet_t *item, io_context_t *context)
 {
 	if (item == NULL)
-		return (B_TRUE);
+		return (D_OK);
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 
@@ -221,7 +221,7 @@ chain_read(drr_packet_t *item, io_context_t *context)
 			    context->ic_offset);
 		}
 		fclose(context->ic_fp);
-		return (B_FALSE);
+		return (D_EOF);
 	}
 
 	if (context->ic_offset == 0)
@@ -256,16 +256,16 @@ chain_read(drr_packet_t *item, io_context_t *context)
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
-	return (B_TRUE);
+	return (D_OK);
 }
 
-static boolean_t
+static disposition_t
 chain_write(drr_packet_t *item, io_context_t *context)
 {
 	if (item == NULL) {
 		if (context->ic_fp)
 			fclose(context->ic_fp);
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	if (!context->ic_fp) {
@@ -304,10 +304,10 @@ chain_write(drr_packet_t *item, io_context_t *context)
 	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
-	return (B_TRUE);
+	return (D_OK);
 }
 
-static boolean_t
+static disposition_t
 chain_null_output(drr_packet_t *item, void *ctxt)
 {
 	(void) ctxt;
@@ -316,7 +316,7 @@ chain_null_output(drr_packet_t *item, void *ctxt)
 		item->dp_payload = NULL;
 		item->dp_payload_size = 0;
 	}
-	return (B_TRUE);
+	return (D_OK);
 }
 
 /*
@@ -370,7 +370,7 @@ serial_null_output(void)
 	});
 }
 
-static boolean_t
+static disposition_t
 chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt)
 {
 	struct timespec now;
@@ -379,14 +379,14 @@ chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt)
 	double now_sec, delta_t;
 
 	if (item == NULL)
-		return (B_TRUE);
+		return (D_OK);
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	now_sec = now.tv_sec + (double)now.tv_nsec / 1E9;
 	if (ctxt->cc_last_sec > 1E-9) {
 		delta_t = now_sec - ctxt->cc_last_sec;
 		if (delta_t < ctxt->cc_period_sec)
-			return (B_TRUE);
+			return (D_OK);
 		delta_b = item->dp_stream_offset - ctxt->cc_last_bytes;
 		dbdt = delta_b / delta_t;
 		zfs_nicenum(dbdt, buff, sizeof (buff));
@@ -394,7 +394,7 @@ chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt)
 	}
 	ctxt->cc_last_sec = now_sec;
 	ctxt->cc_last_bytes = item->dp_stream_offset;
-	return (B_TRUE);
+	return (D_OK);
 }
 
 /*

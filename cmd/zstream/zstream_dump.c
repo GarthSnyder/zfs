@@ -411,11 +411,11 @@ dump_redact_record(drr_packet_t *item)
 	}
 }
 
-static boolean_t
+static disposition_t
 chain_dump_record(drr_packet_t *item, record_type_t *context)
 {
 	if (!item) {
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	dmu_replay_record_t *drr = &item->dp_drr;
@@ -432,7 +432,7 @@ chain_dump_record(drr_packet_t *item, record_type_t *context)
 		    cksum->zc_word[3]);
 	}
 
-	return (B_TRUE);
+	return (D_OK);
 }
 
 static chain_step_t
