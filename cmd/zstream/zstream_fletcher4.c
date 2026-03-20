@@ -17,18 +17,18 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <assert.h>		/* VERIFY3U, ASSERT3U			*/
-#include <stddef.h>		/* offsetof				*/
-#include <stdint.h>		/* uint64_t, uint32_t, uint8_t		*/
-#include <stdlib.h>		/* NULL, size_t				*/
-#include <sys/stdtypes.h>	/* B_TRUE, boolean_t			*/
-#include <sys/zfs_ioctl.h>	/* dmu_replay_record::(anonymous)	*/
-#include <zfs_fletcher.h>	/* fletcher_4_incremental_native	*/
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/byteorder.h>
+#include <sys/spa_checksum.h>
+#include <sys/stdtypes.h>
+#include <sys/types.h>
+#include <sys/zfs_ioctl.h>
+#include <zfs_fletcher.h>
 
-#include "zstream_fletcher4.h"
-#include "zstream_chain.h"
-#include "zstream_io.h"		/* drr_packet_t...			*/
-#include "zstream_util.h"	/* validate_or_exit			*/
+#include "zstream_modules.h"
+#include "zstream_util.h"
 
 typedef enum { F4_SET, F4_VALIDATE } fletcher4_op_t;
 
