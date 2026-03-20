@@ -29,15 +29,14 @@ extern "C" {
 #include <sys/zfs_ioctl.h>
 
 /*
- * A chain is a linear series of steps that process packets of data. The
- * purpose of this construct is to:
+ * A chain is a linear series of steps that process packets of data. This
+ * construct has several objectives:
  *
  *   - Reduce code duplication
  *   - Separate processing into small, logically distinct steps
  *   - Separate pipeline management from functional processing
  *   - Facilitate component reuse (checksum validation, I/O, etc.)
- *   - Automatically marshal data as it passes down the pipeline
- *   - No, this was not written by an LLM, despite being a list
+ *   - Facilitate the addition of multithreading as a future enhancement
  *
  * Some terms:
  *
@@ -61,7 +60,7 @@ extern "C" {
  *
  * Or more succinctly:
  *
- *	zstream_chain_t recompress_chain = {
+ *	zstream_chain_t dump_chain = {
  *		STANDARD_INPUT_STACK(infile),
  *		serial_dump_records(&dump_args),
  *		NULL_OUTPUT_STACK()
@@ -70,19 +69,19 @@ extern "C" {
  * Chains must be terminated by a step of type CS_TERMINATE.
  *
  * **ITEM** - The data packets that flow through a chain. Each step accepts
- * items of one size and emits items of another size, which may be
- * smaller, larger, or the same size. In the context of zstream, items
- * will generally be structs that start with a drr_packet_t (defined in
- * zstream_io.h) and may include additional module-specific fields.
+ * items of one size and emits items of another size, which may be smaller,
+ * larger, or the same size. Items will generally be structs that start
+ * with a drr_packet_t (defined in zstream_io.h) and may include additional
+ * module-specific fields.
  *
  * **PROCESSING FUNCTION** - Each step names a processing function that
  * transforms a buffer of its input size to a buffer of its output size. The
- * transformation happens in place, in a single buffer provided by the
- * chain.
+ * transformation happens in place, in a single buffer provided by the chain.
  *
- * The processing function should return a boolean_t, normally B_TRUE, but
- * it can return B_FALSE to indicate that no more data will be forthcoming.
- * Only the first step in a chain should use this feature.
+ * The processing function should return a serial_disposition_t, normally
+ * SD_OK. A function can return SD_DROP to remove an item from the stream
+ * entirely. It can also return SD_EOF to indicate that no more data will be
+ * forthcoming, but only the first step in the chain should use this feature.
  *
  * Functions are called with a NULL packet when the end of the stream
  * passes by them.
@@ -91,13 +90,6 @@ extern "C" {
  * processing function as an argument.
  *
  * **CHAIN ATTRIBUTES** - A set of flags available to all steps.
- */
-
-/*
- * Chain attribute flags that describe the stream. The lower 32 bits are a
- * copy of the drr_versioninfo from the first DRR_BEGIN in the stream. The
- * next 8 bits are reserved for discovered characteristics such as
- * CA_BYTESWAPPED, and the remainder are for command-line options.
  */
 
 #define CA_BYTESWAPPED		(1ULL << 0)	/* ca_attrs */
@@ -132,20 +124,25 @@ typedef struct {
 	uint64_t	rs_total_payload_bytes;
 } record_stats_t;
 
+/*
+ * Chain attribute flags that describe the stream. Statistics are maintained
+ * by zstream_io modules.
+ */
 typedef struct {
 	uint64_t	ca_feature_flags;	/* From drr_versioninfo */
 	uint64_t	ca_attrs;		/* Discovered attributes */
-	uint64_t	ca_command_opts;	/* Command line */
+	uint64_t	ca_command_opts;	/* Command line options */
 	record_stats_t	ca_totals_in;
 	record_stats_t	ca_totals_out;
 	record_stats_t	ca_stats_in[DRR_NUMTYPES];
 	record_stats_t	ca_stats_out[DRR_NUMTYPES];
 } chain_attrs_t;
 
-typedef boolean_t
-zc_serial_process_f(void *item, void *context);
-
 typedef enum { CS_SERIAL, CS_TERMINATE } step_type_t;
+typedef enum { D_OK, D_EOF, D_DROP } disposition_t;
+
+typedef disposition_t
+zc_serial_process_f(void *item, void *context);
 
 typedef struct chain_step
 {

@@ -107,7 +107,7 @@ needs_decompression(drr_packet_t *item, compression_spec_t *context)
 	return (needs_compression(item, context));
 }
 
-static boolean_t
+static disposition_t
 chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
@@ -117,7 +117,7 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 	if (item == NULL || drr->drr_type != DRR_WRITE ||
 	    !needs_decompression(item, context))
 	{
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
@@ -134,7 +134,7 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 	item->dp_payload_size = drrw->drr_logical_size;
 	drrw->drr_compressed_size = 0;
 	drrw->drr_compressiontype = 0;
-	return (B_TRUE);
+	return (D_OK);
 }
 
 static boolean_t
@@ -145,7 +145,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	if (item == NULL || drr->drr_type != DRR_WRITE ||
 	    !needs_compression(item, context))
 	{
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	struct drr_write *drrw = &drr->drr_u.drr_write;
@@ -166,7 +166,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 		drrw->drr_compressed_size = csize;
 		drrw->drr_compressiontype = context->cs_type;
 	}
-	return (B_TRUE);
+	return (D_OK);
 }
 
 /*

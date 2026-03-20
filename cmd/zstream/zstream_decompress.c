@@ -47,7 +47,7 @@
 
 #define KEYSIZE 64
 
-static boolean_t
+static disposition_t
 chain_decompress_named_writes(drr_packet_t *item, void *context)
 {
 	(void) context;
@@ -57,14 +57,14 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 	uint8_t *dcbuff;
 
 	if (item == NULL || drr->drr_type != DRR_WRITE) {
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	snprintf(key, KEYSIZE, "%zu,%zu", drrw->drr_object, drrw->drr_offset);
 	ENTRY e = { .key = key };
 	ENTRY *p = hsearch(e, FIND);
 	if (p == NULL) {
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	enum zio_compress ctype = (enum zio_compress)(intptr_t)p->data;
@@ -77,7 +77,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 			    "off for ino %zu offset %zu\n",
 			    drrw->drr_object, drrw->drr_offset);
 		}
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	if (write_is_encrypted(drrw)) {
@@ -110,7 +110,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 			    drrw->drr_object, drrw->drr_offset);
 		}
 	}
-	return (B_TRUE);
+	return (D_OK);
 }
 
 static chain_step_t

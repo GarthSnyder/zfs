@@ -100,11 +100,11 @@ rdt_lookup(redup_table_t *rdt,
 	assert(!"could not find expected redup table entry");
 }
 
-static boolean_t
+static disposition_t
 chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 {
 	if (!item) {
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	dmu_replay_record_t *drr = &item->dp_drr;
@@ -180,7 +180,7 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 	default:
 		break;
 	}
-	return (B_TRUE);
+	return (D_OK);
 }
 
 static chain_step_t
