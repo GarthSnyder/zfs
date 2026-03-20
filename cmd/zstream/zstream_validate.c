@@ -24,7 +24,7 @@
 #include <sys/zfs_ioctl.h>	/* dmu_replay_record, drr_object...	*/
 #include <sys/zio_compress.h>	/* zio_compress				*/
 
-#include "zstream_io.h"		/* drr_packet_t				*/
+#include "zstream_modules.h"		/* drr_packet_t				*/
 #include "zstream_validate.h"	/* serial_validate_records		*/
 
 /*
@@ -42,7 +42,7 @@ typedef struct {
 static validate_context_t 	contexts[MAX_VALIDATIONS];
 static int			next_context = 0;
 
-static boolean_t
+static disposition_t
 chain_validate_records(drr_packet_t *item, validate_context_t *context)
 {
 	struct dmu_replay_record *drr	 = &item->dp_drr;
@@ -50,7 +50,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 	struct drr_object *drro 	 = &drr->drr_u.drr_object;
 
 	if (item == NULL || !OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE)) {
-		return (B_TRUE);
+		return (D_OK);
 	}
 	if (item->dp_stream_offset == 0 && drr->drr_type != DRR_BEGIN) {
 		fprintf(stderr, "Warning: first record is not DRR_BEGIN\n");
@@ -97,7 +97,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 	default:
 		break;
 	}
-	return (B_TRUE);
+	return (D_OK);
 }
 
 chain_step_t

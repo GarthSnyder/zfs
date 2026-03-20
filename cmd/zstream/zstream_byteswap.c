@@ -39,7 +39,7 @@ typedef byteswap_stage_t byteswap_context_t;
 static byteswap_context_t byteswap_contexts[MAX_BYTESWAP];
 static int next_context = 0;
 
-static boolean_t
+static disposition_t
 chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 {
 	struct dmu_replay_record *drr = &item->dp_drr;
@@ -49,7 +49,7 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 	    OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT));
 
 	if (item == NULL || !swap) {
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	uint32_t type = input_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
@@ -160,7 +160,7 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_checksum.drr_checksum);
 	}
 
-	return (B_TRUE);
+	return (D_OK);
 }
 
 chain_step_t
