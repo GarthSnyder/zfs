@@ -82,7 +82,7 @@ void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 {
 	int num_steps = 0;
-	size_t max_size = 0;
+	size_t packet_size = 0;
 	chain_attrs_t backup_attrs = {0};
 
 	chain_attrs = attrs ? attrs : &backup_attrs;
@@ -92,7 +92,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 			fprintf(stderr, "Error: unterminated zstream_chain\n");
 			exit(1);
 		}
-		max_size = MAX(max_size, chain[num_steps].cs_out_size);
+		packet_size = MAX(packet_size, chain[num_steps].cs_out_size);
 		num_steps++;
 	}
 	VERIFY3U(num_steps, >, 0);
@@ -114,7 +114,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 
 	libraries_init();
 
-	uint8_t buffer[max_size];
+	uint8_t buffer[packet_size];
 	boolean_t done = B_FALSE;
 
 	while (!done) {

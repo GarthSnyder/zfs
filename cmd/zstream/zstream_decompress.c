@@ -50,6 +50,7 @@ static disposition_t
 chain_decompress_named_writes(drr_packet_t *item, void *context)
 {
 	(void) context;
+
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw = &drr->drr_u.drr_write;
 	char key[KEYSIZE];
@@ -94,7 +95,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		 * compression type, possibly because it gets written
 		 * multiple times in this stream.
 		 */
-		warnx("decompression failed for ino %zu offset %zu",
+		fprintf(stderr, "Decompression failed for ino %zu offset %zu",
 		    drrw->drr_object, drrw->drr_offset);
 		free(dcbuff);
 	} else {
@@ -139,8 +140,7 @@ zstream_do_decompress(int argc, char *argv[])
 			ENABLE_OPTION(&attrs, CA_VERBOSE);
 			break;
 		case '?':
-			(void) fprintf(stderr, "invalid option '%c'\n",
-			    optopt);
+			fprintf(stderr, "invalid option '%c'\n", optopt);
 			zstream_usage();
 			break;
 		}
@@ -151,10 +151,11 @@ zstream_do_decompress(int argc, char *argv[])
 
 	if (argc < 0)
 		zstream_usage();
-
 	if (hcreate(argc) == 0)
-		errx(1, "hcreate");
-	for (int i = 0; i < argc; i++) {
+		errx(1, "hcreate failed");
+
+	for (int i = 0; i < argc; i++)
+	{
 		uint64_t object, offset;
 		char *obj_str;
 		char *offset_str;
@@ -198,25 +199,27 @@ zstream_do_decompress(int argc, char *argv[])
 		}
 
 		if (asprintf(&key, "%llu,%llu", (u_longlong_t)object,
-		    (u_longlong_t)offset) < 0) {
+		    (u_longlong_t)offset) < 0)
+		{
 			err(1, "asprintf");
 		}
 		ENTRY e = { .key = key };
 		ENTRY *p;
-
 		p = hsearch(e, ENTER);
 		if (p == NULL)
-			errx(1, "hsearch");
-		p->data = (void*)(intptr_t)type;
+			errx(1, "hsearch failed");
+		p->data = (void *)(intptr_t)type;
 	}
+
 	ENABLE_OPTION(&attrs, CA_FORBID_DEDUP);
+
 	zstream_chain_t decompress_chain = {
 		STANDARD_INPUT_STACK(NULL),
 		serial_decompress_named_writes(),
 		STANDARD_OUTPUT_STACK(NULL)
 	};
-
 	zstream_chain_exec(decompress_chain, &attrs);
+
 	hdestroy();
 	return (0);
 }

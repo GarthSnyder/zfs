@@ -26,7 +26,7 @@ extern "C" {
 
 #include "zstream_io.h"
 
-#define MAX_BYTESWAP 4		/* Most swapping ops in a chain */
+#define MAX_BYTESWAP 4  /* Most swapping ops in a chain */
 
 typedef enum { BS_INCOMING, BS_OUTGOING } byteswap_stage_t;
 

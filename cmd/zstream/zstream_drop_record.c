@@ -119,9 +119,10 @@ zstream_do_drop_record(int argc, char *argv[])
 	if (argc < 0)
 		zstream_usage();
 	if (hcreate(argc) == 0)
-		errx(1, "hcreate");
+		errx(1, "hcreate failed");
 
-	for (int i = 0; i < argc; i++) {
+	for (int i = 0; i < argc; i++)
+	{
 		uint64_t object, offset;
 		char *obj_str;
 		char *offset_str;
@@ -148,20 +149,21 @@ zstream_do_drop_record(int argc, char *argv[])
 		}
 		ENTRY e = {.key = key};
 		ENTRY *p;
-
 		p = hsearch(e, ENTER);
 		if (p == NULL)
 			errx(1, "hsearch");
-		p->data = (void*)(intptr_t)B_TRUE;
+		p->data = (void *)(intptr_t)B_TRUE;
 	}
 
 	ENABLE_OPTION(&attrs, CA_FORBID_DEDUP);
+
 	zstream_chain_t drop_chain = {
 		STANDARD_INPUT_STACK(NULL),
 		serial_drop_records(),
 		STANDARD_OUTPUT_STACK(NULL)
 	};
 	zstream_chain_exec(drop_chain, &attrs);
+
 	hdestroy();
 	return (0);
 }

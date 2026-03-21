@@ -55,6 +55,7 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 	uint32_t type = input_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	switch (type) {
+
 	case DRR_BEGIN:
 		DO64(drr_begin.drr_magic);
 		DO64(drr_begin.drr_versioninfo);
