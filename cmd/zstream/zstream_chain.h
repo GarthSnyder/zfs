@@ -29,11 +29,12 @@ extern "C" {
 #include <sys/zfs_ioctl.h>
 
 /*
- * A chain is a linear series of steps that process packets of data. This
- * construct has several objectives:
+ * A chain is a linear series of steps that process packets of data.
+ *
+ * There are several objectives:
  *
  *   - Reduce code duplication
- *   - Separate processing into small, logically distinct steps
+ *   - Separate processing into small, logically independent steps
  *   - Separate pipeline management from functional processing
  *   - Facilitate component reuse (checksum validation, I/O, etc.)
  *   - Facilitate the addition of multithreading as a future enhancement
@@ -68,7 +69,7 @@ extern "C" {
  *
  * Chains must be terminated by a step of type CS_TERMINATE.
  *
- * **ITEM** - The data packets that flow through a chain. Each step accepts
+ * **ITEMS** - Data packets that flow through a chain. Each step accepts
  * items of one size and emits items of another size, which may be smaller,
  * larger, or the same size. Items will generally be structs that start
  * with a drr_packet_t (defined in zstream_io.h) and may include additional
@@ -78,9 +79,9 @@ extern "C" {
  * transforms a buffer of its input size to a buffer of its output size. The
  * transformation happens in place, in a single buffer provided by the chain.
  *
- * The processing function should return a serial_disposition_t, normally
- * SD_OK. A function can return SD_DROP to remove an item from the stream
- * entirely. It can also return SD_EOF to indicate that no more data will be
+ * The processing function should return a disposition_t, normally
+ * D_OK. A function can return D_DROP to remove an item from the stream
+ * entirely. It can also return D_EOF to indicate that no more data will be
  * forthcoming, but only the first step in the chain should use this feature.
  *
  * Functions are called with a NULL packet when the end of the stream
@@ -126,7 +127,7 @@ typedef struct {
 
 /*
  * Chain attribute flags that describe the stream. Statistics are maintained
- * by zstream_io modules.
+ * by the zstream_io modules.
  */
 typedef struct {
 	uint64_t	ca_feature_flags;	/* From drr_versioninfo */
@@ -161,7 +162,7 @@ typedef chain_step_t zstream_chain_t[];
  * Chain attributes accessible to any step on the chain. In theory this
  * could cause a race condition between reading and setting, but all
  * attributes are typically set by the time the first record is read. Ergo,
- * nobody else can be executing while that first chain_read() runs.
+ * nobody else will be executing while that first chain_read() runs.
  */
 extern chain_attrs_t *chain_attrs;
 

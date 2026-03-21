@@ -20,6 +20,7 @@
 
 #include <assert.h>
 #include <cityhash.h>
+#include <err.h>
 #include <errno.h>
 #include <libzutil.h>
 #include <stdint.h>
@@ -42,10 +43,10 @@
 
 typedef struct redup_entry {
 	struct redup_entry	*rde_next;
-	uint64_t rde_guid;
-	uint64_t rde_object;
-	uint64_t rde_offset;
-	uint64_t rde_stream_offset;
+	uint64_t		rde_guid;
+	uint64_t		rde_object;
+	uint64_t		rde_offset;
+	uint64_t		rde_stream_offset;
 } redup_entry_t;
 
 typedef struct redup_table {
@@ -102,13 +103,13 @@ rdt_lookup(redup_table_t *rdt,
 static disposition_t
 chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 {
-	if (!item) {
+	if (item == NULL) {
 		return (D_OK);
 	}
 
 	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw = &drr->drr_u.drr_write;
-	struct drr_begin *drrb = &drr->drr_u.drr_begin;
+	struct drr_write *drrw	 = &drr->drr_u.drr_write;
+	struct drr_begin *drrb	 = &drr->drr_u.drr_begin;
 
 	switch (drr->drr_type) {
 
@@ -137,17 +138,14 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 		    &stream_offset);
 
 		if (fseeko(context->rc_fp, stream_offset, SEEK_SET) != 0) {
-			fprintf(stderr, "Seek into source file failed, "
-			    "offset %zu: %s", stream_offset, strerror(errno));
-			exit(1);
+			err(1, "seek into source file failed, offset %zu: ",
+			    stream_offset);
 		}
 		if (fread(drr, sizeof (*drr), 1, context->rc_fp) != 1) {
-			fprintf(stderr, "Read of prior write failed: %s\n",
-			    strerror(errno));
-			exit(1);
+			err(1, "read of prior write failed: ");
 		}
 
-		VERIFY3U(drr->drr_type, ==, DRR_WRITE);
+		VERIFY3U(drr->drr_type,    ==, DRR_WRITE);
 		VERIFY3U(drrw->drr_toguid, ==, drrwb.drr_refguid);
 		VERIFY3U(drrw->drr_object, ==, drrwb.drr_refobject);
 		VERIFY3U(drrw->drr_offset, ==, drrwb.drr_refoffset);
@@ -158,9 +156,7 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 		if (fread(item->dp_payload, item->dp_payload_size, 1,
 		    context->rc_fp) != 1)
 		{
-			fprintf(stderr, "Read of prior payload failed: %s\n",
-			    strerror(errno));
-			exit(1);
+			err(1, "read of prior payload failed: ");
 		}
 
 		drrw->drr_toguid = drrwb.drr_toguid;
@@ -170,11 +166,9 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 	}
 
 	case DRR_WRITE:
-	{
 		rdt_insert(&context->rc_rdt, drrw->drr_toguid, drrw->drr_object,
 		    drrw->drr_offset, item->dp_stream_offset);
 		break;
-	}
 
 	default:
 		break;
@@ -211,7 +205,7 @@ zstream_do_redup(int argc, char *argv[])
 			ENABLE_OPTION(&attrs, CA_VERBOSE);
 			break;
 		case '?':
-			fprintf(stderr, "invalid option '%c'\n", optopt);
+			warnx("invalid option '%c'", optopt);
 			zstream_usage();
 			break;
 		}
@@ -225,9 +219,7 @@ zstream_do_redup(int argc, char *argv[])
 
 	context.rc_fp = fopen(argv[0], "r");
 	if (context.rc_fp == NULL) {
-		fprintf(stderr, "Unable to open %s: %s\n", argv[0],
-		    strerror(errno));
-		exit(1);
+		err(1, "unable to open %s: ", argv[0]);
 	}
 
 #ifdef _ILP32
@@ -239,11 +231,6 @@ zstream_do_redup(int argc, char *argv[])
 #endif
 
 	numbuckets = max_rde_size / (sizeof (redup_entry_t));
-
-	/*
-	 * numbuckets must be a power of 2.  Increase number to
-	 * a power of 2 if necessary.
-	 */
 	if (!ISP2(numbuckets))
 		numbuckets = 1ULL << highbit64(numbuckets);
 
@@ -259,7 +246,6 @@ zstream_do_redup(int argc, char *argv[])
 		serial_redup_writes(&context),
 		STANDARD_OUTPUT_STACK(NULL)
 	};
-
 	zstream_chain_exec(redup_chain, &attrs);
 
 	if (OPTION_ENABLED(&attrs, CA_VERBOSE)) {

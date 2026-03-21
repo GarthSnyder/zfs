@@ -30,7 +30,9 @@ extern "C" {
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
 
-/* Determine whether a compression type indicates no compression */
+/*
+ * Determine whether a compression type indicates no compression
+ */
 #define IS_UNCOMPRESSED(ct) (zio_compress_table[(int)(ct)].ci_compress == NULL)
 
 typedef struct {
@@ -52,28 +54,23 @@ extern int
 sfread(void *buf, size_t size, FILE *fp);
 
 /*
- * 1) Update checksum with the record header up to drr_checksum.
- * 2) Update checksum field in the record header.
- * 3) Update checksum with the checksum field in the record header.
- * 4) Update checksum with the contents of the payload.
- * 5) Write header and payload to fd.
+ * Returns a pointer to a static buffer. The result must be consumed before
+ * the next call.
  */
-extern int
-dump_record(dmu_replay_record_t *drr, void *payload, size_t payload_len,
-	zio_cksum_t *zc, int outfd);
-
-/* Static buffer, must use result before next call */
 extern char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 
-/* Returns B_TRUE for valid, B_FALSE for invalid */
+/*
+ * Prints an error message if checksums don't match. Returns B_TRUE for
+ * a match, B_FALSE otherwise.
+ */
 boolean_t
 validate_checksum(zio_cksum_t *expect, zio_cksum_t *actual, boolean_t swap,
-	const char *where, off_t stream_offset);
+    const char *where, off_t stream_offset);
 
 static inline void
 validate_or_exit(zio_cksum_t *expect, zio_cksum_t *actual, boolean_t swap,
-	const char *where, off_t stream_offset)
+    const char *where, off_t stream_offset)
 {
 	if (!validate_checksum(expect, actual, swap, where, stream_offset)) {
 		exit(1);

@@ -18,6 +18,7 @@ zstream_SOURCES = \
 	%D%/zstream_fletcher4.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
+	%D%/zstream_modules.h \
 	%D%/zstream_recompress.c \
 	%D%/zstream_recompress.h \
 	%D%/zstream_redup.c \

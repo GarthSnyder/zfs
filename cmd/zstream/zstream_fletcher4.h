@@ -37,7 +37,10 @@ extern "C" {
  * stream checksum, replacing whatever was there before.
  */
 
-#define MAX_FLETCHER_4 8	/* Max checksum ops in one chain */
+/*
+ * Maximum number of checksum operations in one chain
+ */
+#define MAX_FLETCHER_4 8
 
 chain_step_t
 serial_validate_fletcher4(void);

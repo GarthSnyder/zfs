@@ -19,9 +19,9 @@
  * Copyright (c) 2020 by Datto Inc. All rights reserved.
  */
 
-#include <stdio.h>	/* fprintf, stderr	*/
-#include <stdlib.h>	/* exit			*/
-#include <string.h>	/* strcmp, strrchr	*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "zstream.h"
 
