@@ -2242,6 +2242,21 @@ setup_send_progress(struct dmu_send_params *dspp)
 }
 
 /*
+ * This is an alternate allocation function used when XDR-encoding nvlists,
+ * below. Packed nvlists of type NV_ENCODE_XDR are guaranteed to have size %
+ * 4 == 0, but DRR_BEGIN payloads must enforce size % 8 == 0.
+ */
+
+static nv_alloc_t *backup_allocator;
+
+static void *
+roundup_alloc(nv_alloc_t *alloc, size_t size)
+{
+	return backup_allocator->nva_ops->nv_ao_alloc(alloc,
+	    P2ROUNDUP(size, 8));
+}
+
+/*
  * Actually do the bulk of the work in a zfs send.
  *
  * The idea is that we want to do a send from ancestor_zb to to_ds.  We also
@@ -2474,7 +2489,7 @@ dmu_send_impl(struct dmu_send_params *dspp)
 
 	dsl_pool_rele(dp, tag);
 
-	void *payload = NULL;
+	char *payload = NULL;
 	size_t payload_len = 0;
 	nvlist_t *nvl = fnvlist_alloc();
 
@@ -2548,7 +2563,32 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	}
 
 	if (!nvlist_empty(nvl)) {
-		payload = fnvlist_pack(nvl, &payload_len);
+		/*
+		 * Payload sizes must be multiples of 8 bytes for historical
+		 * compatibility, but XDR-packed nvlists are sized in
+		 * multiples of 4 bytes. We'll specify our own memory
+		 * allocator based on the one used by the nvlist to
+		 * implement this rounding up. The reported payload size
+		 * will still fall on a 4-byte boundary, but we know there
+		 * will be enough memory left in the buffer to round up.
+		 *
+		 * It's fine if there is extra data after a packed nvlist on
+		 * the receiving side because packed nvlists have an
+		 * explicit end-of-list marker.
+		 */
+		backup_allocator = nvlist_lookup_nv_alloc(nvl);
+		nv_alloc_t roundup_allocator = *backup_allocator;
+		nv_alloc_ops_t ops = *roundup_allocator.nva_ops;
+		roundup_allocator.nva_ops = &ops;
+		ops.nv_ao_alloc = roundup_alloc;
+
+		VERIFY0(nvlist_xpack(nvl, &payload, &payload_len,
+		    NV_ENCODE_XDR, &roundup_allocator));
+		uint32_t extra_bytes = P2ROUNDUP(payload_len, 8) - payload_len;
+		if (extra_bytes != 0) {
+			memset(payload + payload_len, 0, extra_bytes);
+		}
+		payload_len += extra_bytes;
 		drr->drr_payloadlen = payload_len;
 	}
 
