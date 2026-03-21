@@ -2100,9 +2100,6 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send-c_verify_contents.ksh \
 	functional/rsend/send-c_verify_ratio.ksh \
 	functional/rsend/send-c_volume.ksh \
-	functional/rsend/send-c_zstream_recompress.ksh \
-	functional/rsend/send-c_zstream_recompress_identity.ksh \
-	functional/rsend/send-c_zstreamdump.ksh \
 	functional/rsend/send-cpL_varied_recsize.ksh \
 	functional/rsend/send_doall.ksh \
 	functional/rsend/send_encrypted_incremental.ksh \
@@ -2131,7 +2128,6 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send_realloc_files.ksh \
 	functional/rsend/send_spill_block.ksh \
 	functional/rsend/send-wR_encrypted_zvol.ksh \
-	functional/rsend/send-zstream_drop_record.ksh \
 	functional/rsend/setup.ksh \
 	functional/scrub_mirror/cleanup.ksh \
 	functional/scrub_mirror/scrub_mirror_001_pos.ksh \
@@ -2357,6 +2353,14 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/zpool_influxdb/cleanup.ksh \
 	functional/zpool_influxdb/setup.ksh \
 	functional/zpool_influxdb/zpool_influxdb.ksh \
+	functional/zstream/setup.ksh \
+	functional/zstream/cleanup.ksh \
+	functional/zstream/zstream.cfg \
+	functional/zstream/zstream.kshlib \
+	functional/zstream/zstream_drop_record_001_pos.ksh \
+	functional/zstream/zstream_dump_001_pos.ksh \
+	functional/zstream/zstream_recompress_001_pos.ksh \
+	functional/zstream/zstream_recompress_002_pos.ksh \
 	functional/zvol/zvol_cli/cleanup.ksh \
 	functional/zvol/zvol_cli/setup.ksh \
 	functional/zvol/zvol_cli/zvol_cli_001_pos.ksh \
