@@ -136,7 +136,7 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 	return (D_OK);
 }
 
-static boolean_t
+static disposition_t
 chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
