@@ -30,6 +30,7 @@
  */
 
 #include <ctype.h>
+#include <err.h>
 #include <libnvpair.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -67,6 +68,8 @@ typedef struct {
 	const char	*rt_typename;
 	dumper_f	*rt_dumper;
 } record_type_t;
+
+static int stream_error;
 
 /*
  * Print part of a block in ASCII characters
@@ -198,20 +201,32 @@ dump_begin_record(drr_packet_t *item)
 		printf("\n");
 
 	if (drr->drr_payloadlen != 0) {
-		if (ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) {
-			printf("\tnote: nvlist not unpacked; sender has "
-			    "opposite endianness\n");
+		nvlist_t *nv;
+		/*
+		 * It looks like zfs send or the ioctls it's using are
+		 * generating packed nvlists with NV_ENCODE_NATIVE encoding
+		 * in some circumstances. I don't think these can be decoded
+		 * on an opposite-endian system, even by the core ZFS code.
+		 */
+		uint8_t *nvlist_header = item->dp_payload;
+		uint8_t nvlist_encoding = nvlist_header[0];
+		boolean_t big_endian = nvlist_header[1] == 0;
+		if (nvlist_encoding == NV_ENCODE_XDR) {
+			printf("nvlist encoding = NV_ENCODE_XDR\n");
 		} else {
-			nvlist_t *nv;
-			size_t sz = drr->drr_payloadlen;
-			int err = nvlist_unpack((char *)item->dp_payload,
-			    sz, &nv, 0);
-			if (err) {
-				perror(strerror(err));
-			} else {
-				nvlist_print(stdout, nv);
-				nvlist_free(nv);
-			}
+			printf("nvlist encoding = NV_ENCODE_NATIVE (%s)\n",
+			    big_endian ? "big-endian" : "little-endian");
+		}
+		int err = nvlist_unpack((char *)item->dp_payload,
+		    drr->drr_payloadlen, &nv, 0);
+		if (err) {
+			printf("failed to unpack DRR_BEGIN nvlist: %s\n",
+			    strerror(err));
+			if (!stream_error)
+				stream_error = err;
+		} else {
+			nvlist_print(stdout, nv);
+			nvlist_free(nv);
 		}
 	}
 }
@@ -508,40 +523,45 @@ zstream_do_dump(int argc, char *argv[])
 		NULL_OUTPUT_STACK()
 	};
 
+	stream_error = 0;
 	zstream_chain_exec(dump_chain, &attrs);
 
-	{
-		/* Match previous order */
-		int print_order[] = {
-			DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,
-			DRR_WRITE, DRR_WRITE_BYREF, DRR_WRITE_EMBEDDED,
-			DRR_FREE, DRR_SPILL, DRR_OBJECT_RANGE, DRR_REDACT
-		};
+	/* Match previous zstream dump order */
+	int print_order[] = {
+		DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,
+		DRR_WRITE, DRR_WRITE_BYREF, DRR_WRITE_EMBEDDED,
+		DRR_FREE, DRR_SPILL, DRR_OBJECT_RANGE, DRR_REDACT
+	};
 
-		printf("SUMMARY:\n");
-		for (int i = 0; i < DRR_NUMTYPES; i++) {
-			int type = print_order[i];
-			record_type_t *rec = &record_types[type];
-			record_stats_t *stats = &attrs.ca_stats_in[type];
-			printf("\tTotal %s records = %zd (%zu bytes)\n",
-			    rec->rt_typename,
-			    stats->rs_num_records,
-			    stats->rs_total_payload_bytes);
-		}
+	printf("SUMMARY:\n");
+	for (int i = 0; i < DRR_NUMTYPES; i++) {
+		int type = print_order[i];
+		record_type_t *rec = &record_types[type];
+		record_stats_t *stats = &attrs.ca_stats_in[type];
+		printf("\tTotal %s records = %zd (%zu bytes)\n",
+		    rec->rt_typename,
+		    stats->rs_num_records,
+		    stats->rs_total_payload_bytes);
+	}
 
-		uint64_t total_payload =
-		    attrs.ca_totals_in.rs_total_payload_bytes;
-		uint64_t total_header =
-		    attrs.ca_totals_in.rs_total_header_bytes;
+	uint64_t total_payload =
+	    attrs.ca_totals_in.rs_total_payload_bytes;
+	uint64_t total_header =
+	    attrs.ca_totals_in.rs_total_header_bytes;
 
-		printf("\tTotal records = %zu\n",
-		    attrs.ca_totals_in.rs_num_records);
-		printf("\tTotal payload size = %zu (0x%zx)\n",
-		    total_payload, total_payload);
-		printf("\tTotal header overhead = %zu (0x%zx)\n",
-		    total_header, total_header);
-		printf("\tTotal stream length = %zu (0x%zx)\n",
-		    total_header + total_payload, total_header + total_payload);
+	printf("\tTotal records = %zu\n",
+	    attrs.ca_totals_in.rs_num_records);
+	printf("\tTotal payload size = %zu (0x%zx)\n",
+	    total_payload, total_payload);
+	printf("\tTotal header overhead = %zu (0x%zx)\n",
+	    total_header, total_header);
+	printf("\tTotal stream length = %zu (0x%zx)\n",
+	    total_header + total_payload, total_header + total_payload);
+
+	if (stream_error) {
+		fprintf(stderr, "\nzstream dump completed with errors (first "
+		    "error code %d)\n", stream_error);
+		exit(stream_error);
 	}
 	return (0);
 }
