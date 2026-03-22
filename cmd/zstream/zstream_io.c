@@ -217,7 +217,7 @@ chain_read(drr_packet_t *item, io_context_t *context)
 
 	if (fread(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) != 1) {
 		if (ferror(context->ic_fp)) {
-			err(1, "Error reading record header at offset %lu",
+			err(1, "error reading record header at offset %lu",
 			    context->ic_offset);
 		}
 		fclose(context->ic_fp);
@@ -233,8 +233,16 @@ chain_read(drr_packet_t *item, io_context_t *context)
 		if (fread(item->dp_payload, item->dp_payload_size, 1,
 		    context->ic_fp) != 1)
 		{
-			err(1, "Error reading record payload at offset %lu",
-			    context->ic_offset);
+			if (ferror(context->ic_fp)) {
+				err(1, "error reading record payload at "
+				    " offset %lu", context->ic_offset);
+			} else {
+				/* EOF */
+				warnx("input ends mid-record at offset %lu "
+				    "- stream is likely corrupt",
+				    context->ic_offset);
+				return (D_EOF);
+			}
 		}
 	} else {
 		item->dp_payload = NULL;
