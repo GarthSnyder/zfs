@@ -2478,6 +2478,8 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	size_t payload_len = 0;
 	nvlist_t *nvl = fnvlist_alloc();
 
+	libspl_init();
+	cmn_err(CE_PANIC, "XXX panicking just for the heck of it");
 	/*
 	 * If we're doing a redacted send, we include the snapshots we're
 	 * redacted with respect to so that the target system knows what send
