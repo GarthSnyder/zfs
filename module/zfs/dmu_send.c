@@ -2478,7 +2478,6 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	size_t payload_len = 0;
 	nvlist_t *nvl = fnvlist_alloc();
 
-	cmn_err(CE_PANIC, "XXX panicking just for the heck of it");
 	/*
 	 * If we're doing a redacted send, we include the snapshots we're
 	 * redacted with respect to so that the target system knows what send
@@ -2549,7 +2548,6 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	}
 
 	if (!nvlist_empty(nvl)) {
-		cmn_err(CE_PANIC, "XXX packing nvlist with XDR");
 		VERIFY0(nvlist_pack(nvl, (char **)&payload, &payload_len,
 		    NV_ENCODE_XDR, KM_SLEEP));
 		drr->drr_payloadlen = payload_len;
