@@ -18,6 +18,7 @@
  */
 
 #include <assert.h>
+#include <err.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/zfs_ioctl.h>
@@ -43,15 +44,15 @@ static int			next_context = 0;
 static disposition_t
 chain_validate_records(drr_packet_t *item, validate_context_t *context)
 {
-	struct dmu_replay_record *drr	 = &item->dp_drr;
-	struct drr_write *drrw		 = &drr->drr_u.drr_write;
-	struct drr_object *drro 	 = &drr->drr_u.drr_object;
+	struct dmu_replay_record *drr = &item->dp_drr;
+	struct drr_write *drrw	      = &drr->drr_u.drr_write;
+	struct drr_object *drro	      = &drr->drr_u.drr_object;
 
-	if (item == NULL || !OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE)) {
+	if (item == NULL || OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE)) {
 		return (D_OK);
 	}
 	if (item->dp_stream_offset == 0 && drr->drr_type != DRR_BEGIN) {
-		fprintf(stderr, "Warning: first record is not DRR_BEGIN\n");
+		warnx("warning - first record is not DRR_BEGIN");
 	}
 
 	if (drr->drr_type == DRR_BEGIN) {
@@ -61,13 +62,13 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 		VERIFY3U(context->nesting, >=, 0);
 		context->nesting--;
 	} else if (drr->drr_type > DRR_NUMTYPES) {
-		fprintf(stderr, "Unknown record type: %d\n", drr->drr_type);
-		exit(1);
+		errx(1, "unknown record type: %d", drr->drr_type);
 	} else {
 		VERIFY3U(context->nesting, ==, 1);
 	}
 
 	switch (drr->drr_type) {
+
 	case DRR_BEGIN:
 		VERIFY3U(item->dp_payload_size, <=, 1UL << 28);
 		break;
@@ -77,7 +78,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 		    drro->drr_bonuslen > drro->drr_raw_bonuslen)
 		{
 			fprintf(stderr,
-			    "Warning: Object %zu has bonuslen = "
+			    "Warning: object %zu has bonuslen = "
 			    "%u > raw_bonuslen = %u\n\n",
 			    drro->drr_object, drro->drr_bonuslen,
 			    drro->drr_raw_bonuslen);
@@ -86,15 +87,15 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 
 	case DRR_WRITE:
 		if (drrw->drr_compressiontype >= ZIO_COMPRESS_FUNCTIONS) {
-		    fprintf(stderr, "Invalid compression type: %d\n",
+		    errx(1, "invalid compression type: %d",
 		    	drrw->drr_compressiontype);
-		    exit(3);
 		}
 		break;
 
 	default:
 		break;
 	}
+
 	return (D_OK);
 }
 

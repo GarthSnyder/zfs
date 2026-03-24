@@ -35,7 +35,9 @@
 #include "zstream_modules.h"
 #include "zstream_util.h"
 
-/* Init only the filename, chain_read() will prepare the FILE *. */
+/*
+ * Init only the filename, chain functions will prepare the FILE *
+ */
 typedef struct {
 	const char	*ic_filename;
 	FILE		*ic_fp;
@@ -140,19 +142,20 @@ calc_payload_size(dmu_replay_record_t *drr)
  * Must be called only with the first record in a stream. Must be a
  * DRR_BEGIN record or we'll terminate with "invalid stream".
  */
-static inline void
+static void
 set_stream_attributes(drr_packet_t *item)
 {
-	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_begin *drrb = &drr->drr_u.drr_begin;
-	uint64_t magic = drrb->drr_magic;
-	uint64_t versioninfo = drrb->drr_versioninfo;
+	dmu_replay_record_t *drr  = &item->dp_drr;
+	struct drr_begin *drrb    = &drr->drr_u.drr_begin;
+	uint64_t magic		  = drrb->drr_magic;
+	uint64_t versioninfo 	  = drrb->drr_versioninfo;
 	boolean_t i_am_big_endian = htonl(0xFF00) == 0xFF00;
-	boolean_t swap_on_output;
+
+	boolean_t swap_on_output, is_deduped;
 
 	if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
 		SET_ATTR(chain_attrs, CA_BYTESWAPPED);
-		versioninfo = BSWAP_64(drrb->drr_versioninfo);
+		versioninfo = BSWAP_64(versioninfo);
 	} else if (magic != DMU_BACKUP_MAGIC) {
 		errx(1, "invalid ZFS stream, bad magic number %lx", magic);
 	}
@@ -163,7 +166,7 @@ set_stream_attributes(drr_packet_t *item)
 	}
 	chain_attrs->ca_feature_flags = DMU_GET_FEATUREFLAGS(versioninfo);
 
-	boolean_t is_deduped =
+	is_deduped =
 	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP) ||
 	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUPPROPS);
 
@@ -237,10 +240,15 @@ chain_read(drr_packet_t *item, io_context_t *context)
 				err(1, "error reading record payload at "
 				    " offset %lu", context->ic_offset);
 			} else {
-				/* EOF */
+				/*
+				 * We can't exit here because the ZFS test
+				 * suite depends on being able to process
+				 * streams truncated at random places.
+				 */
 				warnx("input ends mid-record at offset %lu "
 				    "- stream is likely corrupt",
 				    context->ic_offset);
+				fclose(context->ic_fp);
 				return (D_EOF);
 			}
 		}
@@ -283,16 +291,12 @@ chain_write(drr_packet_t *item, io_context_t *context)
 	dmu_replay_record_t *drr = &item->dp_drr;
 
 	if (fwrite(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) != 1) {
-		fprintf(stderr, "Error writing record header: %s\n",
-		    strerror(errno));
-		exit(1);
+		err(1, "error writing record header");
 	} else if (item->dp_payload_size > 0) {
 		if (fwrite(item->dp_payload, item->dp_payload_size,
 		    1, context->ic_fp) != 1)
 		{
-			fprintf(stderr, "Error writing payload: %s\n",
-			    strerror(errno));
-			exit(1);
+			err(1, "error writing payload: ");
 		} else {
 			free(item->dp_payload);
 			item->dp_payload = NULL;
@@ -315,6 +319,9 @@ chain_write(drr_packet_t *item, io_context_t *context)
 	return (D_OK);
 }
 
+/*
+ * Even if the chain doesn't write out a stream, payloads still need freed.
+ */
 static disposition_t
 chain_null_output(drr_packet_t *item, void *ctxt)
 {

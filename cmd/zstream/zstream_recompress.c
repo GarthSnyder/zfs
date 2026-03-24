@@ -52,10 +52,13 @@ static boolean_t
 needs_modification(drr_packet_t *item, compression_spec_t *target)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw	= &drr->drr_u.drr_write;
-	enum zio_compress ctype = drrw->drr_compressiontype;
+	struct drr_write *drrw	 = &drr->drr_u.drr_write;
+	enum zio_compress ctype  = drrw->drr_compressiontype;
 	uint8_t cur_level;
 
+	if (target == NULL) {
+		return !IS_UNCOMPRESSED(ctype) && !write_is_encrypted(drrw);
+	}
 	if (IS_UNCOMPRESSED(target->cs_type) && IS_UNCOMPRESSED(ctype)) {
 		return (B_FALSE);
 	}
@@ -98,19 +101,19 @@ static boolean_t
 needs_decompression(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw	= &drr->drr_u.drr_write;
-	enum zio_compress ctype	= drrw->drr_compressiontype;
+	struct drr_write *drrw	 = &drr->drr_u.drr_write;
+	enum zio_compress ctype	 = drrw->drr_compressiontype;
 
 	if (IS_UNCOMPRESSED(ctype))
 		return (B_FALSE);
-	return (needs_compression(item, context));
+	return (needs_modification(item, context));
 }
 
 static disposition_t
 chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 {
 	dmu_replay_record_t *drr = &item->dp_drr;
-	struct drr_write *drrw	= &drr->drr_u.drr_write;
+	struct drr_write *drrw	 = &drr->drr_u.drr_write;
 	uint8_t *debuff;
 
 	if (item == NULL || drr->drr_type != DRR_WRITE ||
@@ -147,7 +150,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 		return (D_OK);
 	}
 
-	struct drr_write *drrw = &drr->drr_u.drr_write;
+	struct drr_write *drrw  = &drr->drr_u.drr_write;
 	enum zio_compress ctype = drrw->drr_compressiontype;
 	uint8_t *cbuff;
 	size_t	csize;
@@ -227,13 +230,12 @@ zstream_do_recompress(int argc, char *argv[])
 		switch (c) {
 		case 'l':
 			if (sscanf(optarg, "%d", &level) != 1) {
-				fprintf(stderr, "Failed to parse level '%s'\n",
-				    optarg);
+				warnx("failed to parse level '%s'", optarg);
 				zstream_usage();
 			}
 			break;
 		case '?':
-			fprintf(stderr, "invalid option '%c'\n", optopt);
+			warnx("invalid option '%c", optopt);
 			zstream_usage();
 			break;
 		}

@@ -82,11 +82,11 @@ print_ascii_block(uint8_t *subbuf, int length)
 	for (i = 0; i < length; i++) {
 		char char_print = isprint(subbuf[i]) ? subbuf[i] : '.';
 		if (i != 0 && i % DUMP_GROUPING == 0) {
-			(void) printf(" ");
+			printf(" ");
 		}
-		(void) printf("%c", char_print);
+printf("%c", char_print);
 	}
-	(void) printf("\n");
+	printf("\n");
 }
 
 /*
@@ -174,7 +174,7 @@ stringify_encryption_fields(void *crypto_in)
 	sprintf_bytes(mac, crypto->drr_mac, ZIO_DATA_MAC_LEN);
 	snprintf(buff, sizeof (buff), "salt = %s iv = %s mac = %s",
 	    salt, iv, mac);
-	return buff;
+	return (buff);
 }
 
 static void
@@ -428,7 +428,7 @@ dump_redact_record(drr_packet_t *item)
 static disposition_t
 chain_dump_record(drr_packet_t *item, record_type_t *context)
 {
-	if (!item) {
+	if (item == NULL) {
 		return (D_OK);
 	}
 
@@ -470,7 +470,7 @@ zstream_do_dump(int argc, char *argv[])
 	const char *input_file = NULL;
 	int c;
 
-	record_type_t record_types[DRR_NUMTYPES] = {
+	record_type_t record_types[] = {
 		{ "DRR_BEGIN", 		dump_begin_record },
 		{ "DRR_OBJECT", 	dump_object_record },
 		{ "DRR_FREEOBJECTS", 	dump_freeobjects_record },
@@ -502,12 +502,11 @@ zstream_do_dump(int argc, char *argv[])
 			ENABLE_OPTION(&attrs, CA_DUMP_DATA);
 			break;
 		case ':':
-			fprintf(stderr,
-			    "missing argument for '%c' option\n", optopt);
+			warnx("missing argument for '%c' option\n", optopt);
 			zstream_usage();
 			break;
 		case '?':
-			fprintf(stderr, "invalid option '%c'\n", optopt);
+			warnx("invalid option '%c'\n", optopt);
 			zstream_usage();
 			break;
 		}
@@ -526,7 +525,9 @@ zstream_do_dump(int argc, char *argv[])
 	stream_error = 0;
 	zstream_chain_exec(dump_chain, &attrs);
 
-	/* Match previous zstream dump order */
+	/*
+	 * Match previous zstream dump order
+	 */
 	int print_order[] = {
 		DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,
 		DRR_WRITE, DRR_WRITE_BYREF, DRR_WRITE_EMBEDDED,
