@@ -42,19 +42,36 @@ static int next_context = 0;
 static disposition_t
 chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 {
+	if (item == NULL) {
+		return (D_OK);
+	}
+
 	struct dmu_replay_record *drr = &item->dp_drr;
 	boolean_t input_swapped = *context == BS_INCOMING &&
 	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
 	boolean_t swap = input_swapped || (*context == BS_OUTGOING &&
 	    OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT));
+	uint32_t drr_type =
+	    input_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
 
-	if (item == NULL || !swap) {
-		return (D_OK);
+	if (swap) {
+		byteswap_record(drr, drr_type);
 	}
+	return (D_OK);
+}
 
-	uint32_t type = input_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
+/*
+ * drr_type is passed in separately because we don't know whether we're
+ * doing input or out output swapping. The unswapped drr_type field may in
+ * fact already be in native byte order.
+ */
+void
+byteswap_record(dmu_replay_record_t *drr, uint32_t drr_type)
+{
+	drr->drr_type = BSWAP_32(drr->drr_type);
+	drr->drr_payloadlen = BSWAP_32(drr->drr_payloadlen);
 
-	switch (type) {
+	switch (drr_type) {
 
 	case DRR_BEGIN:
 		DO64(drr_begin.drr_magic);
@@ -154,14 +171,9 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 		errx(1, "unknown record type, aborting...");
 	}
 
-	drr->drr_type = BSWAP_32(drr->drr_type);
-	drr->drr_payloadlen = BSWAP_32(drr->drr_payloadlen);
-
-	if (type != DRR_BEGIN) {
+	if (drr_type != DRR_BEGIN) {
 		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_checksum.drr_checksum);
 	}
-
-	return (D_OK);
 }
 
 chain_step_t
