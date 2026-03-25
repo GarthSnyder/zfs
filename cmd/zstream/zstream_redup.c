@@ -144,6 +144,9 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 		if (fread(drr, sizeof (*drr), 1, context->rc_fp) != 1) {
 			err(1, "read of prior write failed: ");
 		}
+		if (ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) {
+			byteswap_record(drr, BSWAP_32(drr->drr_type));
+		}
 
 		VERIFY3U(drr->drr_type,    ==, DRR_WRITE);
 		VERIFY3U(drrw->drr_toguid, ==, drrwb.drr_refguid);
