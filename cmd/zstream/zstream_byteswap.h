@@ -33,6 +33,15 @@ typedef enum { BS_INCOMING, BS_OUTGOING } byteswap_stage_t;
 chain_step_t
 serial_byteswap(byteswap_stage_t stage);
 
+/*
+ * Unconditionally swap a record. drr_type is passed in separately because
+ * we don't know whether we're doing input or out output swapping. We need
+ * that value in native byte order to know how to swap the rest of the
+ * record.
+ */
+extern void
+byteswap_record(dmu_replay_record_t *drr, uint32_t drr_type);
+
 #ifdef __cplusplus
 }
 #endif
