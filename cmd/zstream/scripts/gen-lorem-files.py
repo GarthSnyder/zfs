@@ -1,4 +1,4 @@
-#!/home/garth/bin/venv/bin/python3
+#!/tmp/zstream-venv/bin/python3
 """Generate files with random names filled with lorem ipsum paragraphs."""
 
 import argparse
