@@ -1,0 +1,98 @@
+invalid checksum
+BEGIN record
+	hdrtype = 2
+	features = 0
+	magic = 2f5bacbac
+	creation_time = 0
+	type = 0
+	flags = 0x0
+	toguid = 0
+	fromguid = 0
+	toname = test/redacted@clean
+	payloadlen = 988
+
+nvlist version: 0
+	tosnap = clean
+	raw = 1
+	fss = (embedded nvlist)
+	nvlist version: 0
+		0x9e1c6196c8d60475 = (embedded nvlist)
+		nvlist version: 0
+			name = test/redacted
+			parentfromsnap = 0x0
+			origin = 0xf72e7baf6b385a9c
+			props = (embedded nvlist)
+			nvlist version: 0
+			(end props)
+
+			snaps = (embedded nvlist)
+			nvlist version: 0
+				clean = 0x87cf136601d5e193
+			(end snaps)
+
+			snapprops = (embedded nvlist)
+			nvlist version: 0
+				clean = (embedded nvlist)
+				nvlist version: 0
+				(end clean)
+
+			(end snapprops)
+
+		(end 0x9e1c6196c8d60475)
+
+		0x31022cc427c97b83 = (embedded nvlist)
+		nvlist version: 0
+			name = test/redacted/encrypted
+			parentfromsnap = 0x87cf136601d5e193
+			props = (embedded nvlist)
+			nvlist version: 0
+				keylocation = file:///test/redacted/new-key
+			(end props)
+
+			is_encroot = 1
+			snaps = (embedded nvlist)
+			nvlist version: 0
+				clean = 0x853d8b3894576e5a
+			(end snaps)
+
+			snapprops = (embedded nvlist)
+			nvlist version: 0
+				clean = (embedded nvlist)
+				nvlist version: 0
+				(end clean)
+
+			(end snapprops)
+
+		(end 0x31022cc427c97b83)
+
+	(end fss)
+
+END checksum = 233736be72/12d3d2bb3215/6de4c368aa143/1fcf8a40883b74d
+BEGIN record
+	hdrtype = 1
+	features = 430004
+	magic = 2f5bacbac
+	creation_time = 69c1ff3e
+	type = 2
+	flags = 0xd
+	toguid = 87cf136601d5e193
+	fromguid = f72e7baf6b385a9c
+	toname = test/redacted@clean
+	payloadlen = 0
+
+Incorrect checksum in record header.
+Expected checksum = 5a516af09/2dae4ed56ff/c01acfdcab9d/226b3da59c21f3
+SUMMARY:
+	Total DRR_BEGIN records = 2 (988 bytes)
+	Total DRR_END records = 1 (0 bytes)
+	Total DRR_OBJECT records = 0 (0 bytes)
+	Total DRR_FREEOBJECTS records = 0 (0 bytes)
+	Total DRR_WRITE records = 0 (0 bytes)
+	Total DRR_WRITE_BYREF records = 0 (0 bytes)
+	Total DRR_WRITE_EMBEDDED records = 0 (0 bytes)
+	Total DRR_FREE records = 0 (0 bytes)
+	Total DRR_SPILL records = 0 (0 bytes)
+	Total records = 3
+	Total payload size = 988 (0x3dc)
+	Total header overhead = 936 (0x3a8)
+	Total stream length = 2236 (0x8bc)

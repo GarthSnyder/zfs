@@ -1,0 +1,30 @@
+BEGIN record
+	hdrtype = 1
+	features = 630004
+	magic = 2f5bacbac
+	creation_time = 69c1ff3b
+	type = 2
+	flags = 0xc
+	toguid = f72e7baf6b385a9c
+	fromguid = 0
+	toname = test/source@baseline
+	payloadlen = 64
+
+nvlist version: 0
+	redact_snaps = 0x87cf136601d5e193
+Incorrect checksum in record header.
+Expected checksum = 7d9bdd09b/3a83d3ffc5a/f65b0da1acee/2e8ef0a07242a1
+SUMMARY:
+	Total DRR_BEGIN records = 1 (64 bytes)
+	Total DRR_END records = 0 (0 bytes)
+	Total DRR_OBJECT records = 0 (0 bytes)
+	Total DRR_FREEOBJECTS records = 0 (0 bytes)
+	Total DRR_WRITE records = 0 (0 bytes)
+	Total DRR_WRITE_BYREF records = 0 (0 bytes)
+	Total DRR_WRITE_EMBEDDED records = 0 (0 bytes)
+	Total DRR_FREE records = 0 (0 bytes)
+	Total DRR_SPILL records = 0 (0 bytes)
+	Total records = 1
+	Total payload size = 64 (0x40)
+	Total header overhead = 312 (0x138)
+	Total stream length = 688 (0x2b0)
