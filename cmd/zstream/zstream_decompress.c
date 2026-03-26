@@ -68,9 +68,14 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 	}
 
 	enum zio_compress ctype = (enum zio_compress)(intptr_t)p->data;
+	if (ctype == ZIO_COMPRESS_INHERIT) {
+		/* Unspecified */
+		ctype = drrw->drr_compressiontype;
+	}
 	if (IS_UNCOMPRESSED(ctype)) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
+		drrw->drr_logical_size = item->dp_payload_size;
 		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 			fprintf(stderr,
 			    "Resetting compression type to "
@@ -95,7 +100,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		 * compression type, possibly because it gets written
 		 * multiple times in this stream.
 		 */
-		fprintf(stderr, "Decompression failed for ino %zu offset %zu",
+		fprintf(stderr, "Decompression failed for ino %zu offset %zu\n",
 		    drrw->drr_object, drrw->drr_offset);
 		free(dcbuff);
 	} else {
@@ -161,7 +166,7 @@ zstream_do_decompress(int argc, char *argv[])
 		char *offset_str;
 		char *key;
 		char *end;
-		enum zio_compress type = ZIO_COMPRESS_LZ4;
+		enum zio_compress type = ZIO_COMPRESS_INHERIT;
 
 		obj_str = strsep(&argv[i], ",");
 		if (argv[i] == NULL) {
