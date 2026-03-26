@@ -1,4 +1,4 @@
-#!/home/garth/bin/venv/bin/python3
+#!/tmp/zstream-venv/bin/python3
 """Add random extended attributes to files until 600 bytes of xattrs are added."""
 
 import argparse
