@@ -13,15 +13,15 @@
 #
 
 #
-# Copyright (c) 2026 by ConnectWise. All rights reserved.
+# Copyright (c) 2026 by Garth Snyder. All rights reserved.
 #
 
 . $STF_SUITE/tests/functional/zstream/zstream.kshlib
 
 #
 # Description:
-# Verify that zstream decompress decompresses selected WRITE records.
-# The decompress.zsend stream contains zstd-compressed writes.
+# Verify that zstream decompress actually decompresses selected WRITE
+# records. The input stream contains zstd-compressed writes.
 #
 # Strategy:
 # 1. Decompress selected records (2,0 4,0 5,131072) from the stream
@@ -36,10 +36,10 @@ verify_runnable "both"
 log_assert "Verify zstream decompress decompresses selected WRITE records."
 
 typeset src="$ZSTREAM_DATADIR/decompress.zsend.bz2"
-typeset orig="$BACKDIR/decompress.orig"
-typeset decompressed="$BACKDIR/decompress.out"
-typeset orig_dump="$BACKDIR/decompress-orig.dump"
-typeset decomp_dump="$BACKDIR/decompress-decomp.dump"
+typeset orig="$BACKDIR/decompress.orig.zsend"
+typeset decompressed="$BACKDIR/decompress.out.zsend"
+typeset orig_dump="$BACKDIR/decompress.orig.dump"
+typeset decomp_dump="$BACKDIR/decompress.out.dump"
 
 # Selected records: object,offset
 typeset -a records=(2,0 4,0 5,131072)
