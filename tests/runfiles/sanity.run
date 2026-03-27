@@ -615,7 +615,8 @@ tests = ['xattr_001_pos', 'xattr_002_neg', 'xattr_003_neg', 'xattr_004_pos',
 tags = ['functional', 'xattr']
 
 [tests/functional/zstream]
-tests = ['zstream_dump_001_pos']
+tests = ['zstream_dump_001_pos', 'zstream_dump_002_pos',
+    'zstream_redup_001_pos']
 tags = ['functional', 'zstream']
 
 [tests/functional/zvol/zvol_ENOSPC]
