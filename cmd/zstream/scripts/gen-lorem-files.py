@@ -40,13 +40,15 @@ def random_name(used: set) -> str:
     return f"{base}-{i}"
 
 
-def fill_file(path: Path, target_size: int) -> None:
+def fill_file(path: Path, target_size: int, repeat=False) -> None:
     content_parts = []
     total = 0
+    para = lorem.paragraph()
     while total < target_size:
-        para = lorem.paragraph()
         content_parts.append(para)
         total += len(para) + 1  # +1 for newline
+        if not repeat:
+             para = lorem.paragraph()
     path.write_text("\n\n".join(content_parts) + "\n")
 
 
@@ -56,6 +58,7 @@ def main():
     )
     parser.add_argument("count", type=int, help="Number of files to create")
     parser.add_argument("-d", "--directory", default=".", help="Target directory (default: .)")
+    parser.add_argument("-r", "--repeat", action="store_true", help="Fill files with reps of a single paragraph")
     parser.add_argument("--min-size", type=int, default=16384, help="Minimum file size in bytes (default: 2048)")
     parser.add_argument("--max-size", type=int, default=128000, help="Maximum file size in bytes (default: 128000)")
     args = parser.parse_args()
@@ -73,7 +76,7 @@ def main():
         used_names.add(name)
         target_size = random.randint(args.min_size, args.max_size)
         path = directory / name
-        fill_file(path, target_size)
+        fill_file(path, target_size, args.repeat)
         print(f"  {path}  ({path.stat().st_size:,} bytes)")
 
 
