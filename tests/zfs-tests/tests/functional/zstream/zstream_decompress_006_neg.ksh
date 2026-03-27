@@ -13,7 +13,7 @@
 #
 
 #
-# Copyright (c) 2026 by ConnectWise. All rights reserved.
+# Copyright (c) 2026 by Garth Snyder. All rights reserved.
 #
 
 . $STF_SUITE/tests/functional/zstream/zstream.kshlib

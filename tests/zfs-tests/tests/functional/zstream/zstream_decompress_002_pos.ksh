@@ -13,7 +13,7 @@
 #
 
 #
-# Copyright (c) 2026 by ConnectWise. All rights reserved.
+# Copyright (c) 2026 by Garth Snyder. All rights reserved.
 #
 
 . $STF_SUITE/tests/functional/zstream/zstream.kshlib
@@ -36,8 +36,8 @@ log_assert "Verify decompressed stream receives with identical file contents."
 log_onexit cleanup_pool $POOL
 
 typeset src="$ZSTREAM_DATADIR/decompress.zsend.bz2"
-typeset orig="$BACKDIR/decompress.orig"
-typeset decompressed="$BACKDIR/decompress.out"
+typeset orig="$BACKDIR/decompress.orig.zsend"
+typeset decompressed="$BACKDIR/decompress.out.zsend"
 
 # Prepare streams
 bzcat "$src" > "$orig"
