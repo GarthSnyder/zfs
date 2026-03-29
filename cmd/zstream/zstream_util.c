@@ -105,6 +105,7 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 	if (ZIO_CHECKSUM_EQUAL(*expected, *actual)) {
 		return B_TRUE;
 	}
+	fflush(stdout);
 	fprintf(stderr, "Incorrect checksum %s (stream offset %zu)\n", where,
 	    stream_offset);
 	fprintf(stderr, "Expected = %s\n", checksum_str(expected, buff,
