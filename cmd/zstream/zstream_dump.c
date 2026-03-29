@@ -560,6 +560,7 @@ zstream_do_dump(int argc, char *argv[])
 	    total_header + total_payload, total_header + total_payload);
 
 	if (stream_error) {
+		fflush(stdout);
 		fprintf(stderr, "\nzstream dump completed with errors (first "
 		    "error code %d)\n", stream_error);
 		exit(stream_error);
