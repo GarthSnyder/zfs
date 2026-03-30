@@ -12,7 +12,7 @@ zpool create -o ashift=12 test "$DEVICE"
 zfs set compression=on xattr=sa test
 zfs create test/source
 
-"$SCRIPTDIR/gen-lorem-files.py" -d /test/source --min-size 2048 \
+"$SCRIPTDIR/gen-lorem-files.py" -r -d /test/source --min-size 2048 \
     --max-size 32000 3
 "$SCRIPTDIR/add-xattrs.py" /test/source/*
 echo "very small" > /test/source/small
@@ -22,7 +22,7 @@ chmod 400 /test/source/to-be-redacted
 zfs snapshot -r test/source@baseline
 zfs clone test/source@baseline test/redacted
 rm /test/redacted/to-be-redacted
-"$SCRIPTDIR/gen-lorem-files.py" -d /test/redacted --min-size 4096 \
+"$SCRIPTDIR/gen-lorem-files.py" -r -d /test/redacted --min-size 4096 \
     --max-size 32000 3
 "$SCRIPTDIR/add-xattrs.py" /test/redacted/*
 cd /test/redacted
@@ -34,7 +34,7 @@ tar xvf /tmp/dups.tar
 echo "password" > /test/redacted/new-key
 zfs create -o encryption=on -o keylocation=file:///test/redacted/new-key \
     -o keyformat=passphrase test/redacted/encrypted
-"$SCRIPTDIR/gen-lorem-files.py" -d /test/redacted/encrypted 3
+"$SCRIPTDIR/gen-lorem-files.py" -r -d /test/redacted/encrypted 3
 echo "very small" > /test/redacted/encrypted/small-encrypted
 # "$SCRIPTDIR/add-xattrs.py" /test/redacted/encrypted/*
 

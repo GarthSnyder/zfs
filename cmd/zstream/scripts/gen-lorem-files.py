@@ -26,7 +26,6 @@ NOUNS = [
     "biscuit", "circuit", "summit", "muppet", "trumpet", "basket", "casket",
 ]
 
-
 def random_name(used: set) -> str:
     for _ in range(1000):
         name = f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}"
