@@ -22,7 +22,8 @@
 # Description:
 # Verify that very long payload records are checksummed correctly by
 # running them through zstream redup (which recalculates checksums but is
-# otherwise a no-op). This exercises the 8MiB Fletcher4 chunk boundary handling.
+# otherwise a no-op). This exercises the 8MiB Fletcher4 chunk boundary
+# handling.
 #
 # Strategy:
 # 1. Decompress the long-payloads test stream

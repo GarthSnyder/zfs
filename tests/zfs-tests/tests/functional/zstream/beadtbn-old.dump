@@ -1,19 +1,19 @@
-Operation not supported: Success
+Operation not supported: Inappropriate ioctl for device
 invalid checksum
 BEGIN record
 	hdrtype = 1
 	features = 630004
 	magic = 2f5bacbac
-	creation_time = 69bc86b5
+	creation_time = 69cb0e93
 	type = 2
 	flags = 0xc
-	toguid = c1d310beeda9fb34
+	toguid = a2ae713712d097d7
 	fromguid = 0
 	toname = test/source@baseline
 	payloadlen = 56
 
 Incorrect checksum in record header.
-Expected checksum = 8498d5d1e/3cd10ac1883/fd12a4970c73/2f51491b8305fc
+Expected checksum = 6ba81cdeb/31c81116f88/ce994e824e98/26710345790a97
 SUMMARY:
 	Total DRR_BEGIN records = 1 (56 bytes)
 	Total DRR_END records = 0 (0 bytes)

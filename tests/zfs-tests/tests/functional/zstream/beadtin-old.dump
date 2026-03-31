@@ -16,18 +16,18 @@ nvlist version: 0
 	raw = 1
 	fss = (embedded nvlist)
 	nvlist version: 0
-		0xfdaa0b0a5a55a240 = (embedded nvlist)
+		0xa17f034044e1acf7 = (embedded nvlist)
 		nvlist version: 0
 			name = test/redacted
 			parentfromsnap = 0x0
-			origin = 0xc1d310beeda9fb34
+			origin = 0xa2ae713712d097d7
 			props = (embedded nvlist)
 			nvlist version: 0
 			(end props)
 
 			snaps = (embedded nvlist)
 			nvlist version: 0
-				clean = 0x2a7add0935c5b3ec
+				clean = 0x83307b4241f2026a
 			(end snaps)
 
 			snapprops = (embedded nvlist)
@@ -38,12 +38,12 @@ nvlist version: 0
 
 			(end snapprops)
 
-		(end 0xfdaa0b0a5a55a240)
+		(end 0xa17f034044e1acf7)
 
-		0x48180d0ed47eb79a = (embedded nvlist)
+		0xd041b78a006f9d1f = (embedded nvlist)
 		nvlist version: 0
 			name = test/redacted/encrypted
-			parentfromsnap = 0x2a7add0935c5b3ec
+			parentfromsnap = 0x83307b4241f2026a
 			props = (embedded nvlist)
 			nvlist version: 0
 				keylocation = file:///test/redacted/new-key
@@ -52,7 +52,7 @@ nvlist version: 0
 			is_encroot = 1
 			snaps = (embedded nvlist)
 			nvlist version: 0
-				clean = 0x5904365f144e191e
+				clean = 0x663fe5e93a7c58b8
 			(end snaps)
 
 			snapprops = (embedded nvlist)
@@ -63,25 +63,25 @@ nvlist version: 0
 
 			(end snapprops)
 
-		(end 0x48180d0ed47eb79a)
+		(end 0xd041b78a006f9d1f)
 
 	(end fss)
 
-END checksum = 221df6082d/129a565f67a7/6d8b5c32ef45e/1fd1b1a7e296841
+END checksum = 225ef7cc71/1282a919777f/6c860512b2a49/1f8bdbe85882f8f
 BEGIN record
 	hdrtype = 1
 	features = 430004
 	magic = 2f5bacbac
-	creation_time = 69bc86b9
+	creation_time = 69cb0e96
 	type = 2
 	flags = 0xd
-	toguid = 2a7add0935c5b3ec
-	fromguid = c1d310beeda9fb34
+	toguid = 83307b4241f2026a
+	fromguid = a2ae713712d097d7
 	toname = test/redacted@clean
 	payloadlen = 0
 
 Incorrect checksum in record header.
-Expected checksum = 59f5ea223/2e2e7bf5614/c36b1a78dbc8/2314fb3951dec3
+Expected checksum = 56f33028a/2acea0cfd98/b1e37f989e36/1fbae589fb0f24
 SUMMARY:
 	Total DRR_BEGIN records = 2 (988 bytes)
 	Total DRR_END records = 1 (0 bytes)

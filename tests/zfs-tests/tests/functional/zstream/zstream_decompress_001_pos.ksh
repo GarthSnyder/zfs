@@ -28,7 +28,6 @@
 # 2. Run zstream dump -v on both original and decompressed streams
 # 3. Verify the selected records now show compression type = 0,
 #    compressed_size = 0, and payload_size = logical_size
-# 4. Verify non-selected records are unchanged
 #
 
 verify_runnable "both"

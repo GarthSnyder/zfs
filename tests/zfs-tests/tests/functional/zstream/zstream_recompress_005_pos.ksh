@@ -20,8 +20,9 @@
 
 #
 # Description:
-# Verify that zstream recompress with lz4 produces a stream with a
-# different size that still receives with identical file contents.
+# Verify that zstream recompress lz4 of a zstd-5-compressed input stream
+# yields a stream with a nonidentical size that zfs receives with identical
+# file contents.
 #
 # Strategy:
 # 1. Receive the original stream and compute file hashes as baseline

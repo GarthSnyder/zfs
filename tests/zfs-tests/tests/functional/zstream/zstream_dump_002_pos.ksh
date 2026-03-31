@@ -20,29 +20,43 @@
 
 #
 # Description:
-# Verify that zstream dump -v output matches reference dump files for all
-# pre-generated test streams (both endiannesses, base/incremental,
-# NATIVE/XDR encoding).
+# Verify that zstream dump -v output is as expected for pregenerated
+# same-endian, neutral-endian (no BEGIN nvlists), and XDR-encoded
+# test streams. NV_ENCODE_NATIVE-encoded BEGIN records aren't readable
+# on opposite-endian systems, so for these the output of zstream dump
+# varies according to host endianness.
 #
 # Strategy:
-# 1. For each of the 8 test streams, run zstream dump -v
-# 2. Compare stdout+stderr against the corresponding -new reference dump
+# 1. For each of the test streams, run zstream dump -v
+# 2. Compare stdout+stderr with the corresponding reference dump
 #
 
 verify_runnable "both"
 
 log_assert "Verify zstream dump -v output matches reference dump files."
 
+typeset sys_endian=$(get_system_endian)
+
 typeset -a streams=(
-	big-endian-all-drr-types-base-NATIVE
+	decompress
+	decompress-crypt
 	big-endian-all-drr-types-base-XDR
-	big-endian-all-drr-types-incr-NATIVE
 	big-endian-all-drr-types-incr-XDR
-	little-endian-all-drr-types-base-NATIVE
 	little-endian-all-drr-types-base-XDR
-	little-endian-all-drr-types-incr-NATIVE
 	little-endian-all-drr-types-incr-XDR
 )
+
+if [[ $sys_endian == "little" ]]; then
+	streams+=(
+		little-endian-all-drr-types-base-NATIVE
+		little-endian-all-drr-types-incr-NATIVE
+	)
+else
+	streams+=(
+		big-endian-all-drr-types-base-NATIVE
+		big-endian-all-drr-types-incr-NATIVE
+	)
+fi
 
 typeset failed=""
 
