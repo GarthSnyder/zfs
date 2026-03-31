@@ -20,9 +20,8 @@
 
 #
 # Description:
-# Verify that zstream decompress refuses to decompress encrypted records,
-# printing a warning for each and leaving the output stream identical to
-# the input.
+# Verify that zstream decompress prints a warning to stderr for encrypted
+# WRITES, attempts to decompress anyway, fails, and leaves stream unchanged.
 #
 # Strategy:
 # 1. Select compressed encrypted records from decompress-crypt.zsend
@@ -33,7 +32,7 @@
 
 verify_runnable "both"
 
-log_assert "Verify encrypted records refuse to decompress."
+log_assert "Verify that zstream decompress handles encrypted records correctly."
 
 typeset src="$ZSTREAM_DATADIR/decompress-crypt.zsend.bz2"
 typeset orig="$BACKDIR/decompress-crypt.orig"
@@ -51,8 +50,8 @@ log_must cmp -s "$orig" "$output"
 
 # Stderr should contain warnings about each record
 typeset errcount=$(wc -l < "$errfile")
-if [[ $errcount -eq 0 ]]; then
-	log_fail "Expected warning messages on stderr, got none"
+if [[ $errcount -ne 6 ]]; then
+	log_fail "Expected 6 messages on stderr, got $errcount"
 fi
 log_note "Got $errcount lines of warning output (expected)"
 

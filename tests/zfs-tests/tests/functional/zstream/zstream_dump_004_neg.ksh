@@ -21,14 +21,14 @@
 #
 # Description:
 # Verify that zstream dump on non-native-endian NATIVE-encoded streams
-# exits with code 95 (ENOTSUP) but still dumps the complete stream
-# including the rollup summary.
+# eventually exits with code 95 (ENOTSUP) but still dumps the complete
+# stream (minus nondecodable nvlists) and prints the rollup summary.
 #
 # Strategy:
 # 1. Determine system endianness to identify non-native NATIVE streams
 # 2. Run zstream dump -v on each non-native NATIVE stream
-# 3. Verify exit code is 95
-# 4. Verify the SUMMARY section is present and complete
+# 3. Verify exit code is 95 (ENOTSUP)
+# 4. Verify that SUMMARY section is present and complete
 #
 
 verify_runnable "both"

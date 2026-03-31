@@ -65,21 +65,38 @@ for rec in "${records[@]}"; do
 	    "$orig_dump")
 	typeset orig_lsize=$(echo "$orig_line" | \
 	    sed 's/.*logical_size = \([0-9]*\).*/\1/')
+	typeset orig_csize=$(echo "$orig_line" | \
+	    sed 's/.*compressed_size = \([0-9]*\).*/\1/')
+	typeset orig_ctype=$(echo "$orig_line" | \
+	    sed 's/.*compression type = \([0-9]*\).*/\1/')
 
 	typeset off_line=$(awk \
 	    "/^WRITE object = $obj .* offset = $off /" \
 	    "$off_dump")
-
-	if ! echo "$off_line" | grep -q 'compression type = 0'; then
-		log_note "Record $rec: compression type not 0"
-		failed="$failed ${rec}(comp)"
-	fi
-
 	typeset off_lsize=$(echo "$off_line" | \
 	    sed 's/.*logical_size = \([0-9]*\).*/\1/')
-	if [[ "$off_lsize" != "$orig_lsize" ]]; then
-		log_note "Record $rec: logical_size changed ($orig_lsize -> $off_lsize)"
+	typeset off_csize=$(echo "$off_line" | \
+	    sed 's/.*compressed_size = \([0-9]*\).*/\1/')
+	typeset off_ctype=$(echo "$off_line" | \
+	    sed 's/.*compression type = \([0-9]*\).*/\1/')
+
+	if [[ "$orig_ctype" == "0" ]]; then
+		log_note "Record $rec: original compression type is 0"
+		failed="$failed ${rec}(orig ctype)"
+	fi
+	if [[ "$off_ctype" != "0" ]]; then
+		log_note "Record $rec: modified compression type is not 0"
+		failed="$failed ${rec}(modified ctype)"
+	fi
+	if [[ "$off_lsize" != "$orig_csize" ]]; then
+		log_note "Record $rec: modified logical_size != original " \
+		    "compressed_size ($orig_lsize -> $off_lsize)"
 		failed="$failed ${rec}(lsize)"
+	fi
+	if [[ "$off_csize" != "0" ]]; then
+		log_note "Record $rec: modified compressed_size != 0 " \
+		    "($orig_csize -> $off_csize)"
+		failed="$failed ${rec}(csize)"
 	fi
 done
 
