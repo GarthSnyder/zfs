@@ -49,12 +49,7 @@ ZSTREAM_DATADIR=$STF_SUITE/tests/functional/zstream
 #
 function get_system_endian
 {
-	typeset byte=$(echo -n I | od -An -tx1 | tr -d ' ')
-	if [[ $byte == "49" ]]; then
-		echo "little"
-	else
-		echo "big"
-	fi
+	python3 -c "import sys; print(sys.byteorder)"
 }
 
 #
@@ -69,6 +64,7 @@ function get_stream_abbrev
 	case $stem in
 	big-endian*)	abbrev="bead" ;;
 	little-endian*)	abbrev="lead" ;;
+	*) echo $stem; return 0       ;;
 	esac
 
 	case $stem in

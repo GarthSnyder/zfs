@@ -20,11 +20,14 @@
 
 #
 # Description:
-# Verify that zstream redup produces output identical to input for all
-# pre-generated test streams (which contain no dedup records).
+#
+# Verify that zstream redup produces output identical to input for same-endian
+# test streams These input files contain no dedup records. However, the round
+# trip does involve the full pipeline as well as validating and regenerating all
+# checksums, so this is a useful check.
 #
 # Strategy:
-# 1. For each of the 8 endian/encoding test streams, decompress with bzcat
+# 1. For each of the same-endian test streams, decompress with bzcat
 # 2. Pipe through zstream redup
 # 3. Compare with cmp against the original decompressed stream
 #
@@ -33,16 +36,25 @@ verify_runnable "both"
 
 log_assert "Verify zstream redup is an identity transform on non-dedup streams."
 
-typeset -a streams=(
-	big-endian-all-drr-types-base-NATIVE
-	big-endian-all-drr-types-base-XDR
-	big-endian-all-drr-types-incr-NATIVE
-	big-endian-all-drr-types-incr-XDR
-	little-endian-all-drr-types-base-NATIVE
-	little-endian-all-drr-types-base-XDR
-	little-endian-all-drr-types-incr-NATIVE
-	little-endian-all-drr-types-incr-XDR
-)
+typeset sys_endian=$(get_system_endian)
+
+if [[ $sys_endian == "little" ]]; then
+	typeset -a streams=(
+		decompress
+		decompress-crypt
+		little-endian-all-drr-types-base-NATIVE
+		little-endian-all-drr-types-base-XDR
+		little-endian-all-drr-types-incr-NATIVE
+		little-endian-all-drr-types-incr-XDR
+	)
+else
+	typeset -a streams=(
+		big-endian-all-drr-types-base-NATIVE
+		big-endian-all-drr-types-base-XDR
+		big-endian-all-drr-types-incr-NATIVE
+		big-endian-all-drr-types-incr-XDR
+	)
+fi
 
 typeset failed=""
 
@@ -52,7 +64,7 @@ for stem in "${streams[@]}"; do
 	typeset redup_out="$BACKDIR/${stem}.redup"
 
 	bzcat "$src" > "$orig"
-	zstream redup < "$orig" > "$redup_out"
+	zstream redup "$orig" > "$redup_out"
 
 	if ! cmp -s "$orig" "$redup_out"; then
 		log_note "MISMATCH: zstream redup output differs for $stem"

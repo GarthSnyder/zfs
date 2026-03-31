@@ -19,16 +19,15 @@
 . $STF_SUITE/tests/functional/zstream/zstream.kshlib
 
 #
-# Description:
-# Verify that the only differences between -old and -new dump reference
-# files are the expected additions: nvlist encoding lines and two
-# additional record types in the summary (DRR_OBJECT_RANGE, DRR_REDACT).
+# Verify that zstream dump -v output for all same-endian and neutral-endian
+# test streams matches that of the previous version of zstream, with the
+# following exceptions:
 #
-# Strategy:
-# 1. Determine system endianness
-# 2. For native-endian streams and all XDR streams, filter the -new dump
-#    to remove the known additions
-# 3. Compare the filtered output to the -old dump — must be identical
+#   1) Add a line that describes the nvlist packing format for BEGIN records
+#   2) Include DRR_OBJECT_RANGE and DRR_REDACT records in end summary
+#
+# The previous version of zstream does not dump opposite-endian streams
+# correctly, so there's no prior basis for comparison.
 #
 
 verify_runnable "both"
@@ -37,26 +36,24 @@ log_assert "Verify old-vs-new dump diff contains only expected additions."
 
 typeset sys_endian=$(get_system_endian)
 
-# All streams whose -old and -new dumps should differ only by the
-# known additions: native-endian streams (any encoding) plus all XDR.
-# Non-native NATIVE streams have additional differences (error messages)
-# and are excluded.
 typeset -a streams=(
-	big-endian-all-drr-types-base-XDR
-	big-endian-all-drr-types-incr-XDR
-	little-endian-all-drr-types-base-XDR
-	little-endian-all-drr-types-incr-XDR
+	decompress
+	decompress-crypt
 )
 
 if [[ $sys_endian == "little" ]]; then
 	streams+=(
 		little-endian-all-drr-types-base-NATIVE
 		little-endian-all-drr-types-incr-NATIVE
+		little-endian-all-drr-types-base-XDR
+		little-endian-all-drr-types-incr-XDR
 	)
 else
 	streams+=(
 		big-endian-all-drr-types-base-NATIVE
 		big-endian-all-drr-types-incr-NATIVE
+		big-endian-all-drr-types-base-XDR
+		big-endian-all-drr-types-incr-XDR
 	)
 fi
 
@@ -64,9 +61,12 @@ typeset failed=""
 
 for stem in "${streams[@]}"; do
 	typeset abbrev=$(get_stream_abbrev "$stem")
-	typeset newdump="$ZSTREAM_DATADIR/${abbrev}-new.dump"
+	typeset newdump="$BACKDIR/${abbrev}-new.dump"
 	typeset olddump="$ZSTREAM_DATADIR/${abbrev}-old.dump"
 	typeset filtered="$BACKDIR/${abbrev}-filtered.dump"
+
+	bzcat "$ZSTREAM_DATADIR/${stem}.zsend.bz2" | \
+	    zstream dump -v > "$newdump" 2>&1
 
 	# Remove the lines that are new additions:
 	# 1. "nvlist encoding = ..." lines

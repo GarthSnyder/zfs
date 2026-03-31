@@ -50,8 +50,8 @@ log_must cmp -s "$orig" "$output"
 
 # Stderr should contain messages about the failed decompressions
 typeset errcount=$(wc -l < "$errfile")
-if [[ $errcount -eq 0 ]]; then
-	log_fail "Expected error messages on stderr, got none"
+if [[ $errcount -ne 3 ]]; then
+	log_fail "Did not receive 3 error messages on stderr, got $errcount"
 fi
 log_note "Got $errcount lines of error output (expected)"
 

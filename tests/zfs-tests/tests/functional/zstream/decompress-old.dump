@@ -1,0 +1,71 @@
+BEGIN record
+	hdrtype = 1
+	features = 2430004
+	magic = 2f5bacbac
+	creation_time = 69c47484
+	type = 2
+	flags = 0xc
+	toguid = 17e2e1cfa046a1a7
+	fromguid = 0
+	toname = test/unencrypted@decompression
+	payloadlen = 0
+
+OBJECT object = 1 type = 21 bonustype = 0 blksz = 512 bonuslen = 0 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 1 offset = 512 length = -1
+WRITE object = 1 type = 21 checksum type = 7 compression type = 0 flags = 0 offset = 0 logical_size = 512 compressed_size = 0 payload_size = 512 props = 200000000 salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+FREE object = 1 offset = 512 length = 1024
+OBJECT object = 2 type = 19 bonustype = 44 blksz = 110592 bonuslen = 176 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 2 offset = 110592 length = -1
+WRITE object = 2 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 0 logical_size = 110592 compressed_size = 32768 payload_size = 32768 props = 10003f00d7 salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+OBJECT object = 3 type = 19 bonustype = 44 blksz = 120832 bonuslen = 176 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 3 offset = 120832 length = -1
+WRITE object = 3 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 0 logical_size = 120832 compressed_size = 36864 payload_size = 36864 props = 10004700eb salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+OBJECT object = 4 type = 19 bonustype = 44 blksz = 131072 bonuslen = 176 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 4 offset = 262144 length = -1
+WRITE object = 4 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 0 logical_size = 131072 compressed_size = 36864 payload_size = 36864 props = 10004700ff salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+WRITE object = 4 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 131072 logical_size = 131072 compressed_size = 20480 payload_size = 20480 props = 10002700ff salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+OBJECT object = 5 type = 19 bonustype = 44 blksz = 131072 bonuslen = 176 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 5 offset = 262144 length = -1
+WRITE object = 5 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 0 logical_size = 131072 compressed_size = 36864 payload_size = 36864 props = 10004700ff salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+WRITE object = 5 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 131072 logical_size = 131072 compressed_size = 16384 payload_size = 16384 props = 10001f00ff salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+OBJECT object = 6 type = 19 bonustype = 44 blksz = 131072 bonuslen = 176 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 6 offset = 262144 length = -1
+WRITE object = 6 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 0 logical_size = 131072 compressed_size = 36864 payload_size = 36864 props = 10004700ff salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+WRITE object = 6 type = 19 checksum type = 7 compression type = 16 flags = 0 offset = 131072 logical_size = 131072 compressed_size = 12288 payload_size = 12288 props = 10001700ff salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+FREEOBJECTS firstobj = 7 numobjs = 25
+OBJECT object = 32 type = 45 bonustype = 0 blksz = 512 bonuslen = 0 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 32 offset = 512 length = -1
+WRITE_EMBEDDED object = 32 offset = 0 length = 512 toguid = 17e2e1cfa046a1a7 comp = 15 etype = 0 lsize = 512 psize = 66
+FREE object = 32 offset = 512 length = 1024
+OBJECT object = 33 type = 22 bonustype = 0 blksz = 512 bonuslen = 0 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 33 offset = 512 length = -1
+WRITE_EMBEDDED object = 33 offset = 0 length = 512 toguid = 17e2e1cfa046a1a7 comp = 15 etype = 0 lsize = 512 psize = 29
+FREE object = 33 offset = 512 length = 1024
+OBJECT object = 34 type = 20 bonustype = 44 blksz = 512 bonuslen = 176 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 34 offset = 512 length = -1
+WRITE object = 34 type = 20 checksum type = 7 compression type = 0 flags = 0 offset = 0 logical_size = 512 compressed_size = 0 payload_size = 512 props = 200000000 salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+OBJECT object = 35 type = 46 bonustype = 0 blksz = 1536 bonuslen = 0 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 35 offset = 1536 length = -1
+WRITE object = 35 type = 46 checksum type = 7 compression type = 0 flags = 0 offset = 0 logical_size = 1536 compressed_size = 0 payload_size = 1536 props = 200020002 salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+FREE object = 35 offset = 1536 length = 3072
+OBJECT object = 36 type = 47 bonustype = 0 blksz = 16384 bonuslen = 0 dn_slots = 1 raw_bonuslen = 0 flags = 0 maxblkid = 0 indblkshift = 0 nlevels = 0 nblkptr = 0
+FREE object = 36 offset = 32768 length = -1
+WRITE object = 36 type = 47 checksum type = 7 compression type = 0 flags = 0 offset = 0 logical_size = 16384 compressed_size = 0 payload_size = 16384 props = f0007001f salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+WRITE object = 36 type = 47 checksum type = 7 compression type = 0 flags = 0 offset = 16384 logical_size = 16384 compressed_size = 0 payload_size = 16384 props = f0007001f salt = 0000000000000000 iv = 000000000000000000000000 mac = 00000000000000000000000000000000
+FREE object = 36 offset = 32768 length = 16384
+FREEOBJECTS firstobj = 37 numobjs = 27
+END checksum = 68b18b8ac3f9/3f18da571e55f3c4/f55dfac6aa39f944/fbeddc3442237dc3
+SUMMARY:
+	Total DRR_BEGIN records = 1 (0 bytes)
+	Total DRR_END records = 1 (0 bytes)
+	Total DRR_OBJECT records = 11 (1056 bytes)
+	Total DRR_FREEOBJECTS records = 2 (0 bytes)
+	Total DRR_WRITE records = 13 (264704 bytes)
+	Total DRR_WRITE_BYREF records = 0 (0 bytes)
+	Total DRR_WRITE_EMBEDDED records = 2 (104 bytes)
+	Total DRR_FREE records = 16 (0 bytes)
+	Total DRR_SPILL records = 0 (0 bytes)
+	Total records = 46
+	Total payload size = 265864 (0x40e88)
+	Total header overhead = 14352 (0x3810)
+	Total stream length = 280216 (0x44698)
