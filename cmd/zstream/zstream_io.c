@@ -199,15 +199,6 @@ set_stream_attributes(drr_packet_t *item)
 	else
 		swap_on_output = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
 
-	if (swap_on_output && ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED) &&
-	    !OPTION_ENABLED(chain_attrs, CA_SILENT))
-	{
-		warnx("input stream already has desired byte order");
-		fprintf(stderr, "Add the -s option to silence this warning "
-		    "and process the stream anyway.");
-		exit(1);
-	}
-
 	if (swap_on_output) {
 		ENABLE_OPTION(chain_attrs, CA_BYTESWAP_ON_OUTPUT);
 	}
