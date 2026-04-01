@@ -183,7 +183,13 @@ set_stream_attributes(drr_packet_t *item)
 		    "stream, but the stream is not deduplicated");
 	}
 
-	/* Figure out endianness */
+	/*
+	 * Figure out endianness. In the absence of explicit byte order
+	 * instructions, we have to default to preserving the output byte
+	 * order. The receive mechanism currently inspects the endianness of
+	 * each BEGIN record and assumes, at least in some cases, that
+	 * payload data has the same order as the DMU wrappers.
+	 */
 	if (OPTION_ENABLED(chain_attrs, CA_BIG_ENDIAN_OUT))
 		swap_on_output = !i_am_big_endian;
 	else if (OPTION_ENABLED(chain_attrs, CA_LITTLE_ENDIAN_OUT))
@@ -191,7 +197,7 @@ set_stream_attributes(drr_packet_t *item)
 	else if (OPTION_ENABLED(chain_attrs, CA_OPPOSITE_ENDIAN_OUT))
 		swap_on_output = !ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
 	else
-		swap_on_output = B_FALSE;
+		swap_on_output = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
 
 	if (swap_on_output && ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED) &&
 	    !OPTION_ENABLED(chain_attrs, CA_SILENT))
