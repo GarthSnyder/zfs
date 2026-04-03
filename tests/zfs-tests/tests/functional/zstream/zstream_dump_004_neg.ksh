@@ -21,8 +21,9 @@
 #
 # Description:
 # Verify that zstream dump on non-native-endian NATIVE-encoded streams
-# eventually exits with code 95 (ENOTSUP) but still dumps the complete
-# stream (minus nondecodable nvlists) and prints the rollup summary.
+# eventually exits with code ENOTSUP (95 on Linux, 45 on FreeBSD) but
+# still dumps the complete stream (minus nondecodable nvlists) and
+# prints the rollup summary.
 #
 # Strategy:
 # 1. Determine system endianness to identify non-native NATIVE streams
@@ -58,8 +59,8 @@ for stem in "${streams[@]}"; do
 	    zstream dump -v > "$out" 2>&1
 	typeset rc=$?
 
-	if [[ $rc -ne 95 ]]; then
-		log_note "$stem: expected exit code 95, got $rc"
+	if [[ $rc -ne 45 && $rc -ne 95 ]]; then
+		log_note "$stem: expected exit code 45 or 95, got $rc"
 		failed="$failed ${stem}(rc=$rc)"
 	fi
 
