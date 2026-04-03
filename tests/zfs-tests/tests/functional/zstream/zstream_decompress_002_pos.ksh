@@ -25,8 +25,8 @@
 #
 # Strategy:
 # 1. Receive the original decompress.zsend into a test pool and hash files
-# 2. Destroy and receive the decompressed stream (with records 2,0 4,0
-#    5,131072 decompressed)
+# 2. Receive the decompressed stream (with records 2,0 4,0
+#      and 5,131072 decompressed)
 # 3. Verify file hashes are identical
 #
 
