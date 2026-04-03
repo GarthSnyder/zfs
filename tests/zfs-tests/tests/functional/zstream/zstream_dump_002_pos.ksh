@@ -21,10 +21,10 @@
 #
 # Description:
 # Verify that zstream dump -v output is as expected for pregenerated
-# same-endian, neutral-endian (no BEGIN nvlists), and XDR-encoded
-# test streams. NV_ENCODE_NATIVE-encoded BEGIN records aren't readable
-# on opposite-endian systems, so for these the output of zstream dump
-# varies according to host endianness.
+# same-endian, neutral (no BEGIN nvlists), and XDR-encoded test streams.
+# NV_ENCODE_NATIVE-encoded BEGIN records aren't readable on opposite-endian
+# systems, so for these the output of zstream dump varies according to
+# host endianness.
 #
 # Strategy:
 # 1. For each of the test streams, run zstream dump -v

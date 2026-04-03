@@ -21,7 +21,7 @@
 #
 # Description:
 # Verify that zstream recompress with zstd at level 19 produces a smaller
-# stream that still receives with identical file contents.
+# stream that receives with identical file contents.
 #
 # Strategy:
 # 1. Receive the original stream and compute file hashes as baseline
