@@ -16,7 +16,7 @@
 # Copyright (c) 2024 by the OpenZFS project. All rights reserved.
 #
 
-. $STF_SUITE/tests/functional/rsend/rsend.kshlib
+. $STF_SUITE/tests/functional/zstream/zstream.kshlib
 
 #
 # Description:
@@ -33,9 +33,9 @@
 verify_runnable "both"
 
 log_assert "Verify zstream recompress round-trip produces identical stream."
-log_onexit cleanup_pool $POOL2
+log_onexit cleanup_pool $POOL
 
-typeset sendfs=$POOL2/fs
+typeset sendfs=$POOL/fs
 
 log_must zfs create $sendfs
 typeset dir=$(get_prop mountpoint $sendfs)
