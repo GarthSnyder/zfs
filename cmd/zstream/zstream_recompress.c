@@ -35,6 +35,7 @@
 #include <sys/stdtypes.h>
 
 #include "zstream.h"
+#include "zstream_chain.h"
 #include "zstream_modules.h"
 #include "zstream_util.h"
 
@@ -224,7 +225,10 @@ zstream_do_recompress(int argc, char *argv[])
 {
 	int c;
 	int level = ZIO_COMPLEVEL_DEFAULT;
-	chain_attrs_t attrs = { .ca_command_opts = CA_FORBID_DEDUP };
+
+	chain_attrs_t attrs = {
+		.ca_command_opts = CA_FORBID_DEDUP | CA_REQUIRE_NATIVE_ENDIAN
+	};
 
 	while ((c = getopt(argc, argv, "l:")) != -1) {
 		switch (c) {

@@ -93,23 +93,24 @@ extern "C" {
  * **CHAIN ATTRIBUTES** - A set of flags available to all steps.
  */
 
-#define CA_BYTESWAPPED		(1ULL << 0)	/* ca_attrs */
-#define CA_BIG_ENDIAN_INPUT	(1ULL << 1)
-#define CA_LITTLE_ENDIAN_INPUT	(1ULL << 2)
+#define CA_BYTESWAPPED			(1ULL << 0)	/* ca_attrs */
+#define CA_BIG_ENDIAN_INPUT		(1ULL << 1)
+#define CA_LITTLE_ENDIAN_INPUT		(1ULL << 2)
 
-#define CA_VERBOSE		(1ULL << 0)	/* ca_command_opts */
-#define CA_VERY_VERBOSE		(1ULL << 1)
-#define CA_DUMP_OFFSETS		(1ULL << 2)
-#define CA_DUMP_DATA		(1ULL << 3)
-#define CA_IGNORE_CKSUMS	(1ULL << 4)
-#define CA_DO_NOT_VALIDATE	(1ULL << 5)
-#define CA_FORBID_DEDUP		(1ULL << 6)
-#define CA_REQUIRE_DEDUP	(1ULL << 7)
-#define CA_BYTESWAP_ON_OUTPUT	(1ULL << 8)
-#define CA_BIG_ENDIAN_OUT	(1ULL << 9)
-#define CA_LITTLE_ENDIAN_OUT	(1ULL << 10)
-#define CA_OPPOSITE_ENDIAN_OUT	(1ULL << 11)
-#define CA_SILENT		(1ULL << 12)
+#define CA_VERBOSE			(1ULL << 0)	/* ca_command_opts */
+#define CA_VERY_VERBOSE			(1ULL << 1)
+#define CA_DUMP_OFFSETS			(1ULL << 2)
+#define CA_DUMP_DATA			(1ULL << 3)
+#define CA_IGNORE_CKSUMS		(1ULL << 4)
+#define CA_DO_NOT_VALIDATE		(1ULL << 5)
+#define CA_FORBID_DEDUP			(1ULL << 6)
+#define CA_REQUIRE_DEDUP		(1ULL << 7)
+#define CA_REQUIRE_NATIVE_ENDIAN	(1ULL << 8)
+#define CA_BYTESWAP_ON_OUTPUT		(1ULL << 9)
+#define CA_BIG_ENDIAN_OUT		(1ULL << 10)
+#define CA_LITTLE_ENDIAN_OUT		(1ULL << 11)
+#define CA_OPPOSITE_ENDIAN_OUT		(1ULL << 12)
+#define CA_SILENT			(1ULL << 13)
 
 #define OPTION_ENABLED(attrs, opt) (!!((attrs)->ca_command_opts & (opt)))
 #define STREAM_HAS_FEATURE(attrs, feat) (!!((attrs)->ca_feature_flags & (feat)))

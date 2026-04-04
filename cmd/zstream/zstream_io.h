@@ -31,6 +31,12 @@ extern "C" {
 
 #define MAX_IO_STREAMS 4
 
+/*
+ * The stream offset is the offset within the original source stream.
+ * Changes to the stream (e.g., recompression) will necessarily change
+ * offsets within the final stream. The original stream offset is raw data;
+ * it should never be adjusted.
+ */
 typedef struct {
 	dmu_replay_record_t	dp_drr;
 	uint8_t			*dp_payload;
