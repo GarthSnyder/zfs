@@ -38,11 +38,13 @@ log_onexit cleanup_pool $POOL
 typeset src="$ZSTREAM_DATADIR/decompress.zsend.bz2"
 typeset orig="$BACKDIR/recompress.orig"
 typeset recompressed="$BACKDIR/recompress-zstd19.out"
+typeset orig_hash="$BACKDIR/hash-baseline.txt"
+typeset rc_hash="$BACKDIR/hash-rc.txt"
 
 bzcat "$src" > "$orig"
 
 # Baseline: receive original and hash
-recv_and_hash "$BACKDIR/hash-baseline.txt" "$orig" cleanup
+recv_and_hash "$orig_hash" "$orig" cleanup
 
 # Recompress with zstd at level 19
 log_must eval "zstream recompress -l 19 zstd \
@@ -56,7 +58,7 @@ log_note "Original size: $orig_size, recompressed size: $recomp_size"
     log_fail "Recompressed stream ($recomp_size) not smaller than original ($orig_size)"
 
 # Receive recompressed and verify
-recv_and_hash "$BACKDIR/hash-recomp.txt" "$recompressed" cleanup
-log_must diff "$BACKDIR/hash-baseline.txt" "$BACKDIR/hash-recomp.txt"
+recv_and_hash "$rc_hash" "$recompressed" cleanup
+log_must diff "$orig_hash" "$rc_hash"
 
 log_pass "zstream recompress with zstd-19 produces smaller stream."
