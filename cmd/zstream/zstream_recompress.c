@@ -57,6 +57,14 @@ needs_modification(drr_packet_t *item, compression_spec_t *target)
 	enum zio_compress ctype  = drrw->drr_compressiontype;
 	uint8_t cur_level;
 
+	/*
+	 * Do not modify metadata records. It's a general stream invariant
+	 * that metadata is never compressed. See comments at
+	 * dmu_receive.c:flush_write_batch_impl().
+	 */
+	if (DMU_OT_IS_METADATA(drrw->drr_type)) {
+		return (B_FALSE);
+	}
 	if (target == NULL) {
 		return !IS_UNCOMPRESSED(ctype) && !write_is_encrypted(drrw);
 	}
@@ -226,9 +234,7 @@ zstream_do_recompress(int argc, char *argv[])
 	int c;
 	int level = ZIO_COMPLEVEL_DEFAULT;
 
-	chain_attrs_t attrs = {
-		.ca_command_opts = CA_FORBID_DEDUP | CA_REQUIRE_NATIVE_ENDIAN
-	};
+	chain_attrs_t attrs = { .ca_command_opts = CA_FORBID_DEDUP };
 
 	while ((c = getopt(argc, argv, "l:")) != -1) {
 		switch (c) {
