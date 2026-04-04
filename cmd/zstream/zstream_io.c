@@ -32,6 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "zstream_chain.h"
 #include "zstream_modules.h"
 #include "zstream_util.h"
 
@@ -182,13 +183,22 @@ set_stream_attributes(drr_packet_t *item)
 		errx(1, "this subcommand requires a deduplicated input "
 		    "stream, but the stream is not deduplicated");
 	}
+	if (OPTION_ENABLED(chain_attrs, CA_REQUIRE_NATIVE_ENDIAN) &&
+	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED))
+	{
+		errx(1, "this subcommand requires a native-endian "
+		    "input stream");
+	}
 
 	/*
-	 * Figure out endianness. In the absence of explicit byte order
-	 * instructions, we have to default to preserving the output byte
-	 * order. The receive mechanism currently inspects the endianness of
-	 * each BEGIN record and assumes, at least in some cases, that
-	 * payload data has the same order as the DMU wrappers.
+	 * Figure out output endianness. In the absence of explicit byte
+	 * order instructions, we default to preserving the input byte
+	 * order. Record headers are always converted to native byte order
+	 * for processing, but they can be swapped back on output.
+	 *
+	 * zfs receive inspects the endianness of each BEGIN record
+	 * and assumes, at least in some cases, that payload data has the
+	 * same order as the DMU wrappers.
 	 */
 	if (OPTION_ENABLED(chain_attrs, CA_BIG_ENDIAN_OUT))
 		swap_on_output = !i_am_big_endian;
