@@ -44,11 +44,12 @@ typeset off_out="$BACKDIR/decompress-off.out"
 typeset orig_dump="$BACKDIR/decompress-orig.dump"
 typeset off_dump="$BACKDIR/decompress-off.dump"
 
-typeset -a records=(2,0 4,0 5,131072)
+typeset -a records=(2,0 3,0 128,131072)
+typeset -a off_records=(2,0,off 3,0,off 128,131072,off)
 
 bzcat "$src" > "$orig"
-log_must eval "zstream decompress 2,0,off 4,0,off 5,131072,off \
-    < '$orig' > '$off_out'"
+
+log_must eval "zstream decompress ${off_records[*]} < '$orig' > '$off_out'"
 
 # Dump both streams
 log_must eval "zstream dump -v < '$orig' > '$orig_dump' 2>&1"

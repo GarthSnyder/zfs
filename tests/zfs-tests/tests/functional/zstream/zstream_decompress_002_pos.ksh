@@ -25,8 +25,8 @@
 #
 # Strategy:
 # 1. Receive the original decompress.zsend into a test pool and hash files
-# 2. Receive the decompressed stream (with records 2,0 4,0
-#      and 5,131072 decompressed)
+# 2. Receive the decompressed stream (with records 2,0 3,0
+#      and 128,131072 decompressed)
 # 3. Verify file hashes are identical
 #
 
@@ -39,10 +39,11 @@ typeset src="$ZSTREAM_DATADIR/decompress.zsend.bz2"
 typeset orig="$BACKDIR/decompress.orig.zsend"
 typeset decompressed="$BACKDIR/decompress.out.zsend"
 
+typeset -a records=(2,0 3,0 128,131072)
+
 # Prepare streams
 bzcat "$src" > "$orig"
-log_must eval "zstream decompress 2,0 4,0 5,131072 \
-    < '$orig' > '$decompressed'"
+log_must eval "zstream decompress ${records[*]} < '$orig' > '$decompressed'"
 
 # Receive original and hash
 recv_and_hash "$BACKDIR/hash-orig.txt" "$orig" cleanup

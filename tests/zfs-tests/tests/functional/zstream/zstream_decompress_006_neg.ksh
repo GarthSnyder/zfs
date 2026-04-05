@@ -39,11 +39,14 @@ typeset orig="$BACKDIR/decompress-crypt.orig"
 typeset output="$BACKDIR/decompress-crypt.out"
 typeset errfile="$BACKDIR/decompress-crypt.err"
 
+
+
+typeset -a records=(2,0 3,0 36,0)
+
 bzcat "$src" > "$orig"
 
 # Attempt to decompress encrypted records
-zstream decompress 2,0 5,0 3,131072 \
-    < "$orig" > "$output" 2>"$errfile"
+zstream decompress ${records[*]} < "$orig" > "$output" 2>"$errfile"
 
 # Output stream must be identical to input
 log_must cmp -s "$orig" "$output"
