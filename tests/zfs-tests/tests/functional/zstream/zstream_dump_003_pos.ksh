@@ -19,15 +19,16 @@
 . $STF_SUITE/tests/functional/zstream/zstream.kshlib
 
 #
-# Verify that zstream dump -v output for all same-endian and neutral-endian
+# Description:
+# Verify that zstream dump -v output for all same-endian and XDR-encoded
 # test streams matches that of the previous version of zstream, with the
 # following exceptions:
 #
-#   1) Add a line that describes the nvlist packing format for BEGIN records
-#   2) Include DRR_OBJECT_RANGE and DRR_REDACT records in end summary
+# 1. Add a line that describes the nvlist packing format for BEGIN records
+# 2. Include DRR_OBJECT_RANGE and DRR_REDACT records in end summary
 #
 # The previous version of zstream does not dump opposite-endian streams
-# correctly, so there's no prior basis for comparison.
+# correctly, so these don't have a comparison basis.
 #
 
 verify_runnable "both"
