@@ -38,15 +38,16 @@ typeset orig="$BACKDIR/decompress.orig"
 typeset out_default="$BACKDIR/decompress-default.out"
 typeset out_zstd="$BACKDIR/decompress-zstd.out"
 
+typeset -a records=(2,0 3,0 128,131072)
+typeset -a zstd_records=(2,0,zstd 3,0,zstd 128,131072,zstd)
+
 bzcat "$src" > "$orig"
 
 # Decompress without specifying type
-log_must eval "zstream decompress 2,0 4,0 5,131072 \
-    < '$orig' > '$out_default'"
+log_must eval "zstream decompress ${records[*]} < '$orig' > '$out_default'"
 
 # Decompress specifying zstd
-log_must eval "zstream decompress 2,0,zstd 4,0,zstd 5,131072,zstd \
-    < '$orig' > '$out_zstd'"
+log_must eval "zstream decompress ${zstd_records[*]} < '$orig' > '$out_zstd'"
 
 # Both outputs must be identical
 log_must cmp -s "$out_default" "$out_zstd"
