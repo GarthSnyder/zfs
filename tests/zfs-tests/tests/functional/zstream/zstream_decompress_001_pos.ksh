@@ -24,7 +24,7 @@
 # records. The input stream contains zstd-compressed writes.
 #
 # Strategy:
-# 1. Decompress selected records (2,0 4,0 5,131072) from the stream
+# 1. Decompress selected records (2,0 3,0 128,131072) from the stream
 # 2. Run zstream dump -v on both original and decompressed streams
 # 3. Verify the selected records now show compression type = 0,
 #    compressed_size = 0, and payload_size = logical_size
@@ -41,7 +41,7 @@ typeset orig_dump="$BACKDIR/decompress.orig.dump"
 typeset decomp_dump="$BACKDIR/decompress.out.dump"
 
 # Selected records: object,offset
-typeset -a records=(2,0 4,0 5,131072)
+typeset -a records=(2,0 3,0 128,131072)
 
 # Decompress the bz2 and run zstream decompress on selected records
 bzcat "$src" > "$orig"

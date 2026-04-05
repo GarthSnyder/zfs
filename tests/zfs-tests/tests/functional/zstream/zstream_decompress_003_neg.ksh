@@ -39,11 +39,12 @@ typeset orig="$BACKDIR/decompress.orig"
 typeset output="$BACKDIR/decompress-lz4.out"
 typeset errfile="$BACKDIR/decompress-lz4.err"
 
+typeset -a records=(2,0,lz4 3,0,lz4 128,131072,lz4)
+
 bzcat "$src" > "$orig"
 
 # Attempt to decompress zstd records as lz4 — should fail for each
-zstream decompress 2,0,lz4 4,0,lz4 5,131072,lz4 \
-    < "$orig" > "$output" 2>"$errfile"
+zstream decompress ${records[*]} < "$orig" > "$output" 2>"$errfile"
 
 # Output stream must be identical to input (nothing decompressed)
 log_must cmp -s "$orig" "$output"
