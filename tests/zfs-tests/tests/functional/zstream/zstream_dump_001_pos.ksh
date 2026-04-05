@@ -21,7 +21,7 @@
 
 #
 # Description:
-# Verify compression features show up in zstream dump
+# Verify that compression features show up in zstream dump
 #
 # Strategy:
 # 1. Create a full compressed send stream
