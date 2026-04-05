@@ -419,7 +419,8 @@ nobase_dist_datadir_zfs_tests_tests_DATA += \
 	functional/zstream/decompress-crypt-old.dump \
 	functional/zstream/decompress-new.dump \
 	functional/zstream/decompress-crypt-new.dump \
-	functional/zstream/long-payloads.zsend.bz2 \
+	functional/zstream/big-endian-long-payloads.zsend.bz2 \
+	functional/zstream/little-endian-long-payloads.zsend.bz2 \
 	functional/zstream/beadtbn-new.dump \
 	functional/zstream/beadtbn-old.dump \
 	functional/zstream/beadtbx-new.dump \

@@ -23,10 +23,11 @@
 # Verify that very long payload records are checksummed correctly by
 # running them through zstream redup (which recalculates checksums but is
 # otherwise a no-op). This exercises the 8MiB Fletcher4 chunk boundary
-# handling.
+# handling. There are test streams of both endiannesses because opposite-
+# endian checksumming is a slightly separate path.
 #
 # Strategy:
-# 1. Decompress the long-payloads test stream
+# 1. Decompress the long-payloads test streams
 # 2. Pipe through zstream redup
 # 3. Verify the output is byte-identical to the input
 #
@@ -35,12 +36,31 @@ verify_runnable "both"
 
 log_assert "Verify long payload records are checksummed correctly."
 
-typeset src="$ZSTREAM_DATADIR/long-payloads.zsend.bz2"
-typeset orig="$BACKDIR/long-payloads.zsend.orig"
-typeset redup_out="$BACKDIR/long-payloads.zsend.redup"
+typeset -a streams=(
+	little-endian-long-payloads
+	big-endian-long-payloads
+)
 
-bzcat "$src" > "$orig"
-log_must eval "zstream redup '$orig' > '$redup_out'"
-log_must cmp -s "$orig" "$redup_out"
+typeset failed=""
+
+for stem in "${streams[@]}"; do
+
+	typeset src="$ZSTREAM_DATADIR/${stem}.zsend.bz2"
+	typeset orig="$BACKDIR/${stem}.zsend.orig"
+	typeset redup_out="$BACKDIR/${stem}.zsend.redup"
+
+	bzcat "$src" > "$orig"
+	log_must eval "zstream redup '$orig' > '$redup_out'"
+
+	if ! cmp -s "$ref" "$out" > /dev/null 2>&1; then
+		log_note "MISMATCH: $stem"
+		failed="$failed $stem"
+	fi
+
+	log_must cmp -s "$orig" "$redup_out"
+
+done
+
+[[ -z $failed ]] || log_fail "Round-trip mismatch for: $failed"
 
 log_pass "Long-payload records are checksummed correctly."
