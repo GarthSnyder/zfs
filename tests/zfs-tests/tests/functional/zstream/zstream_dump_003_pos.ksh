@@ -38,47 +38,54 @@ log_assert "Verify old-vs-new dump diff contains only expected additions."
 typeset sys_endian=$(get_system_endian)
 
 typeset -a streams=(
-	decompress
-	decompress-crypt
+	little-endian-long-payloads
+	big-endian-long-payloads
+	little-endian-all-drr-types-base-XDR
+	little-endian-all-drr-types-incr-XDR
+	big-endian-all-drr-types-base-XDR
+	big-endian-all-drr-types-incr-XDR
 )
 
 if [[ $sys_endian == "little" ]]; then
 	streams+=(
 		little-endian-all-drr-types-base-NATIVE
 		little-endian-all-drr-types-incr-NATIVE
-		little-endian-all-drr-types-base-XDR
-		little-endian-all-drr-types-incr-XDR
 	)
 else
 	streams+=(
 		big-endian-all-drr-types-base-NATIVE
 		big-endian-all-drr-types-incr-NATIVE
-		big-endian-all-drr-types-base-XDR
-		big-endian-all-drr-types-incr-XDR
 	)
 fi
 
 typeset failed=""
 
 for stem in "${streams[@]}"; do
+
+	typeset send_src="$ZSTREAM_DATADIR/${stem}.zsend.bz2"
+	typeset ref="$BACKDIR/${abbrev}-new.dump"
+	typeset out="$BACKDIR/${abbrev}-out.dump"
+
 	typeset abbrev=$(get_stream_abbrev "$stem")
-	typeset newdump="$BACKDIR/${abbrev}-new.dump"
-	typeset olddump="$ZSTREAM_DATADIR/${abbrev}-old.dump"
+	typeset send_src="$ZSTREAM_DATADIR/${stem}.zsend.bz2"
+	typeset old_src="$ZSTREAM_DATADIR/${abbrev}-old.dump.bz2"
+	typeset new_dump="$BACKDIR/${abbrev}-new.dump"
+	typeset old_dump="$BACKDIR/${abbrev}-old.dump"
 	typeset filtered="$BACKDIR/${abbrev}-filtered.dump"
 
-	bzcat "$ZSTREAM_DATADIR/${stem}.zsend.bz2" | \
-	    zstream dump -v > "$newdump" 2>&1
+	bzcat "$send_src" | zstream dump -v > "$new_dump" 2>&1
+	bzcat "$old_src" > "$old_dump"
 
 	# Remove the lines that are new additions:
 	# 1. "nvlist encoding = ..." lines
 	# 2. Summary lines for DRR_OBJECT_RANGE and DRR_REDACT
-	grep -v '^nvlist encoding = ' "$newdump" | \
+	grep -v '^nvlist encoding = ' "$new_dump" | \
 	    grep -v 'Total DRR_OBJECT_RANGE records' | \
 	    grep -v 'Total DRR_REDACT records' > "$filtered"
 
-	if ! diff -q "$olddump" "$filtered" > /dev/null 2>&1; then
+	if ! diff -q "$old_dump" "$filtered" > /dev/null 2>&1; then
 		log_note "MISMATCH after filtering: $stem (abbrev $abbrev)"
-		log_note "$(diff "$olddump" "$filtered")"
+		log_note "$(diff "$old_dump" "$filtered")"
 		failed="$failed $stem"
 	fi
 done
