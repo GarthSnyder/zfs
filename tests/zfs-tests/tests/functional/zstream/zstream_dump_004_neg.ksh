@@ -53,10 +53,10 @@ fi
 typeset failed=""
 
 for stem in "${streams[@]}"; do
-	typeset out="$BACKDIR/${stem}-dump.out"
+	typeset out="$BACKDIR/${stem}-out.dump"
+	typeset stream="$ZSTREAM_DATADIR/${stem}.zsend.bz2"
 
-	bzcat "$ZSTREAM_DATADIR/${stem}.zsend.bz2" | \
-	    zstream dump -v > "$out" 2>&1
+	bzcat "$stream" | zstream dump -v > "$out" 2>&1
 	typeset rc=$?
 
 	if [[ $rc -ne 45 && $rc -ne 95 ]]; then

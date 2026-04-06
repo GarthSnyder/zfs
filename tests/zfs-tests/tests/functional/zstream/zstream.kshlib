@@ -60,22 +60,11 @@ function get_stream_abbrev
 {
 	typeset stem=$1
 	typeset abbrev=""
+	typeset IFS="-"
 
-	case $stem in
-	big-endian*)	abbrev="bead" ;;
-	little-endian*)	abbrev="lead" ;;
-	*) echo $stem; return 0       ;;
-	esac
-
-	case $stem in
-	*-base-*)	abbrev="${abbrev}tb" ;;
-	*-incr-*)	abbrev="${abbrev}ti" ;;
-	esac
-
-	case $stem in
-	*-NATIVE)	abbrev="${abbrev}n" ;;
-	*-XDR)		abbrev="${abbrev}x" ;;
-	esac
+	for part in $stem; do
+		abbrev="${abbrev}${part%"${part#?}"}"
+	done
 
 	echo "$abbrev"
 }

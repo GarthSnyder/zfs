@@ -40,6 +40,8 @@ typeset sys_endian=$(get_system_endian)
 typeset -a streams=(
 	decompress
 	decompress-crypt
+	little-endian-long-payloads
+	big-endian-long-payloads
 	big-endian-all-drr-types-base-XDR
 	big-endian-all-drr-types-incr-XDR
 	little-endian-all-drr-types-base-XDR
@@ -62,11 +64,13 @@ typeset failed=""
 
 for stem in "${streams[@]}"; do
 	typeset abbrev=$(get_stream_abbrev "$stem")
-	typeset ref="$ZSTREAM_DATADIR/${abbrev}-new.dump"
-	typeset out="$BACKDIR/${abbrev}-dump.out"
+	typeset ref_src="$ZSTREAM_DATADIR/${abbrev}-new.dump.bz2"
+	typeset send_src="$ZSTREAM_DATADIR/${stem}.zsend.bz2"
+	typeset ref="$BACKDIR/${abbrev}-new.dump"
+	typeset out="$BACKDIR/${abbrev}-out.dump"
 
-	bzcat "$ZSTREAM_DATADIR/${stem}.zsend.bz2" | \
-	    zstream dump -v > "$out" 2>&1
+	bzcat "$send_src" | zstream dump -v > "$out" 2>&1
+	bzcat "$ref_src" > "$ref"
 
 	if ! diff -q "$ref" "$out" > /dev/null 2>&1; then
 		log_note "MISMATCH: $stem (abbrev $abbrev)"
