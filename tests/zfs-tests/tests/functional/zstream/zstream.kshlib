@@ -59,7 +59,7 @@ function get_system_endian
 function get_stream_abbrev
 {
 	typeset stem=$1
-	typeset abbrev=""
+	typeset -l abbrev=""
 	typeset IFS="-"
 
 	for part in $stem; do
