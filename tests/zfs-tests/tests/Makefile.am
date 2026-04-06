@@ -415,28 +415,30 @@ nobase_dist_datadir_zfs_tests_tests_DATA += \
 	functional/zstream/little-endian-all-drr-types-incr-XDR.zsend.bz2 \
 	functional/zstream/decompress.zsend.bz2 \
 	functional/zstream/decompress-crypt.zsend.bz2 \
-	functional/zstream/decompress-old.dump \
-	functional/zstream/decompress-crypt-old.dump \
-	functional/zstream/decompress-new.dump \
-	functional/zstream/decompress-crypt-new.dump \
 	functional/zstream/big-endian-long-payloads.zsend.bz2 \
 	functional/zstream/little-endian-long-payloads.zsend.bz2 \
-	functional/zstream/beadtbn-new.dump \
-	functional/zstream/beadtbn-old.dump \
-	functional/zstream/beadtbx-new.dump \
-	functional/zstream/beadtbx-old.dump \
-	functional/zstream/beadtin-new.dump \
-	functional/zstream/beadtin-old.dump \
-	functional/zstream/beadtix-new.dump \
-	functional/zstream/beadtix-old.dump \
-	functional/zstream/leadtbn-new.dump \
-	functional/zstream/leadtbn-old.dump \
-	functional/zstream/leadtbx-new.dump \
-	functional/zstream/leadtbx-old.dump \
-	functional/zstream/leadtin-new.dump \
-	functional/zstream/leadtin-old.dump \
-	functional/zstream/leadtix-new.dump \
-	functional/zstream/leadtix-old.dump \
+	functional/zstream/beadtbn-new.dump.bz2 \
+	functional/zstream/beadtbn-old.dump.bz2 \
+	functional/zstream/beadtbx-new.dump.bz2 \
+	functional/zstream/beadtbx-old.dump.bz2 \
+	functional/zstream/beadtin-new.dump.bz2 \
+	functional/zstream/beadtin-old.dump.bz2 \
+	functional/zstream/beadtix-new.dump.bz2 \
+	functional/zstream/beadtix-old.dump.bz2 \
+	functional/zstream/belp-new.dump.bz2 \
+	functional/zstream/belp-old.dump.bz2 \
+	functional/zstream/d-new.dump.bz2 \
+	functional/zstream/dc-new.dump.bz2 \
+	functional/zstream/leadtbn-new.dump.bz2 \
+	functional/zstream/leadtbn-old.dump.bz2 \
+	functional/zstream/leadtbx-new.dump.bz2 \
+	functional/zstream/leadtbx-old.dump.bz2 \
+	functional/zstream/leadtin-new.dump.bz2 \
+	functional/zstream/leadtin-old.dump.bz2 \
+	functional/zstream/leadtix-new.dump.bz2 \
+	functional/zstream/leadtix-old.dump.bz2 \
+	functional/zstream/lelp-new.dump.bz2 \
+	functional/zstream/lelp-old.dump.bz2 \
 	functional/idmap_mount/idmap_mount.cfg \
 	functional/idmap_mount/idmap_mount_common.kshlib
 
