@@ -1023,7 +1023,10 @@ tests = ['scrub_mirror_001_pos', 'scrub_mirror_002_pos',
 tags = ['functional', 'scrub_mirror']
 
 [tests/functional/send_xdr_encoding]
-tests = ['xdr_raw', 'xdr_resume', 'xdr_resume_raw']
+tests = ['xdr_bookmark_raw', 'xdr_incr_from_bookmark',
+    'xdr_incr_from_redacted', 'xdr_raw', 'xdr_redacted_full',
+    'xdr_redacted_received', 'xdr_redacted_received_raw', 'xdr_resume',
+    'xdr_resume_bookmark_raw', 'xdr_resume_raw', 'xdr_resume_redacted']
 tags = ['functional', 'send_xdr_encoding']
 
 [tests/functional/slog]
