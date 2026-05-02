@@ -34,13 +34,15 @@
 #
 # zstream dump prints a single "nvlist encoding = ..." line per DRR_BEGIN
 # record that carries a payload. The possible values are:
+#
 #     NV_ENCODE_XDR
 #     NV_ENCODE_NATIVE (big-endian)
 #     NV_ENCODE_NATIVE (little-endian)
-# A DRR_BEGIN record without a payload produces no line. We assert the
+#
+# A BEGIN record without a payload produces no line. We assert the
 # absence of NV_ENCODE_NATIVE rather than the presence of NV_ENCODE_XDR so
 # that empty-payload BEGINs pass cleanly, and so the test passes harmlessly
-# in builds that predate the zstream-dump output for this field.
+# in builds that predate the zstream dump output for this field.
 #
 function verify_xdr_nvlist_encoding
 {

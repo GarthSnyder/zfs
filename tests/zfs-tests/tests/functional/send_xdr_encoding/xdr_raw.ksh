@@ -25,13 +25,13 @@
 # Description:
 # A raw send of an encrypted dataset (zfs send -w) carries a "crypt_keydata"
 # nested nvlist in its DRR_BEGIN nvlist payload. Verify that this payload is
-# XDR-encoded and the stream can be received.
+# XDR-encoded and that the stream can be received.
 #
 # Strategy:
 # 1. Create an encrypted dataset with one snapshot.
 # 2. zfs send -w to a file.
-# 3. verify_xdr_nvlist_encoding on the stream.
-# 4. zfs receive succeeds.
+# 3. Verify that the stream is XDR-encoded.
+# 4. Verify that zfs receive succeeds.
 #
 
 verify_runnable "both"
@@ -49,7 +49,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of a raw send of an encrypted dataset is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of a raw send of an encrypted dataset is " \
+    "XDR-encoded and receivable"
 
 log_must eval "echo 'thisisapassphrase' > $keyfile"
 log_must zfs create -o encryption=on -o keyformat=passphrase \
@@ -62,4 +63,5 @@ log_must eval "zfs send -w $sendfs@s1 > $stream"
 verify_xdr_nvlist_encoding $stream
 log_must eval "zfs receive $recvfs < $stream"
 
-log_pass "BEGIN nvlist of a raw send of an encrypted dataset is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of a raw send of an encrypted dataset is " \
+    "XDR-encoded and receivable"

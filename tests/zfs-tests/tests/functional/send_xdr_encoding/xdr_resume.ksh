@@ -26,15 +26,15 @@
 # Description:
 # A token-resumed send (zfs send -t <token>) carries BEGINNV_RESUME_OBJECT
 # and BEGINNV_RESUME_OFFSET in its DRR_BEGIN nvlist payload. Verify that
-# this payload is XDR-encoded and the resumed stream can be received.
+# this payload is XDR-encoded and that the resumed stream can be received.
 #
 # Strategy:
 # 1. Create a small dataset with one snapshot.
 # 2. zfs send the snapshot to a file, truncate it, then attempt receive
 #    so that a resume token is left behind.
 # 3. zfs send -t <token> to produce the resumed stream.
-# 4. verify_xdr_nvlist_encoding on the resumed stream.
-# 5. zfs receive -s the resumed stream successfully.
+# 4. Verify that the resumed stream is XDR-encoded.
+# 5. Verify that zfs receive -s on the resumed stream is successful.
 #
 
 verify_runnable "both"

@@ -30,12 +30,12 @@
 #
 # Strategy:
 # 1. Create a source dataset with a redaction bookmark.
-# 2. Send a redacted full from that bookmark's source snapshot, receive
-#    so the receiver has a base.
+# 2. Send a redacted full stream from that bookmark's source snapshot
+#    and receive it into a second pool as a base.
 # 3. Add data and a new snapshot on the source.
-# 4. zfs send -i sendfs#book sendfs@snap to a file.
-# 5. verify_xdr_nvlist_encoding on the stream.
-# 6. zfs receive succeeds.
+# 4. zfs send -i sendfs#redaction-bookmark sendfs@snap to a file.
+# 5. Verify XDR encoding in the resulting stream.
+# 6. Verify that zfs receive of the stream succeeds.
 #
 
 verify_runnable "both"
@@ -54,7 +54,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of an incremental send from a redaction bookmark is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of an incremental send from a redaction bookmark " \
+    "is XDR-encoded and receivable"
 
 log_must zfs create $sendfs
 log_must dd if=/dev/urandom of=/$sendfs/f1 bs=128k count=8 status=none
@@ -66,20 +67,22 @@ log_must dd if=/dev/urandom of=/$clonefs/f1 bs=128k count=8 conv=notrunc \
     status=none
 log_must zfs snapshot $clonefs@s
 
-log_must zfs redact $sendfs@s0 book $clonefs@s
+log_must zfs redact $sendfs@s0 redaction-bookmark $clonefs@s
 
 # Establish a base on the receiver.
-log_must eval "zfs send --redact book $sendfs@s0 > $full_stream"
+log_must eval "zfs send --redact redaction-bookmark $sendfs@s0 > $full_stream"
 log_must eval "zfs receive $recvfs < $full_stream"
 
 # Add a new snapshot on the source for the incremental.
 log_must dd if=/dev/urandom of=/$sendfs/f3 bs=128k count=8 status=none
 log_must zfs snapshot $sendfs@s1
 
-# Incremental from the redaction bookmark. This fires BEGINNV_REDACT_FROM_SNAPS
-# via the from_rl path because the from-side is a redaction bookmark.
-log_must eval "zfs send -i $sendfs#book $sendfs@s1 > $incr_stream"
+# Generate an incremental send from the redaction bookmark. This fires
+# BEGINNV_REDACT_FROM_SNAPS via the from_rl path because the from-side
+# is a redaction bookmark.
+log_must eval "zfs send -i $sendfs#redaction-bookmark $sendfs@s1 > $incr_stream"
 verify_xdr_nvlist_encoding $incr_stream
 log_must eval "zfs receive $recvfs < $incr_stream"
 
-log_pass "BEGIN nvlist of an incremental send from a redaction bookmark is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of an incremental send from a redaction bookmark " \
+    "is XDR-encoded and receivable"

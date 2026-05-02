@@ -27,7 +27,7 @@
 # dataset carries BEGINNV_REDACT_FROM_SNAPS in its DRR_BEGIN nvlist payload
 # via a different code path than incrementals from a redaction bookmark
 # (the dspp->numfromredactsnaps path). Verify that this payload is
-# XDR-encoded and the stream can be received.
+# XDR-encoded and that the stream can be received.
 #
 # Strategy:
 # 1. Produce a redacted dataset on a receiver via a redacted full send,
@@ -35,10 +35,10 @@
 #    SPA_FEATURE_REDACTED_DATASETS feature.
 # 2. Establish the same base on a tertiary destination so we have somewhere
 #    to apply the incremental.
-# 3. Take a new snapshot on the receiver-side redacted dataset.
+# 3. Create a new snapshot of the receiver-side redacted dataset.
 # 4. zfs send -i mid@s0 mid@s1 to a file.
-# 5. verify_xdr_nvlist_encoding on the stream.
-# 6. zfs receive the incremental onto the tertiary base.
+# 5. Verify that the stream is XDR encoded.
+# 6. Verify that we can zfs receive the incremental onto the tertiary base.
 #
 
 verify_runnable "both"
@@ -59,7 +59,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of an incremental from a previously-redacted snapshot is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of an incremental from a previously-redacted " \
+    "snapshot is XDR-encoded and receivable"
 
 log_must zfs create $sendfs
 log_must dd if=/dev/urandom of=/$sendfs/f1 bs=128k count=8 status=none
@@ -71,24 +72,25 @@ log_must dd if=/dev/urandom of=/$clonefs/f1 bs=128k count=8 conv=notrunc \
     status=none
 log_must zfs snapshot $clonefs@s
 
-log_must zfs redact $sendfs@s0 book $clonefs@s
+log_must zfs redact $sendfs@s0 redaction-bookmark $clonefs@s
 
 # Produce two receivers of the redacted full send: one we will re-send from
 # (mid) and one we will receive the incremental into (tertiary).
-log_must eval "zfs send --redact book $sendfs@s0 > $full_stream"
+log_must eval "zfs send --redact redaction-bookmark $sendfs@s0 > $full_stream"
 log_must eval "zfs receive $midfs < $full_stream"
 log_must eval "zfs receive $tertiary < $full_stream"
 
-# Take a fresh snapshot on the redacted receiver. The data has not changed
+# Create a fresh snapshot of the redacted receiver. The data has not changed
 # (and cannot be modified without mounting), but the snapshot itself is
 # enough to drive an incremental send and trigger the case-4 nvlist path.
 log_must zfs snapshot $midfs@s1
 
-# Incremental from the redacted from-side. This fires BEGINNV_REDACT_FROM_SNAPS
-# via the dspp->numfromredactsnaps path because $midfs@s0 has the
-# SPA_FEATURE_REDACTED_DATASETS feature active.
+# Create an incremental send from the redacted from-side. This fires
+# BEGINNV_REDACT_FROM_SNAPS via the dspp->numfromredactsnaps path because
+# $midfs@s0 has the SPA_FEATURE_REDACTED_DATASETS feature active.
 log_must eval "zfs send -i $midfs@s0 $midfs@s1 > $incr_stream"
 verify_xdr_nvlist_encoding $incr_stream
 log_must eval "zfs receive $tertiary < $incr_stream"
 
-log_pass "BEGIN nvlist of an incremental from a previously-redacted snapshot is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of an incremental from a previously-redacted snapshot " \
+    "is XDR-encoded and receivable"

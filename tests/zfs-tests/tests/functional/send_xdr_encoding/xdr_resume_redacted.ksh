@@ -32,10 +32,10 @@
 # Strategy:
 # 1. Create a source dataset with a redaction bookmark.
 # 2. zfs send --redact <book> sendfs@snap to a file, truncate it, then
-#    attempt receive so a resume token is left behind.
-# 3. zfs send -t <token> to produce the resumed redacted stream.
-# 4. verify_xdr_nvlist_encoding on the resumed stream.
-# 5. zfs receive -s the resumed stream successfully.
+#    attempt zfs receive so that a resume token is left behind.
+# 3. zfs send -t <token> to produce a resumed redacted stream.
+# 4. Verify that the resumed stream is XDR-encoded.
+# 5. Verify that zfs receive -s of the resumed stream is successful.
 #
 
 verify_runnable "both"
@@ -54,7 +54,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of a token-resumed redacted send is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of a token-resumed redacted send is XDR-encoded " \
+    "and receivable"
 
 log_must zfs create $sendfs
 log_must dd if=/dev/urandom of=/$sendfs/f1 bs=128k count=16 status=none
@@ -66,9 +67,9 @@ log_must dd if=/dev/urandom of=/$clonefs/f1 bs=128k count=16 conv=notrunc \
     status=none
 log_must zfs snapshot $clonefs@s
 
-log_must zfs redact $sendfs@s0 book $clonefs@s
+log_must zfs redact $sendfs@s0 redaction-bookmark $clonefs@s
 
-log_must eval "zfs send --redact book $sendfs@s0 > $full_stream"
+log_must eval "zfs send --redact redaction-bookmark $sendfs@s0 > $full_stream"
 mess_send_file $full_stream
 log_mustnot eval "zfs receive -s $recvfs < $full_stream"
 
@@ -80,4 +81,6 @@ log_must eval "zfs send -t $token > $resumed_stream"
 verify_xdr_nvlist_encoding $resumed_stream
 log_must eval "zfs receive -s $recvfs < $resumed_stream"
 
-log_pass "BEGIN nvlist of a token-resumed redacted send is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of a token-resumed redacted send is XDR-encoded " \
+    "and receivable"
+

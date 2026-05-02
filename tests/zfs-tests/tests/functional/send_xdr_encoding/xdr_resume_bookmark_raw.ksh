@@ -34,10 +34,10 @@
 #    snapshot, mirroring xdr_bookmark_raw.
 # 2. Establish a raw base on the receiver.
 # 3. zfs send -w -i sendfs#book sendfs@s1 to a file, truncate it, then
-#    attempt receive so a resume token is left behind.
+#    attempt receive so that a resume token is left behind.
 # 4. zfs send -t <token> to produce the resumed stream.
-# 5. verify_xdr_nvlist_encoding on the resumed stream.
-# 6. zfs receive -s the resumed stream successfully.
+# 5. Verify that the resumed stream is XDR-encoded.
+# 6. Verify that zfs receive -s of the resumed stream is successful.
 #
 
 verify_runnable "both"
@@ -58,7 +58,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of a token-resumed raw incremental from a redaction bookmark is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of a token-resumed raw incremental from a redaction " \
+    "bookmark is XDR-encoded and receivable"
 
 log_must eval "echo 'thisisapassphrase' > $keyfile"
 log_must zfs create -o encryption=on -o keyformat=passphrase \
@@ -73,7 +74,7 @@ log_must dd if=/dev/urandom of=/$clonefs/f1 bs=128k count=16 conv=notrunc \
     status=none
 log_must zfs snapshot $clonefs@s
 
-log_must zfs redact $sendfs@s0 book $clonefs@s
+log_must zfs redact $sendfs@s0 redaction-bookmark $clonefs@s
 
 log_must dd if=/dev/urandom of=/$sendfs/f3 bs=128k count=16 status=none
 log_must zfs snapshot $sendfs@s1
@@ -83,7 +84,8 @@ log_must eval "zfs send -w $sendfs@s0 > $full_stream"
 log_must eval "zfs receive $recvfs < $full_stream"
 
 # Truncate-and-resume on the raw incremental from the redaction bookmark.
-log_must eval "zfs send -w -i $sendfs#book $sendfs@s1 > $incr_stream"
+log_must eval "zfs send -w -i $sendfs#redaction-bookmark $sendfs@s1 > \
+    $incr_stream"
 mess_send_file $incr_stream
 log_mustnot eval "zfs receive -s $recvfs < $incr_stream"
 
@@ -95,4 +97,5 @@ log_must eval "zfs send -t $token > $resumed_stream"
 verify_xdr_nvlist_encoding $resumed_stream
 log_must eval "zfs receive -s $recvfs < $resumed_stream"
 
-log_pass "BEGIN nvlist of a token-resumed raw incremental from a redaction bookmark is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of a token-resumed raw incremental from a redaction " \
+    "bookmark is XDR-encoded and receivable"

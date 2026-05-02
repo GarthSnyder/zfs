@@ -24,17 +24,17 @@
 #
 # Description:
 # Sending a snapshot from a previously-redacted dataset (one with the
-# SPA_FEATURE_REDACTED_DATASETS feature active, e.g. one that was received
+# SPA_FEATURE_REDACTED_DATASETS feature active, e.g., one that was received
 # from a redacted send) carries BEGINNV_REDACT_SNAPS in its DRR_BEGIN
 # nvlist payload via a different code path than the producer-side --redact
-# flag. Verify that this payload is XDR-encoded and the stream can be
+# flag. Verify that this payload is XDR-encoded and that the stream can be
 # received.
 #
 # Strategy:
 # 1. Produce a redacted dataset on a receiver via a redacted full send.
 # 2. zfs send the received-redacted snapshot to a new dataset.
-# 3. verify_xdr_nvlist_encoding on the new stream.
-# 4. zfs receive succeeds.
+# 3. Verify XDR encoding on the new stream.
+# 4. Verify that a zfs receive of the new stream succeeds.
 #
 
 verify_runnable "both"
@@ -55,7 +55,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of a send from a previously-redacted dataset is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of a send from a previously-redacted dataset is " \
+    "XDR-encoded and receivable"
 
 log_must zfs create $sendfs
 log_must dd if=/dev/urandom of=/$sendfs/f1 bs=128k count=8 status=none
@@ -67,10 +68,10 @@ log_must dd if=/dev/urandom of=/$clonefs/f1 bs=128k count=8 conv=notrunc \
     status=none
 log_must zfs snapshot $clonefs@s
 
-log_must zfs redact $sendfs@s0 book $clonefs@s
+log_must zfs redact $sendfs@s0 redaction-bookmark $clonefs@s
 
 # Produce a previously-redacted dataset on the receiver.
-log_must eval "zfs send --redact book $sendfs@s0 > $full_stream"
+log_must eval "zfs send --redact redaction-bookmark $sendfs@s0 > $full_stream"
 log_must eval "zfs receive $midfs < $full_stream"
 
 # Send the received-redacted snapshot. This fires BEGINNV_REDACT_SNAPS via
@@ -79,4 +80,5 @@ log_must eval "zfs send $midfs@s0 > $resend_stream"
 verify_xdr_nvlist_encoding $resend_stream
 log_must eval "zfs receive $recvfs < $resend_stream"
 
-log_pass "BEGIN nvlist of a send from a previously-redacted dataset is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of a send from a previously-redacted dataset is " \
+    "XDR-encoded and receivable"

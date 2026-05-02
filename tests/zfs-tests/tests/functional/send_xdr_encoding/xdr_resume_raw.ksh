@@ -31,11 +31,11 @@
 #
 # Strategy:
 # 1. Create an encrypted dataset with one snapshot.
-# 2. zfs send -w to a file, truncate it, then attempt receive so that a
-#    resume token is left behind.
+# 2. zfs send -w to a file, truncate it, then attempt to zfs receive the
+#    stream so that a resume token is left behind.
 # 3. zfs send -t <token> to produce the resumed raw stream.
-# 4. verify_xdr_nvlist_encoding on the resumed stream.
-# 5. zfs receive -s the resumed stream successfully.
+# 4. Verify that the resumed stream is XDR-encoded.
+# 5. Verify that zfs receive -s receives the resumed stream successfully.
 #
 
 verify_runnable "both"
@@ -54,7 +54,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of a token-resumed raw send is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of a token-resumed raw send is XDR-encoded " \
+    "and receivable"
 
 log_must eval "echo 'thisisapassphrase' > $keyfile"
 log_must zfs create -o encryption=on -o keyformat=passphrase \
@@ -74,4 +75,5 @@ log_must eval "zfs send -t $token > $resumed_stream"
 verify_xdr_nvlist_encoding $resumed_stream
 log_must eval "zfs receive -s $recvfs < $resumed_stream"
 
-log_pass "BEGIN nvlist of a token-resumed raw send is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of a token-resumed raw send is XDR-encoded " \
+    "and receivable"

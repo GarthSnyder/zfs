@@ -23,17 +23,17 @@
 
 #
 # Description:
-# A redacted send (zfs send --redact <book>) carries BEGINNV_REDACT_SNAPS in
-# its DRR_BEGIN nvlist payload. Verify that this payload is XDR-encoded and
+# A redacted send (zfs send --redact <bookmark>) carries BEGINNV_REDACT_SNAPS
+# in its DRR_BEGIN nvlist payload. Verify that this payload is XDR-encoded and
 # the stream can be received.
 #
 # Strategy:
 # 1. Create a source dataset and a divergent clone.
 # 2. Create a redaction bookmark on the source snapshot relative to the
 #    clone snapshot.
-# 3. zfs send --redact <book> sendfs@snap to a file.
+# 3. zfs send --redact <bookmark> sendfs@snap to a file.
 # 4. verify_xdr_nvlist_encoding on the stream.
-# 5. zfs receive succeeds.
+# 5. Verify that zfs receive succeeds.
 #
 
 verify_runnable "both"
@@ -63,9 +63,9 @@ log_must dd if=/dev/urandom of=/$clonefs/f1 bs=128k count=8 conv=notrunc \
     status=none
 log_must zfs snapshot $clonefs@s
 
-log_must zfs redact $sendfs@s0 book $clonefs@s
+log_must zfs redact $sendfs@s0 redaction-bookmark $clonefs@s
 
-log_must eval "zfs send --redact book $sendfs@s0 > $stream"
+log_must eval "zfs send --redact redaction-bookmark $sendfs@s0 > $stream"
 verify_xdr_nvlist_encoding $stream
 log_must eval "zfs receive $recvfs < $stream"
 

@@ -34,8 +34,8 @@
 # 2. Establish a raw base on the receiver via zfs send -w of the bookmark's
 #    source snapshot.
 # 3. zfs send -w -i sendfs#book sendfs@s1 to a file.
-# 4. verify_xdr_nvlist_encoding on the stream.
-# 5. zfs receive succeeds.
+# 4. Verify that the resulting stream is XDR-encoded.
+# 5. Verify that the zfs receive succeeds.
 #
 
 verify_runnable "both"
@@ -55,7 +55,8 @@ function cleanup
 }
 log_onexit cleanup
 
-log_assert "BEGIN nvlist of a raw incremental from a redaction bookmark is XDR-encoded and receivable"
+log_assert "BEGIN nvlist of a raw incremental from a redaction bookmark is " \
+    "XDR-encoded and receivable"
 
 log_must eval "echo 'thisisapassphrase' > $keyfile"
 log_must zfs create -o encryption=on -o keyformat=passphrase \
@@ -71,7 +72,7 @@ log_must dd if=/dev/urandom of=/$clonefs/f1 bs=128k count=8 conv=notrunc \
     status=none
 log_must zfs snapshot $clonefs@s
 
-log_must zfs redact $sendfs@s0 book $clonefs@s
+log_must zfs redact $sendfs@s0 redaction-bookmark $clonefs@s
 
 # Add data and a later snapshot to send to.
 log_must dd if=/dev/urandom of=/$sendfs/f3 bs=128k count=8 status=none
@@ -82,8 +83,10 @@ log_must eval "zfs send -w $sendfs@s0 > $full_stream"
 log_must eval "zfs receive $recvfs < $full_stream"
 
 # Raw incremental from the redaction bookmark. This is the test focus.
-log_must eval "zfs send -w -i $sendfs#book $sendfs@s1 > $incr_stream"
+log_must eval "zfs send -w -i $sendfs#redaction-bookmark $sendfs@s1 > \
+    $incr_stream"
 verify_xdr_nvlist_encoding $incr_stream
 log_must eval "zfs receive $recvfs < $incr_stream"
 
-log_pass "BEGIN nvlist of a raw incremental from a redaction bookmark is XDR-encoded and receivable"
+log_pass "BEGIN nvlist of a raw incremental from a redaction bookmark is " \
+    "XDR-encoded and receivable"
