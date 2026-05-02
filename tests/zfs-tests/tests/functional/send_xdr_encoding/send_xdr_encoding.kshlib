@@ -1,0 +1,53 @@
+#!/bin/ksh
+# SPDX-License-Identifier: CDDL-1.0
+#
+# CDDL HEADER START
+#
+# This file and its contents are supplied under the terms of the
+# Common Development and Distribution License ("CDDL"), version 1.0.
+# You may only use this file in accordance with the terms of version
+# 1.0 of the CDDL.
+#
+# A full copy of the text of the CDDL should have accompanied this
+# source.  A copy of the CDDL is also available via the Internet at
+# http://www.illumos.org/license/CDDL.
+#
+# CDDL HEADER END
+#
+
+#
+# Copyright (c) 2026 by Garth Snyder. All rights reserved.
+#
+
+. $STF_SUITE/include/libtest.shlib
+. $STF_SUITE/tests/functional/send_xdr_encoding/send_xdr_encoding.cfg
+
+#
+# Verify that no DRR_BEGIN record in the given send stream uses
+# NV_ENCODE_NATIVE for its nvlist payload.
+#
+# DRR_BEGIN records that carry an nvlist payload (raw sends, redacted sends,
+# resumed sends, and combinations thereof) must encode that payload with
+# NV_ENCODE_XDR so the resulting stream can be portably consumed across
+# endianness. Encoding the payload with NV_ENCODE_NATIVE produces a stream
+# that is unreadable on a receiver of the opposite endianness.
+#
+# zstream dump prints a single "nvlist encoding = ..." line per DRR_BEGIN
+# record that carries a payload. The possible values are:
+#     NV_ENCODE_XDR
+#     NV_ENCODE_NATIVE (big-endian)
+#     NV_ENCODE_NATIVE (little-endian)
+# A DRR_BEGIN record without a payload produces no line. We assert the
+# absence of NV_ENCODE_NATIVE rather than the presence of NV_ENCODE_XDR so
+# that empty-payload BEGINs pass cleanly, and so the test passes harmlessly
+# in builds that predate the zstream-dump output for this field.
+#
+function verify_xdr_nvlist_encoding
+{
+	typeset stream=$1
+
+	[[ -f "$stream" ]] || \
+	    log_fail "verify_xdr_nvlist_encoding: stream not found: $stream"
+	log_mustnot eval "zstream dump '$stream' 2>/dev/null | " \
+	    "grep -q 'NV_ENCODE_NATIVE'"
+}
