@@ -387,10 +387,10 @@ zstream_do_dump(int argc, char *argv[])
 				if (ferror(send_stream))
 					perror("fread");
 
-				uint8_t *nv_header = buf;
+				uint8_t *nv_header = (uint8_t *)buf;
 				boolean_t xdr = nv_header[0] == NV_ENCODE_XDR;
 				boolean_t big_endian = nv_header[1] == 0;
-				char *nc;
+				const char *nc;
 				if (xdr) {
 					nc = "NV_ENCODE_XDR";
 				} else if (big_endian) {
