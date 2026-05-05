@@ -50,13 +50,16 @@ static disposition_t
 chain_decompress_named_writes(drr_packet_t *item, void *context)
 {
 	(void) context;
+	if (item == NULL) {
+		return (D_OK);
+	}
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw = &drr->drr_u.drr_write;
 	char key[KEYSIZE];
 	uint8_t *dcbuff;
 
-	if (item == NULL || drr->drr_type != DRR_WRITE) {
+	if (drr->drr_type != DRR_WRITE) {
 		return (D_OK);
 	}
 
@@ -86,8 +89,8 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 	}
 
 	if (write_is_encrypted(drrw)) {
-		fprintf(stderr, "The write for ino %zu offset %zu is marked "
-		    "as being encrypted. Attempting decompression anyway...\n",
+		warnx("the write for ino %zu offset %zu is marked "
+		    "as encrypted. Attempting decompression anyway...",
 		    drrw->drr_object, drrw->drr_offset);
 	}
 
@@ -100,7 +103,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		 * compression type, possibly because it gets written
 		 * multiple times in this stream.
 		 */
-		fprintf(stderr, "Decompression failed for ino %zu offset %zu\n",
+		warnx("decompression failed for ino %zu offset %zu",
 		    drrw->drr_object, drrw->drr_offset);
 		free(dcbuff);
 	} else {
@@ -195,11 +198,9 @@ zstream_do_decompress(int argc, char *argv[])
 			else if (0 == strcmp("zstd", argv[i]))
 				type = ZIO_COMPRESS_ZSTD;
 			else {
-				fprintf(stderr, "Invalid compression type %s.\n"
+				errx(2, "invalid compression type %s. "
 				    "Supported types are off, lz4, lzjb, gzip, "
-				    "zle, and zstd\n",
-				    argv[i]);
-				exit(2);
+				    "zle, and zstd", argv[i]);
 			}
 		}
 

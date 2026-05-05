@@ -66,19 +66,6 @@ safe_calloc(size_t size)
 	return (rv);
 }
 
-/*
- * Safe version of fread(), exits on error
- */
-int
-sfread(void *buf, size_t size, FILE *fp)
-{
-	int rv = fread(buf, size, 1, fp);
-	if (rv == 0 && ferror(fp)) {
-		errx(1, "error while reading file");
-	}
-	return (rv);
-}
-
 char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size)
 {
@@ -127,8 +114,9 @@ write_is_encrypted(struct drr_write *drrw)
 }
 
 /*
- * The compress_type must reflect the buffer's current compression. Returns
- * an allocated buffer if decompression was successful, NULL otherwise.
+ * The specified compress_type must reflect the buffer's actual compression.
+ * Returns an allocated buffer if decompression was successful, NULL
+ * otherwise.
  */
 uint8_t *
 decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,

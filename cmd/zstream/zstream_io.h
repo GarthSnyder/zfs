@@ -35,7 +35,7 @@ extern "C" {
  * The stream offset is the offset within the original source stream.
  * Changes to the stream (e.g., recompression) will necessarily change
  * offsets within the final stream. The original stream offset is raw data;
- * it should never be adjusted.
+ * it should never be updated.
  */
 typedef struct {
 	dmu_replay_record_t	dp_drr;
@@ -45,7 +45,7 @@ typedef struct {
 } drr_packet_t;
 
 /*
- * In the following, the filename or checkpoint name must remain valid
+ * In the following, the filename or checkpoint names must remain valid
  * as long as the chain is executing.
  */
 

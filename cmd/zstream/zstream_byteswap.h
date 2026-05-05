@@ -28,6 +28,12 @@ extern "C" {
 
 #define MAX_BYTESWAP 4  /* Most swapping ops in a chain */
 
+/*
+ * Byteswapping is generally done both on input and on output. By default,
+ * the stream's endianness is preserved. That is, opposite-endian streams
+ * are byteswapped for processing by other modules, then ultimately
+ * de-byteswapped for output.
+ */
 typedef enum { BS_INCOMING, BS_OUTGOING } byteswap_stage_t;
 
 chain_step_t

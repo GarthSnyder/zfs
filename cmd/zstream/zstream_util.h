@@ -50,9 +50,6 @@ safe_malloc(size_t size);
 extern void *
 safe_calloc(size_t n);
 
-extern int
-sfread(void *buf, size_t size, FILE *fp);
-
 /*
  * Returns a pointer to a static buffer. The result must be consumed before
  * the next call.
