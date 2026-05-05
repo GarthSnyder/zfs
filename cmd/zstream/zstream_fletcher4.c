@@ -72,7 +72,7 @@ fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
 }
 
 /*
- * Validate or emit (below) a replay record with proper checksums and with
+ * Emit or validate (below) a replay record with proper checksums and with
  * proper maintenance of the stream checksum. That is:
  *
  *   1) Update stream checksum with the record header up to drr_checksum.
@@ -84,6 +84,47 @@ fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
  * drr_begin struct overlaps with space that would otherwise be used for the
  * end-record checksum.
  */
+static disposition_t
+chain_add_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
+{
+	if (item == NULL)
+		return (D_OK);
+
+	dmu_replay_record_t *drr   = &item->dp_drr;
+	struct drr_end *drre	   = &item->dp_drr.drr_u.drr_end;
+	zio_cksum_t *record_cksum  = &drr->drr_u.drr_checksum.drr_checksum;
+	zio_cksum_t *end_cksum	   = &drre->drr_checksum;
+
+	boolean_t swap = OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT);
+	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
+
+	if (drr_type == DRR_BEGIN) {
+		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
+	} else if (drr_type == DRR_END) {
+		*end_cksum = *stream_cksum;
+		if (swap)
+			ZIO_CHECKSUM_BSWAP(end_cksum);
+	}
+	fletcher_4_incremental(swap, drr, CK_OFFSET, stream_cksum);
+	if (drr_type != DRR_BEGIN && !IS_CONCLUSION(drr, drr_type, swap)) {
+		*record_cksum = *stream_cksum;
+		if (swap)
+			ZIO_CHECKSUM_BSWAP(record_cksum);
+	}
+	if (drr_type == DRR_END) {
+		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
+	} else {
+		fletcher_4_incremental(swap, record_cksum,
+		    sizeof (drr->drr_u.drr_checksum.drr_checksum),
+		    stream_cksum);
+		if (item->dp_payload_size > 0) {
+			fletcher_4_incremental(swap, item->dp_payload,
+			    item->dp_payload_size, stream_cksum);
+		}
+	}
+	return (D_OK);
+}
+
 static disposition_t
 chain_validate_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
 {
@@ -111,47 +152,6 @@ chain_validate_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
 		off_t stream_offset = item->dp_stream_offset + CK_OFFSET;
 		validate_or_exit(stream_cksum, record_cksum,
 		    swap, "at DRR record end", stream_offset);
-	}
-	if (drr_type == DRR_END) {
-		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
-	} else {
-		fletcher_4_incremental(swap, record_cksum,
-		    sizeof (drr->drr_u.drr_checksum.drr_checksum),
-		    stream_cksum);
-		if (item->dp_payload_size > 0) {
-			fletcher_4_incremental(swap, item->dp_payload,
-			    item->dp_payload_size, stream_cksum);
-		}
-	}
-	return (D_OK);
-}
-
-static disposition_t
-chain_add_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
-{
-	if (item == NULL)
-		return (D_OK);
-
-	dmu_replay_record_t *drr   = &item->dp_drr;
-	struct drr_end *drre	   = &item->dp_drr.drr_u.drr_end;
-	zio_cksum_t *record_cksum  = &drr->drr_u.drr_checksum.drr_checksum;
-	zio_cksum_t *end_cksum	   = &drre->drr_checksum;
-
-	boolean_t swap = OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT);
-	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
-
-	if (drr_type == DRR_BEGIN) {
-		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);
-	} else if (drr_type == DRR_END) {
-		*end_cksum = *stream_cksum;
-		if (swap)
-			ZIO_CHECKSUM_BSWAP(end_cksum);
-	}
-	fletcher_4_incremental(swap, drr, CK_OFFSET, stream_cksum);
-	if (drr_type != DRR_BEGIN && !IS_CONCLUSION(drr, drr_type, swap)) {
-		*record_cksum = *stream_cksum;
-		if (swap)
-			ZIO_CHECKSUM_BSWAP(record_cksum);
 	}
 	if (drr_type == DRR_END) {
 		ZIO_SET_CHECKSUM(stream_cksum, 0, 0, 0, 0);

@@ -37,7 +37,7 @@
 #include "zstream_util.h"
 
 /*
- * Init only the filename, chain functions will prepare the FILE *
+ * Init only the filename; chain functions will prepare the FILE *
  */
 typedef struct {
 	const char	*ic_filename;
@@ -74,17 +74,13 @@ open_file(io_context_t *context)
 			exit(1);
 		}
 	} else if (context->ic_for_reading && isatty(STDIN_FILENO)) {
-		fprintf(stderr,
-		    "Error: Stream cannot be read from a terminal.\n"
-		    "Name a file or take input from a pipe.\n");
-		exit(1);
+		errx(1, "stream cannot be read from a terminal. "
+		    "Name a file or take input from a pipe.");
 	} else if (context->ic_for_reading) {
 		context->ic_fp = stdin;
 	} else if (isatty(STDOUT_FILENO)) {
-		fprintf(stderr,
-		    "Error: Stream cannot be written to a terminal.\n"
-		    "Capture output to a file or pipe to another command.\n");
-		exit(1);
+		errx(1, "stream cannot be written to a terminal. "
+		    "Capture output to a file or pipe to another command.");
 	} else {
 		context->ic_fp = stdout;
 	}
@@ -172,10 +168,9 @@ set_stream_attributes(drr_packet_t *item)
 	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUPPROPS);
 
 	if (OPTION_ENABLED(chain_attrs,CA_FORBID_DEDUP) && is_deduped) {
-		warnx("input stream is deduplicated, but this subcommand "
-		    "does not support deduplicated streams.");
-		fprintf(stderr, "Use 'zstream redup' to reduplicate\n");
-		exit(1);
+		errx(1, "input stream is deduplicated, but this subcommand "
+		    "does not support deduplicated streams. Use 'zstream "
+		    "redup' to reduplicate.");
 	}
 	if (OPTION_ENABLED(chain_attrs, CA_REQUIRE_DEDUP) &&
 	    !STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP))
@@ -196,7 +191,7 @@ set_stream_attributes(drr_packet_t *item)
 	 * order. Record headers are always converted to native byte order
 	 * for processing, but they can be swapped back on output.
 	 *
-	 * zfs receive inspects the endianness of each BEGIN record
+	 * zfs receive inspects the endianness of each DRR record
 	 * and assumes, at least in some cases, that payload data has the
 	 * same order as the DMU wrappers.
 	 */
@@ -330,9 +325,9 @@ chain_write(drr_packet_t *item, io_context_t *context)
  * Even if the chain doesn't write out a stream, payloads still need freed.
  */
 static disposition_t
-chain_null_output(drr_packet_t *item, void *ctxt)
+chain_null_output(drr_packet_t *item, void *context)
 {
-	(void) ctxt;
+	(void) context;
 	if (item && item->dp_payload != NULL && item->dp_payload_size > 0) {
 		free(item->dp_payload);
 		item->dp_payload = NULL;

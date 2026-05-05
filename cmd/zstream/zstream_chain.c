@@ -31,17 +31,6 @@
 
 #include "zstream_chain.h"
 
-/*
- * Execute a chain of serial processing steps.
- *
- * For simplicity, we normalize the chain item size to that of the largest
- * output of any step. Packets with data beyond the base drr_record_t should
- * add their additional data to the end of the packet, and this area may be
- * reused for different purposes as items travel down the chain.
- *
- * Each item traverses the entire chain before the next item is read.
- */
-
 #define MAX_CHAIN_LENGTH 32
 
 chain_attrs_t *chain_attrs;
@@ -78,6 +67,16 @@ libraries_fini(void)
 	abd_fini();
 }
 
+/*
+ * Execute a chain of serial processing steps.
+ *
+ * For simplicity, we normalize the chain item size to that of the largest
+ * output of any step. Packets with data beyond the base drr_record_t should
+ * add their additional data to the end of the packet, and this area may be
+ * reused for different purposes as items travel down the chain.
+ *
+ * Each item traverses the entire chain before the next item is read.
+ */
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 {
@@ -89,8 +88,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 
 	while (chain[num_steps].cs_type != CS_TERMINATE) {
 		if (num_steps > MAX_CHAIN_LENGTH) {
-			fprintf(stderr, "Error: unterminated zstream_chain\n");
-			exit(1);
+			errx(1, "unterminated zstream_chain");
 		}
 		packet_size = MAX(packet_size, chain[num_steps].cs_out_size);
 		num_steps++;

@@ -61,9 +61,9 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 }
 
 /*
- * drr_type is passed in separately because we don't know whether we're
- * doing input or out output swapping. The unswapped drr_type field may in
- * fact already be in native byte order.
+ * Unconditionally byteswap a DMU replay record. drr_type is passed in
+ * separately because we don't know whether we're doing input or out output
+ * swapping.
  */
 void
 byteswap_record(dmu_replay_record_t *drr, uint32_t drr_type)

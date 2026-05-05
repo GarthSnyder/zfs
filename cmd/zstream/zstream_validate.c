@@ -29,7 +29,7 @@
 /*
  * Validate consistency and well-formedness of the actual DRR records. I
  * have swept all the existing validation code into this module, but it's
- * still pretty spare.
+ * still pretty sparse.
  */
 
 #define MAX_VALIDATIONS 4

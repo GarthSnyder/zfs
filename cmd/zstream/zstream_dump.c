@@ -84,7 +84,7 @@ print_ascii_block(uint8_t *subbuf, int length)
 		if (i != 0 && i % DUMP_GROUPING == 0) {
 			printf(" ");
 		}
-printf("%c", char_print);
+		printf("%c", char_print);
 	}
 	printf("\n");
 }
@@ -92,7 +92,7 @@ printf("%c", char_print);
 /*
  * print_block - Dump the contents of a modified block to STDOUT
  *
- * Assume that buf has capacity evenly divisible by BYTES_PER_LINE
+ * Assumes that buf has capacity evenly divisible by BYTES_PER_LINE
  */
 static void
 print_block(uint8_t *buf, uint32_t length)
@@ -200,7 +200,7 @@ dump_begin_record(drr_packet_t *item)
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE))
 		printf("\n");
 
-	if (drr->drr_payloadlen != 0) {
+	if (drr->drr_payloadlen >= 2) {
 		nvlist_t *nv;
 		/*
 		 * It looks like zfs send or the ioctls it's using are
@@ -228,6 +228,9 @@ dump_begin_record(drr_packet_t *item)
 			nvlist_print(stdout, nv);
 			nvlist_free(nv);
 		}
+	} else if (drr->drr_payloadlen != 0) {
+		printf("unexpected packed nvlist length %d\n",
+		    drr->drr_payloadlen);
 	}
 }
 
@@ -526,7 +529,7 @@ zstream_do_dump(int argc, char *argv[])
 	zstream_chain_exec(dump_chain, &attrs);
 
 	/*
-	 * Match previous zstream dump order
+	 * Match previous zstream dump summary order
 	 */
 	int print_order[] = {
 		DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,

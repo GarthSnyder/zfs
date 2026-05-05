@@ -45,6 +45,8 @@ static disposition_t
 chain_drop_records(drr_packet_t *item, void *context)
 {
 	(void) context;
+	if (item == NULL)
+		return (D_OK);
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw = &drr->drr_u.drr_write;
@@ -52,9 +54,6 @@ chain_drop_records(drr_packet_t *item, void *context)
 	char key[KEYSIZE];
 	const char *record_type;
 	ENTRY e = {.key = key};
-
-	if (item == NULL)
-		return (D_OK);
 
 	if (drr->drr_type == DRR_WRITE) {
 		snprintf(key, KEYSIZE, "%zu,%zu", drrw->drr_object,
@@ -70,8 +69,7 @@ chain_drop_records(drr_packet_t *item, void *context)
 
 	if (hsearch(e, FIND) != NULL) {
 		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-			fprintf(stderr,
-			    "Dropping %s record for object %zu offset %zu\n",
+			warnx("dropping %s record for object %zu offset %zu",
 			    record_type, drrw->drr_object, drrw->drr_offset);
 		}
 		return (D_DROP);

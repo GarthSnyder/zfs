@@ -121,24 +121,24 @@ needs_decompression(drr_packet_t *item, compression_spec_t *context)
 static disposition_t
 chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 {
+	if (item == NULL)
+		return (D_OK);
+
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	 = &drr->drr_u.drr_write;
 	uint8_t *debuff;
 
-	if (item == NULL || drr->drr_type != DRR_WRITE ||
-	    !needs_decompression(item, context))
-	{
+	if (drr->drr_type != DRR_WRITE || !needs_decompression(item, context)) {
 		return (D_OK);
 	}
 
 	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
 	    drrw->drr_logical_size, drrw->drr_compressiontype);
 	if (debuff == NULL) {
-		warnx("decompression type %d failed for ino %zu offset %zu",
+		errx(4, "decompression type %d failed for ino %zu offset %zu",
 		    drrw->drr_compressiontype,
 		    drrw->drr_object,
 		    drrw->drr_offset);
-		exit(4);
 	}
 	free(item->dp_payload);
 	item->dp_payload = debuff;
@@ -151,11 +151,12 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 static disposition_t
 chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 {
+	if (item == NULL)
+		return (D_OK);
+
 	dmu_replay_record_t *drr = &item->dp_drr;
 
-	if (item == NULL || drr->drr_type != DRR_WRITE ||
-	    !needs_compression(item, context))
-	{
+	if (drr->drr_type != DRR_WRITE || !needs_compression(item, context)) {
 		return (D_OK);
 	}
 
@@ -267,10 +268,9 @@ zstream_do_recompress(int argc, char *argv[])
 				break;
 		}
 		if (ct == ZIO_COMPRESS_FUNCTIONS || IS_UNCOMPRESSED(ct)) {
-			fprintf(stderr, "Invalid compression type %s.\nUse "
+			errx(2, "invalid compression type %s. Use "
 			    "'off' to mark records as uncompressed (without "
-			    "decompressing).\n", argv[0]);
-			exit(2);
+			    "decompressing)", argv[0]);
 		}
 		spec.cs_type = ct;
 	}
