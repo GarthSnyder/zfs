@@ -18,7 +18,7 @@
  */
 
 #ifndef _ZSTREAM_BYTESWAP_H
-#define _ZSTREAM_BYTESWAP_H
+#define	_ZSTREAM_BYTESWAP_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +26,7 @@ extern "C" {
 
 #include "zstream_io.h"
 
-#define MAX_BYTESWAP 4  /* Most swapping ops in a chain */
+#define	MAX_BYTESWAP 4  /* Most swapping ops in a chain */
 
 /*
  * Byteswapping is generally done both on input and on output. By default,

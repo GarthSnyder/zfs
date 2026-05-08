@@ -32,7 +32,7 @@
  * still pretty sparse.
  */
 
-#define MAX_VALIDATIONS 4
+#define	MAX_VALIDATIONS 4
 
 typedef struct {
 	int	nesting;

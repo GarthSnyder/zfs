@@ -44,7 +44,7 @@
 #include "zstream_modules.h"
 #include "zstream_util.h"
 
-#define KEYSIZE 64
+#define	KEYSIZE 64
 
 static disposition_t
 chain_decompress_named_writes(drr_packet_t *item, void *context)

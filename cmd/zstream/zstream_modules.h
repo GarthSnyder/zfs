@@ -18,7 +18,7 @@
  */
 
 #ifndef _ZSTREAM_MODULES_H
-#define _ZSTREAM_MODULES_H
+#define	_ZSTREAM_MODULES_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,21 +37,21 @@ extern "C" {
 #include "zstream_util.h"
 #include "zstream_validate.h"
 
-#define READ_STEP 0
+#define	READ_STEP 0
 
-#define STANDARD_INPUT_STACK(infile)					\
+#define	STANDARD_INPUT_STACK(infile)					\
 	serial_read_stream(infile),					\
 	serial_validate_fletcher4(),					\
 	serial_byteswap(BS_INCOMING),					\
 	serial_validate_records()
 
-#define STANDARD_OUTPUT_STACK(outfile)					\
+#define	STANDARD_OUTPUT_STACK(outfile)					\
 	serial_byteswap(BS_OUTGOING),					\
 	serial_add_fletcher4(),						\
 	serial_write_stream(outfile),					\
 	chain_terminator()
 
-#define NULL_OUTPUT_STACK()						\
+#define	NULL_OUTPUT_STACK()						\
 	serial_null_output(),						\
 	chain_terminator()
 
