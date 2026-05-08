@@ -44,9 +44,9 @@ static int			next_context = 0;
 static disposition_t
 chain_validate_records(drr_packet_t *item, validate_context_t *context)
 {
-	struct dmu_replay_record *drr = &item->dp_drr;
-	struct drr_write *drrw	      = &drr->drr_u.drr_write;
-	struct drr_object *drro	      = &drr->drr_u.drr_object;
+	struct dmu_replay_record *drr	= &item->dp_drr;
+	struct drr_write *drrw		= &drr->drr_u.drr_write;
+	struct drr_object *drro		= &drr->drr_u.drr_object;
 
 	if (item == NULL || OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE)) {
 		return (D_OK);
@@ -74,9 +74,11 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 		break;
 
 	case DRR_OBJECT:
-		if (chain_attrs->ca_feature_flags & DMU_BACKUP_FEATURE_RAW &&
-		    drro->drr_bonuslen > drro->drr_raw_bonuslen)
-		{
+		boolean_t is_raw = !!(chain_attrs->ca_feature_flags &
+		    DMU_BACKUP_FEATURE_RAW);
+		boolean_t bonus_gt_raw = drro->drr_bonuslen >
+		    drro->drr_raw_bonuslen;
+		if (is_raw && bonus_gt_raw) {
 			fprintf(stderr,
 			    "Warning: object %zu has bonuslen = "
 			    "%u > raw_bonuslen = %u\n\n",
@@ -87,8 +89,8 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 
 	case DRR_WRITE:
 		if (drrw->drr_compressiontype >= ZIO_COMPRESS_FUNCTIONS) {
-		    errx(1, "invalid compression type: %d",
-		    	drrw->drr_compressiontype);
+			errx(1, "invalid compression type: %d",
+			    drrw->drr_compressiontype);
 		}
 		break;
 
@@ -105,13 +107,13 @@ serial_validate_records(void)
 	int context_ix = next_context++ % MAX_VALIDATIONS;
 	validate_context_t *context = &contexts[context_ix];
 
-	return (chain_step_t) {
-	    .cs_type = CS_SERIAL,
-	    .cs_in_size = sizeof(drr_packet_t),
-	    .cs_out_size = sizeof(drr_packet_t),
-	    .cs_context = context,
-	    .cs_serial = {
-		.process = (zc_serial_process_f *)chain_validate_records,
-	    }
+	chain_step_t step = {
+		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_packet_t),
+		.cs_context = context,
+		.cs_serial = {
+		    .process = (zc_serial_process_f *)chain_validate_records,
+		}
 	};
 }

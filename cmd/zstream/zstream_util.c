@@ -70,10 +70,10 @@ char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size)
 {
 	snprintf(buff, buff_size, "%.16llx / %.16llx / %.16llx / %.16llx",
-		(long long unsigned int) cksum->zc_word[0],
-		(long long unsigned int) cksum->zc_word[1],
-		(long long unsigned int) cksum->zc_word[2],
-		(long long unsigned int) cksum->zc_word[3]);
+	    (long long unsigned int) cksum->zc_word[0],
+	    (long long unsigned int) cksum->zc_word[1],
+	    (long long unsigned int) cksum->zc_word[2],
+	    (long long unsigned int) cksum->zc_word[3]);
 	return (buff);
 }
 
@@ -90,15 +90,15 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 		ZIO_CHECKSUM_BSWAP(actual);
 	}
 	if (ZIO_CHECKSUM_EQUAL(*expected, *actual)) {
-		return B_TRUE;
+		return (B_TRUE);
 	}
 	fflush(stdout);
 	fprintf(stderr, "Incorrect checksum %s (stream offset %zu)\n", where,
 	    stream_offset);
 	fprintf(stderr, "Expected = %s\n", checksum_str(expected, buff,
-	    sizeof(buff)));
+	    sizeof (buff)));
 	fprintf(stderr, "  Actual = %s\n", checksum_str(actual, buff,
-	    sizeof(buff)));
+	    sizeof (buff)));
 	return (B_FALSE);
 }
 
@@ -177,4 +177,3 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 
 	return (outbuff);
 }
-

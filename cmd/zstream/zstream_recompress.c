@@ -197,15 +197,16 @@ serial_decompress_writes(compression_spec_t *target)
 	} else {
 		*context = *target;
 	}
-	return (chain_step_t){
-	    .cs_type = CS_SERIAL,
-	    .cs_in_size = sizeof (drr_packet_t),
-	    .cs_out_size = sizeof (drr_packet_t),
-	    .cs_context = context,
-	    .cs_serial = {
-		.process = (zc_serial_process_f *)chain_decompress_writes
-	    }
+	chain_step_t step = {
+		.cs_type = CS_SERIAL,
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_packet_t),
+		.cs_context = context,
+		.cs_serial = {
+		    .process = (zc_serial_process_f *)chain_decompress_writes
+		}
 	};
+	return (step);
 }
 
 chain_step_t
@@ -264,7 +265,8 @@ zstream_do_recompress(int argc, char *argv[])
 	} else {
 		enum zio_compress ct;
 		for (ct = 0; ct < ZIO_COMPRESS_FUNCTIONS; ct++) {
-			if (!strcmp(argv[0], zio_compress_table[ct].ci_name))
+			const char *ct_name = zio_compress_table[ct].ct_name;
+			if (strcmp(argv[0], ct_name) == 0)
 				break;
 		}
 		if (ct == ZIO_COMPRESS_FUNCTIONS || IS_UNCOMPRESSED(ct)) {

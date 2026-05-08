@@ -102,11 +102,11 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 	 * adjacent steps. A declared packet size of zero waives this check.
 	 */
 	for (int i = 0; i < num_steps; i++) {
-		if (i > 0 &&
+		boolean_t mismatch = i > 0 &&
 		    chain[i].cs_in_size != 0 &&
 		    chain[i-1].cs_out_size != 0 &&
-		    chain[i].cs_in_size != chain[i-1].cs_out_size)
-		{
+		    chain[i].cs_in_size != chain[i-1].cs_out_size;
+		if (mismatch) {
 			warnx("note - chain steps %d and %d have "
 			    "mismatched packet sizes", i - 1, i);
 		}
@@ -121,7 +121,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 		for (int i = 0; i < num_steps; i++) {
 			if (done) {
 				(void) chain[i].cs_serial.process(NULL,
-					chain[i].cs_context);
+				    chain[i].cs_context);
 			} else {
 				disposition_t dispo =
 				    chain[i].cs_serial.process(buffer,

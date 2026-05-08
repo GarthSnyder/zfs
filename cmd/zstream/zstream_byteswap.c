@@ -124,7 +124,8 @@ byteswap_record(dmu_replay_record_t *drr, uint32_t drr_type)
 		DO64(drr_write_byref.drr_refguid);
 		DO64(drr_write_byref.drr_refobject);
 		DO64(drr_write_byref.drr_refoffset);
-		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_write_byref.drr_key.ddk_cksum);
+		ZIO_CHECKSUM_BSWAP(
+		    &drr->drr_u.drr_write_byref.drr_key.ddk_cksum);
 		DO64(drr_write_byref.drr_key.ddk_prop);
 		break;
 
