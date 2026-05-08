@@ -132,7 +132,7 @@ calc_payload_size(dmu_replay_record_t *drr)
 	} else {
 		size = swap ? BSWAP_64(size64) : size64;
 	}
-	return round ? P2ROUNDUP(size, 8) : size;
+	return (round ? P2ROUNDUP(size, 8) : size);
 }
 
 /*
@@ -145,7 +145,7 @@ set_stream_attributes(drr_packet_t *item)
 	dmu_replay_record_t *drr  = &item->dp_drr;
 	struct drr_begin *drrb    = &drr->drr_u.drr_begin;
 	uint64_t magic		  = drrb->drr_magic;
-	uint64_t versioninfo 	  = drrb->drr_versioninfo;
+	uint64_t versioninfo	  = drrb->drr_versioninfo;
 	boolean_t i_am_big_endian = htonl(0xFF00) == 0xFF00;
 
 	boolean_t swap_on_output, is_deduped;
@@ -167,20 +167,22 @@ set_stream_attributes(drr_packet_t *item)
 	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP) ||
 	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUPPROPS);
 
-	if (OPTION_ENABLED(chain_attrs,CA_FORBID_DEDUP) && is_deduped) {
+	if (OPTION_ENABLED(chain_attrs, CA_FORBID_DEDUP) && is_deduped) {
 		errx(1, "input stream is deduplicated, but this subcommand "
 		    "does not support deduplicated streams. Use 'zstream "
 		    "redup' to reduplicate.");
 	}
-	if (OPTION_ENABLED(chain_attrs, CA_REQUIRE_DEDUP) &&
-	    !STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP))
-	{
+	boolean_t req_dedup = OPTION_ENABLED(chain_attrs, CA_REQUIRE_DEDUP);
+	boolean_t is_dedup = STREAM_HAS_FEATURE(chain_attrs,
+	    DMU_BACKUP_FEATURE_DEDUP);
+	if (req_dedup && !is_dedup) {
 		errx(1, "this subcommand requires a deduplicated input "
 		    "stream, but the stream is not deduplicated");
 	}
-	if (OPTION_ENABLED(chain_attrs, CA_REQUIRE_NATIVE_ENDIAN) &&
-	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED))
-	{
+	boolean_t req_native = OPTION_ENABLED(chain_attrs,
+	    CA_REQUIRE_NATIVE_ENDIAN);
+	boolean_t is_byteswapped = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+	if (req_native && is_byteswapped) {
 		errx(1, "this subcommand requires a native-endian "
 		    "input stream");
 	}
@@ -235,9 +237,9 @@ chain_read(drr_packet_t *item, io_context_t *context)
 	item->dp_payload_size = calc_payload_size(&item->dp_drr);
 	if (item->dp_payload_size > 0) {
 		item->dp_payload = safe_malloc(item->dp_payload_size);
-		if (fread(item->dp_payload, item->dp_payload_size, 1,
-		    context->ic_fp) != 1)
-		{
+		size_t n_read = fread(item->dp_payload, item->dp_payload_size,
+		    1, context->ic_fp);
+		if (n_read != 1) {
 			if (ferror(context->ic_fp)) {
 				err(1, "error reading record payload at "
 				    " offset %lu", context->ic_offset);
@@ -266,12 +268,12 @@ chain_read(drr_packet_t *item, io_context_t *context)
 
 	record_stats_t *stats = &chain_attrs->ca_stats_in[drr_type];
 	stats->rs_num_records++;
-	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_header_bytes += sizeof (dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
 	stats = &chain_attrs->ca_totals_in;
 	stats->rs_num_records++;
-	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_header_bytes += sizeof (dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
 	return (D_OK);
@@ -295,9 +297,9 @@ chain_write(drr_packet_t *item, io_context_t *context)
 	if (fwrite(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) != 1) {
 		err(1, "error writing record header");
 	} else if (item->dp_payload_size > 0) {
-		if (fwrite(item->dp_payload, item->dp_payload_size,
-		    1, context->ic_fp) != 1)
-		{
+		size_t n_written = fwrite(item->dp_payload,
+		    item->dp_payload_size, 1, context->ic_fp);
+		if (n_written != 1) {
 			err(1, "error writing payload: ");
 		} else {
 			free(item->dp_payload);
@@ -310,12 +312,12 @@ chain_write(drr_packet_t *item, io_context_t *context)
 
 	record_stats_t *stats = &chain_attrs->ca_stats_out[drr_type];
 	stats->rs_num_records++;
-	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_header_bytes += sizeof (dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
 	stats = &chain_attrs->ca_totals_out;
 	stats->rs_num_records++;
-	stats->rs_total_header_bytes += sizeof(dmu_replay_record_t);
+	stats->rs_total_header_bytes += sizeof (dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
 	return (D_OK);
@@ -344,10 +346,11 @@ setup_io(const char *filename, boolean_t for_reading)
 {
 	int context_num = next_io_context++ % MAX_IO_STREAMS;
 
-	io_contexts[context_num] = (io_context_t) {
+	io_context_t context = {
 		.ic_filename = filename,
 		.ic_for_reading = for_reading
 	};
+	io_contexts[context_num] = context;
 
 	chain_step_t step = {
 		.cs_type = CS_SERIAL,
@@ -422,18 +425,19 @@ chain_checkpoint(drr_packet_t *item, checkpoint_context_t *ctxt)
 chain_step_t
 serial_checkpoint(const char *name)
 {
-	int ctxt = next_checkpoint_context++ % MAX_IO_STREAMS;
+	int context_no = next_checkpoint_context++ % MAX_IO_STREAMS;
 
-	checkpoint_contexts[ctxt] = (checkpoint_context_t) {
+	checkpoint_context_t context = {
 		.cc_name = name,
 		.cc_period_sec = 1.0
 	};
+	checkpoint_contexts[context_no] = context;
 
 	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
-		.cs_context = &checkpoint_contexts[ctxt],
+		.cs_context = &checkpoint_contexts[context_no],
 		.cs_serial = {
 			.process = (zc_serial_process_f *)chain_checkpoint
 		},

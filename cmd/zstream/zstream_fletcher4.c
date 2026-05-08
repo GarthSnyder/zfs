@@ -65,9 +65,9 @@ static inline int
 fletcher_4_incremental(boolean_t swap, void *buff, size_t size, void *cksum)
 {
 	if (swap) {
-		return fletcher_4_incremental_byteswap(buff, size, cksum);
+		return (fletcher_4_incremental_byteswap(buff, size, cksum));
 	} else {
-		return fletcher_4_incremental_native(buff, size, cksum);
+		return (fletcher_4_incremental_native(buff, size, cksum));
 	}
 }
 

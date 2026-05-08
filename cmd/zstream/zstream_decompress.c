@@ -95,7 +95,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 	}
 
 	dcbuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
-		drrw->drr_logical_size, ctype);
+	    drrw->drr_logical_size, ctype);
 
 	if (dcbuff == NULL) {
 		/*
@@ -131,7 +131,7 @@ serial_decompress_named_writes(void)
 		.cs_context = NULL,
 		.cs_serial = {
 		    .process =
-		        (zc_serial_process_f *)chain_decompress_named_writes
+			(zc_serial_process_f *)chain_decompress_named_writes
 		}
 	};
 	return (step);
@@ -163,8 +163,7 @@ zstream_do_decompress(int argc, char *argv[])
 	if (hcreate(argc) == 0)
 		errx(1, "hcreate failed");
 
-	for (int i = 0; i < argc; i++)
-	{
+	for (int i = 0; i < argc; i++) {
 		uint64_t object, offset;
 		char *obj_str;
 		char *offset_str;
@@ -205,11 +204,10 @@ zstream_do_decompress(int argc, char *argv[])
 			}
 		}
 
-		if (asprintf(&key, "%llu,%llu", (u_longlong_t)object,
-		    (u_longlong_t)offset) < 0)
-		{
+		int n_chars = asprintf(&key, "%llu,%llu", (u_longlong_t)object,
+		    (u_longlong_t)offset);
+		if (n_chars < 0)
 			err(1, "asprintf");
-		}
 		ENTRY e = { .key = key };
 		ENTRY *p;
 		p = hsearch(e, ENTER);
