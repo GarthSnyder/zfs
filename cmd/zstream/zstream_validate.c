@@ -116,4 +116,5 @@ serial_validate_records(void)
 		    .process = (zc_serial_process_f *)chain_validate_records,
 		}
 	};
+	return (step);
 }
