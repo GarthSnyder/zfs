@@ -124,7 +124,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 static chain_step_t
 serial_decompress_named_writes(void)
 {
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
@@ -133,7 +133,8 @@ serial_decompress_named_writes(void)
 		    .process =
 		        (zc_serial_process_f *)chain_decompress_named_writes
 		}
-	});
+	};
+	return (step);
 }
 
 int

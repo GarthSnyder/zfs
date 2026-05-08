@@ -349,7 +349,7 @@ setup_io(const char *filename, boolean_t for_reading)
 		.ic_for_reading = for_reading
 	};
 
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = 0,
 		.cs_out_size = sizeof (drr_packet_t),
@@ -358,7 +358,8 @@ setup_io(const char *filename, boolean_t for_reading)
 			.process = (zc_serial_process_f *)
 			    (for_reading ? chain_read : chain_write),
 		}
-	});
+	};
+	return (step);
 }
 
 chain_step_t
@@ -376,7 +377,7 @@ serial_write_stream(const char *filename)
 chain_step_t
 serial_null_output(void)
 {
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = 0,
@@ -384,7 +385,8 @@ serial_null_output(void)
 		.cs_serial = {
 			.process = (zc_serial_process_f *)chain_null_output
 		}
-	});
+	};
+	return (step);
 }
 
 static disposition_t
@@ -427,7 +429,7 @@ serial_checkpoint(const char *name)
 		.cc_period_sec = 1.0
 	};
 
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
@@ -435,5 +437,6 @@ serial_checkpoint(const char *name)
 		.cs_serial = {
 			.process = (zc_serial_process_f *)chain_checkpoint
 		},
-	});
+	};
+	return (step);
 }

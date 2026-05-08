@@ -38,13 +38,15 @@ chain_attrs_t *chain_attrs;
 chain_step_t
 serial_null_step(void)
 {
-	return ((chain_step_t) { .cs_type = CS_SERIAL });
+	chain_step_t step = { .cs_type = CS_SERIAL };
+	return (step);
 }
 
 chain_step_t
 chain_terminator(void)
 {
-	return ((chain_step_t) { .cs_type = CS_TERMINATE });
+	chain_step_t step = { .cs_type = CS_TERMINATE };
+	return (step);
 }
 
 static void

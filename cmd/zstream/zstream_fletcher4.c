@@ -174,7 +174,7 @@ fletcher4_serial_step(fletcher4_op_t operation)
 	fletcher4_context_t *context = &fletcher4_contexts[context_ix];
 
 	ZIO_SET_CHECKSUM(context, 0, 0, 0, 0);
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
@@ -184,7 +184,8 @@ fletcher4_serial_step(fletcher4_op_t operation)
 			    ((operation == F4_VALIDATE) ?
 			    chain_validate_fletcher4 : chain_add_fletcher4)
 		}
-	});
+	};
+	return (step);
 }
 
 chain_step_t

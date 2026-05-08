@@ -156,11 +156,10 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 		item->dp_payload_size = DRR_WRITE_PAYLOAD_SIZE(drrw);
 		item->dp_payload = safe_malloc(item->dp_payload_size);
 
-		if (fread(item->dp_payload, item->dp_payload_size, 1,
-		    context->rc_fp) != 1)
-		{
+		size_t n_read = fread(item->dp_payload, item->dp_payload_size,
+		    1, context->rc_fp);
+		if (n_read != 1)
 			err(1, "read of prior payload failed: ");
-		}
 
 		drrw->drr_toguid = drrwb.drr_toguid;
 		drrw->drr_object = drrwb.drr_object;
@@ -182,16 +181,16 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 static chain_step_t
 serial_redup_writes(redup_context_t *context)
 {
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
 		.cs_serial = {
-		    .process =
-		        (zc_serial_process_f *)chain_redup_writes
+			.process = (zc_serial_process_f *)chain_redup_writes
 		}
-	});
+	};
+	return (step);
 }
 
 int
@@ -267,5 +266,3 @@ zstream_do_redup(int argc, char *argv[])
 	free(context.rc_rdt.redup_hash_array);
 	return (0);
 }
-
-

@@ -39,7 +39,7 @@
 #include "zstream_modules.h"
 #include "zstream_util.h"
 
-#define MAX_COMPRESSION_STEPS  4
+#define	MAX_COMPRESSION_STEPS 4
 
 static compression_spec_t	specs[MAX_COMPRESSION_STEPS];
 static int			next_spec = 0;
@@ -66,7 +66,7 @@ needs_modification(drr_packet_t *item, compression_spec_t *target)
 		return (B_FALSE);
 	}
 	if (target == NULL) {
-		return !IS_UNCOMPRESSED(ctype) && !write_is_encrypted(drrw);
+		return (!IS_UNCOMPRESSED(ctype) && !write_is_encrypted(drrw));
 	}
 	if (IS_UNCOMPRESSED(target->cs_type) && IS_UNCOMPRESSED(ctype)) {
 		return (B_FALSE);
@@ -85,9 +85,9 @@ needs_modification(drr_packet_t *item, compression_spec_t *target)
 	}
 	if (ZIO_COMPRESS_HASLEVEL(target->cs_type)) {
 		cur_level = zfs_get_hdrlevel((void *)item->dp_payload);
-		if (target->cs_type == ZIO_COMPRESS_ZSTD &&
-		    target->cs_level == ZIO_COMPLEVEL_DEFAULT)
-		{
+		boolean_t is_zstd = target->cs_type == ZIO_COMPRESS_ZSTD;
+		boolean_t dfl_level = target->cs_level == ZIO_COMPLEVEL_DEFAULT;
+		if (is_zstd && dfl_level) {
 			return (cur_level != ZIO_ZSTD_LEVEL_DEFAULT);
 		}
 		return (target->cs_level != cur_level);
@@ -197,16 +197,15 @@ serial_decompress_writes(compression_spec_t *target)
 	} else {
 		*context = *target;
 	}
-	return ((chain_step_t) {
-		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof (drr_packet_t),
-		.cs_out_size = sizeof (drr_packet_t),
-		.cs_context = context,
-		.cs_serial = {
-			.process =
-			    (zc_serial_process_f *)chain_decompress_writes
-		}
-	});
+	return (chain_step_t){
+	    .cs_type = CS_SERIAL,
+	    .cs_in_size = sizeof (drr_packet_t),
+	    .cs_out_size = sizeof (drr_packet_t),
+	    .cs_context = context,
+	    .cs_serial = {
+		.process = (zc_serial_process_f *)chain_decompress_writes
+	    }
+	};
 }
 
 chain_step_t
@@ -217,7 +216,7 @@ serial_compress_writes(compression_spec_t *target)
 
 	VERIFY3P(target, !=, NULL);
 	*context = *target;
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
@@ -226,7 +225,8 @@ serial_compress_writes(compression_spec_t *target)
 			.process =
 			    (zc_serial_process_f *)chain_compress_writes
 		}
-	});
+	};
+	return (step);
 }
 
 int

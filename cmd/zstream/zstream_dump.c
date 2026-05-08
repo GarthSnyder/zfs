@@ -455,7 +455,7 @@ chain_dump_record(drr_packet_t *item, record_type_t *context)
 static chain_step_t
 serial_dump_records(record_type_t *context)
 {
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
@@ -463,7 +463,8 @@ serial_dump_records(record_type_t *context)
 		.cs_serial = {
 			.process = (zc_serial_process_f *)chain_dump_record
 		}
-	});
+	};
+	return (step);
 }
 
 int
