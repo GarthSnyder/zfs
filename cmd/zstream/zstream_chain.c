@@ -31,7 +31,7 @@
 
 #include "zstream_chain.h"
 
-#define MAX_CHAIN_LENGTH 32
+#define	MAX_CHAIN_LENGTH 32
 
 chain_attrs_t *chain_attrs;
 

@@ -18,7 +18,7 @@
  */
 
 #ifndef _ZSTREAM_RECOMPRESS_H
-#define _ZSTREAM_RECOMPRESS_H
+#define	_ZSTREAM_RECOMPRESS_H
 
 #ifdef __cplusplus
 extern "C" {

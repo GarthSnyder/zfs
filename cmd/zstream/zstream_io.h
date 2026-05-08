@@ -18,7 +18,7 @@
  */
 
 #ifndef _ZSTREAM_IO_H
-#define _ZSTREAM_IO_H
+#define	_ZSTREAM_IO_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,7 +29,7 @@ extern "C" {
 
 #include "zstream_chain.h"
 
-#define MAX_IO_STREAMS 4
+#define	MAX_IO_STREAMS 4
 
 /*
  * The stream offset is the offset within the original source stream.

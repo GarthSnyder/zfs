@@ -18,7 +18,7 @@
  */
 
 #ifndef _ZSTREAM_VALIDATE_H
-#define _ZSTREAM_VALIDATE_H
+#define	_ZSTREAM_VALIDATE_H
 
 #ifdef __cplusplus
 extern "C" {

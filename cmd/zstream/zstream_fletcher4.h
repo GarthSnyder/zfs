@@ -18,7 +18,7 @@
  */
 
 #ifndef _ZSTREAM_FLETCHER4_H
-#define _ZSTREAM_FLETCHER4_H
+#define	_ZSTREAM_FLETCHER4_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,7 +40,7 @@ extern "C" {
 /*
  * Maximum number of checksum operations in one chain
  */
-#define MAX_FLETCHER_4 8
+#define	MAX_FLETCHER_4 8
 
 chain_step_t
 serial_validate_fletcher4(void);
