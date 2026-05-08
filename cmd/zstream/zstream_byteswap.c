@@ -183,7 +183,7 @@ serial_byteswap(byteswap_stage_t stage)
 	byteswap_context_t *bsc = &byteswap_contexts[context_ix];
 
 	*bsc = stage;
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
@@ -191,5 +191,6 @@ serial_byteswap(byteswap_stage_t stage)
 		.cs_serial = {
 			.process = (zc_serial_process_f *)chain_byteswap,
 		}
-	});
+	};
+	return (step);
 }

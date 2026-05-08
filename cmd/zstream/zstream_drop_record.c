@@ -39,7 +39,7 @@
 #include "zstream.h"
 #include "zstream_modules.h"
 
-#define KEYSIZE 64
+#define	KEYSIZE 64
 
 static disposition_t
 chain_drop_records(drr_packet_t *item, void *context)
@@ -81,16 +81,16 @@ chain_drop_records(drr_packet_t *item, void *context)
 static chain_step_t
 serial_drop_records(void)
 {
-	return ((chain_step_t) {
+	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_in_size = sizeof (drr_packet_t),
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = NULL,
 		.cs_serial = {
-		    .process =
-		        (zc_serial_process_f *)chain_drop_records
+			.process = (zc_serial_process_f *)chain_drop_records
 		}
-	});
+	};
+	return (step);
 }
 
 int
@@ -119,8 +119,8 @@ zstream_do_drop_record(int argc, char *argv[])
 	if (hcreate(argc) == 0)
 		errx(1, "hcreate failed");
 
-	for (int i = 0; i < argc; i++)
-	{
+	for (int i = 0; i < argc; i++) {
+
 		uint64_t object, offset;
 		char *obj_str;
 		char *offset_str;
