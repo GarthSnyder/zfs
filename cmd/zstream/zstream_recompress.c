@@ -265,8 +265,8 @@ zstream_do_recompress(int argc, char *argv[])
 	} else {
 		enum zio_compress ct;
 		for (ct = 0; ct < ZIO_COMPRESS_FUNCTIONS; ct++) {
-			const char *ct_name = zio_compress_table[ct].ct_name;
-			if (strcmp(argv[0], ct_name) == 0)
+			const char *ci_name = zio_compress_table[ct].ci_name;
+			if (strcmp(argv[0], ci_name) == 0)
 				break;
 		}
 		if (ct == ZIO_COMPRESS_FUNCTIONS || IS_UNCOMPRESSED(ct)) {
