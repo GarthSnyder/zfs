@@ -253,6 +253,7 @@ chain_read(drr_packet_t *item, io_context_t *context)
 				    "- stream is likely corrupt",
 				    context->ic_offset);
 				fclose(context->ic_fp);
+				free(item->dp_payload);
 				return (D_EOF);
 			}
 		}

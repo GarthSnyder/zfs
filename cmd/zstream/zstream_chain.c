@@ -35,10 +35,23 @@
 
 chain_attrs_t *chain_attrs;
 
+static disposition_t
+chain_null_step(void *item, void *context)
+{
+	(void) item;
+	(void) context;
+	return (D_OK);
+}
+
 chain_step_t
 serial_null_step(void)
 {
-	chain_step_t step = { .cs_type = CS_SERIAL };
+	chain_step_t step = {
+		.cs_type = CS_SERIAL,
+		.cs_serial = {
+		    .process = (zc_serial_process_f *)chain_null_step;
+		}
+	};
 	return (step);
 }
 
