@@ -44,13 +44,16 @@ static int			next_context = 0;
 static disposition_t
 chain_validate_records(drr_packet_t *item, validate_context_t *context)
 {
+	if (item == NULL)
+		return (D_OK);
+
 	struct dmu_replay_record *drr	= &item->dp_drr;
 	struct drr_write *drrw		= &drr->drr_u.drr_write;
 	struct drr_object *drro		= &drr->drr_u.drr_object;
 
-	if (item == NULL || OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE)) {
+	if (OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE))
 		return (D_OK);
-	}
+
 	if (item->dp_stream_offset == 0 && drr->drr_type != DRR_BEGIN) {
 		warnx("warning - first record is not DRR_BEGIN");
 	}
@@ -59,12 +62,12 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 		VERIFY0(context->nesting);
 		context->nesting++;
 	} else if (drr->drr_type == DRR_END) {
-		VERIFY3U(context->nesting, >=, 0);
+		VERIFY3S(context->nesting, >=, 0);
 		context->nesting--;
 	} else if (drr->drr_type > DRR_NUMTYPES) {
 		errx(1, "unknown record type: %d", drr->drr_type);
 	} else {
-		VERIFY3U(context->nesting, ==, 1);
+		VERIFY3S(context->nesting, ==, 1);
 	}
 
 	switch (drr->drr_type) {
@@ -106,6 +109,7 @@ serial_validate_records(void)
 {
 	int context_ix = next_context++ % MAX_VALIDATIONS;
 	validate_context_t *context = &contexts[context_ix];
+	context->nesting = 0;
 
 	chain_step_t step = {
 		.cs_type = CS_SERIAL,

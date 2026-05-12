@@ -247,7 +247,7 @@ zstream_do_recompress(int argc, char *argv[])
 			}
 			break;
 		case '?':
-			warnx("invalid option '%c", optopt);
+			warnx("invalid option '%c'", optopt);
 			zstream_usage();
 			break;
 		}
