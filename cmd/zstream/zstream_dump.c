@@ -164,14 +164,14 @@ static char *
 stringify_encryption_fields(void *crypto_in)
 {
 	crypto_fields_t *crypto = crypto_in;
-	char salt[ZIO_DATA_SALT_LEN * 2 + 1];
-	char iv[ZIO_DATA_IV_LEN * 2 + 1];
-	char mac[ZIO_DATA_MAC_LEN * 2 + 1];
+	char salt[sizeof (crypto->drr_salt) * 2 + 1];
+	char iv[sizeof (crypto->drr_iv) * 2 + 1];
+	char mac[sizeof (crypto->drr_mac) * 2 + 1];
 	static char buff[sizeof (salt) + sizeof (iv) + sizeof (mac) + 32];
 
-	sprintf_bytes(salt, crypto->drr_salt, ZIO_DATA_SALT_LEN);
-	sprintf_bytes(iv, crypto->drr_iv, ZIO_DATA_IV_LEN);
-	sprintf_bytes(mac, crypto->drr_mac, ZIO_DATA_MAC_LEN);
+	sprintf_bytes(salt, crypto->drr_salt, sizeof (crypto->drr_salt));
+	sprintf_bytes(iv, crypto->drr_iv, sizeof (crypto->drr_iv));
+	sprintf_bytes(mac, crypto->drr_mac, sizeof (crypto->drr_mac));
 	snprintf(buff, sizeof (buff), "salt = %s iv = %s mac = %s",
 	    salt, iv, mac);
 	return (buff);
