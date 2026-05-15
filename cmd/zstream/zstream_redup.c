@@ -29,6 +29,7 @@
 #include <string.h>
 #include <sys/bitops.h>
 #include <sys/param.h>
+#include <sys/stdtypes.h>
 #include <sys/sysmacros.h>
 #include <sys/zfs_ioctl.h>
 #include <umem.h>
@@ -138,8 +139,8 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 		    &stream_offset);
 
 		if (fseeko(context->rc_fp, stream_offset, SEEK_SET) != 0) {
-			err(1, "seek into source file failed, offset %zu: ",
-			    stream_offset);
+			err(1, "seek into source file failed, offset %llu: ",
+			    (u_longlong_t)stream_offset);
 		}
 		if (fread(drr, sizeof (*drr), 1, context->rc_fp) != 1) {
 			err(1, "read of prior write failed: ");
@@ -252,12 +253,13 @@ zstream_do_redup(int argc, char *argv[])
 
 	if (OPTION_ENABLED(&attrs, CA_VERBOSE)) {
 		char mem_str[16];
+		record_stats_t *acsi = &attrs.ca_stats_in;
 		zfs_nicenum(context.rc_rdt.ddt_count * sizeof (redup_entry_t),
 		    mem_str, sizeof (mem_str));
-		fprintf(stderr, "Converted stream with %zu total records, "
-		    "including %zu dedup records, using %sB memory.\n",
-		    attrs.ca_totals_in.rs_num_records,
-		    attrs.ca_stats_in[DRR_WRITE_BYREF].rs_num_records,
+		fprintf(stderr, "Converted stream with %llu total records, "
+		    "including %llu dedup records, using %sB memory.\n",
+		    (u_longlong_t)attrs.ca_totals_in.rs_num_records,
+		    (u_longlong_t)acsi[DRR_WRITE_BYREF].rs_num_records,
 		    mem_str);
 	}
 

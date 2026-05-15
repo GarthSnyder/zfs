@@ -188,12 +188,12 @@ dump_begin_record(drr_packet_t *item)
 	    DMU_GET_STREAM_HDRTYPE(drrb->drr_versioninfo));
 	printf("\tfeatures = %llx\n",
 	    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo));
-	printf("\tmagic = %zx\n", drrb->drr_magic);
-	printf("\tcreation_time = %zx\n", drrb->drr_creation_time);
+	printf("\tmagic = %llx\n", (u_longlong_t)drrb->drr_magic);
+	printf("\tcreation_time = %llx\n", (u_longlong_t)drrb->drr_creation_time);
 	printf("\ttype = %u\n", drrb->drr_type);
 	printf("\tflags = 0x%x\n", drrb->drr_flags);
-	printf("\ttoguid = %zx\n", drrb->drr_toguid);
-	printf("\tfromguid = %zx\n", drrb->drr_fromguid);
+	printf("\ttoguid = %llx\n", (u_longlong_t)drrb->drr_toguid);
+	printf("\tfromguid = %llx\n", (u_longlong_t)drrb->drr_fromguid);
 	printf("\ttoname = %s\n", drrb->drr_toname);
 	printf("\tpayloadlen = %u\n", drr->drr_payloadlen);
 
@@ -239,11 +239,11 @@ dump_end_record(drr_packet_t *item)
 {
 	struct drr_end *drre = &item->dp_drr.drr_u.drr_end;
 
-	printf("END checksum = %zx/%zx/%zx/%zx\n",
-	    drre->drr_checksum.zc_word[0],
-	    drre->drr_checksum.zc_word[1],
-	    drre->drr_checksum.zc_word[2],
-	    drre->drr_checksum.zc_word[3]);
+	printf("END checksum = %llx/%llx/%llx/%llx\n",
+	    (u_longlong_t)drre->drr_checksum.zc_word[0],
+	    (u_longlong_t)drre->drr_checksum.zc_word[1],
+	    (u_longlong_t)drre->drr_checksum.zc_word[2],
+	    (u_longlong_t)drre->drr_checksum.zc_word[3]);
 }
 
 static void
@@ -252,13 +252,13 @@ dump_object_record(drr_packet_t *item)
 	struct drr_object *drro = &item->dp_drr.drr_u.drr_object;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("OBJECT object = %zu type = %u "
+		printf("OBJECT object = %llu type = %u "
 		    "bonustype = %u blksz = %u bonuslen = %u "
 		    "dn_slots = %u raw_bonuslen = %u "
-		    "flags = %u maxblkid = %zu "
+		    "flags = %u maxblkid = %llu "
 		    "indblkshift = %u nlevels = %u "
 		    "nblkptr = %u\n",
-		    drro->drr_object,
+		    (u_longlong_t)drro->drr_object,
 		    drro->drr_type,
 		    drro->drr_bonustype,
 		    drro->drr_blksz,
@@ -266,7 +266,7 @@ dump_object_record(drr_packet_t *item)
 		    drro->drr_dn_slots,
 		    drro->drr_raw_bonuslen,
 		    drro->drr_flags,
-		    drro->drr_maxblkid,
+		    (u_longlong_t)drro->drr_maxblkid,
 		    drro->drr_indblkshift,
 		    drro->drr_nlevels,
 		    drro->drr_nblkptr);
@@ -282,8 +282,9 @@ dump_freeobjects_record(drr_packet_t *item)
 	struct drr_freeobjects *drrfo = &item->dp_drr.drr_u.drr_freeobjects;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("FREEOBJECTS firstobj = %zu numobjs = %zu\n",
-		    drrfo->drr_firstobj, drrfo->drr_numobjs);
+		printf("FREEOBJECTS firstobj = %llu numobjs = %llu\n",
+		    (u_longlong_t)drrfo->drr_firstobj,
+		    (u_longlong_t)drrfo->drr_numobjs);
 	}
 }
 
@@ -293,23 +294,23 @@ dump_write_record(drr_packet_t *item)
 	struct drr_write *drrw = &item->dp_drr.drr_u.drr_write;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("WRITE object = %zu type = %u "
+		printf("WRITE object = %llu type = %u "
 		    "checksum type = %u compression type = %u "
-		    "flags = %u offset = %zu "
-		    "logical_size = %zu "
-		    "compressed_size = %zu "
-		    "payload_size = %u props = %zx "
+		    "flags = %u offset = %llu "
+		    "logical_size = %llu "
+		    "compressed_size = %llu "
+		    "payload_size = %u props = %llx "
 		    "%s\n",
-		    drrw->drr_object,
+		    (u_longlong_t)drrw->drr_object,
 		    drrw->drr_type,
 		    drrw->drr_checksumtype,
 		    drrw->drr_compressiontype,
 		    drrw->drr_flags,
-		    drrw->drr_offset,
-		    drrw->drr_logical_size,
-		    drrw->drr_compressed_size,
+		    (u_longlong_t)drrw->drr_offset,
+		    (u_longlong_t)drrw->drr_logical_size,
+		    (u_longlong_t)drrw->drr_compressed_size,
 		    item->dp_payload_size,
-		    drrw->drr_key.ddk_prop,
+		    (u_longlong_t)drrw->drr_key.ddk_prop,
 		    stringify_encryption_fields(&drrw->drr_salt));
 	}
 	maybe_dump_payload(item);
@@ -321,20 +322,20 @@ dump_write_byref_record(drr_packet_t *item)
 	struct drr_write_byref *drrwbr = &item->dp_drr.drr_u.drr_write_byref;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("WRITE_BYREF object = %zu "
-		    "checksum type = %u props = %zx "
-		    "offset = %zu length = %zu "
-		    "toguid = %zx refguid = %zx "
-		    "refobject = %zu refoffset = %zu\n",
-		    drrwbr->drr_object,
+		printf("WRITE_BYREF object = %llu "
+		    "checksum type = %u props = %llx "
+		    "offset = %llu length = %llu "
+		    "toguid = %llx refguid = %llx "
+		    "refobject = %llu refoffset = %llu\n",
+		    (u_longlong_t)drrwbr->drr_object,
 		    drrwbr->drr_checksumtype,
-		    drrwbr->drr_key.ddk_prop,
-		    drrwbr->drr_offset,
-		    drrwbr->drr_length,
-		    drrwbr->drr_toguid,
-		    drrwbr->drr_refguid,
-		    drrwbr->drr_refobject,
-		    drrwbr->drr_refoffset);
+		    (u_longlong_t)drrwbr->drr_key.ddk_prop,
+		    (u_longlong_t)drrwbr->drr_offset,
+		    (u_longlong_t)drrwbr->drr_length,
+		    (u_longlong_t)drrwbr->drr_toguid,
+		    (u_longlong_t)drrwbr->drr_refguid,
+		    (u_longlong_t)drrwbr->drr_refobject,
+		    (u_longlong_t)drrwbr->drr_refoffset);
 	}
 }
 
@@ -344,11 +345,11 @@ dump_free_record(drr_packet_t *item)
 	struct drr_free *drrf = &item->dp_drr.drr_u.drr_free;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("FREE object = %zu "
-		    "offset = %zu length = %zd\n",
-		    drrf->drr_object,
-		    drrf->drr_offset,
-		    drrf->drr_length);
+		printf("FREE object = %llu "
+		    "offset = %llu length = %lld\n",
+		    (u_longlong_t)drrf->drr_object,
+		    (u_longlong_t)drrf->drr_offset,
+		    (longlong_t)drrf->drr_length);
 	}
 }
 
@@ -358,17 +359,17 @@ dump_spill_record(drr_packet_t *item)
 	struct drr_spill *drrs = &item->dp_drr.drr_u.drr_spill;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("SPILL block for object = %zu "
-		    "length = %zu flags = %u "
+		printf("SPILL block for object = %llu "
+		    "length = %llu flags = %u "
 		    "compression type = %u "
-		    "compressed_size = %zu "
+		    "compressed_size = %llu "
 		    "payload_size = %u "
 		    "%s\n",
-		    drrs->drr_object,
-		    drrs->drr_length,
+		    (u_longlong_t)drrs->drr_object,
+		    (u_longlong_t)drrs->drr_length,
 		    drrs->drr_flags,
 		    drrs->drr_compressiontype,
-		    drrs->drr_compressed_size,
+		    (u_longlong_t)drrs->drr_compressed_size,
 		    item->dp_payload_size,
 		    stringify_encryption_fields(&drrs->drr_salt));
 	}
@@ -382,14 +383,14 @@ dump_write_embedded_record(drr_packet_t *item)
 	    &item->dp_drr.drr_u.drr_write_embedded;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("WRITE_EMBEDDED object = %zu "
-		    "offset = %zu length = %zu "
-		    "toguid = %zx comp = %u etype = %u "
+		printf("WRITE_EMBEDDED object = %llu "
+		    "offset = %llu length = %llu "
+		    "toguid = %llx comp = %u etype = %u "
 		    "lsize = %u psize = %u\n",
-		    drrwe->drr_object,
-		    drrwe->drr_offset,
-		    drrwe->drr_length,
-		    drrwe->drr_toguid,
+		    (u_longlong_t)drrwe->drr_object,
+		    (u_longlong_t)drrwe->drr_offset,
+		    (u_longlong_t)drrwe->drr_length,
+		    (u_longlong_t)drrwe->drr_toguid,
 		    drrwe->drr_compression,
 		    drrwe->drr_etype,
 		    drrwe->drr_lsize,
@@ -404,11 +405,11 @@ dump_object_range_record(drr_packet_t *item)
 	struct drr_object_range *drror = &item->dp_drr.drr_u.drr_object_range;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("OBJECT_RANGE firstobj = %zu "
-		    "numslots = %zu flags = %u "
+		printf("OBJECT_RANGE firstobj = %llu "
+		    "numslots = %llu flags = %u "
 		    "%s\n",
-		    drror->drr_firstobj,
-		    drror->drr_numslots,
+		    (u_longlong_t)drror->drr_firstobj,
+		    (u_longlong_t)drror->drr_numslots,
 		    drror->drr_flags,
 		    stringify_encryption_fields(&drror->drr_salt));
 	}
@@ -420,11 +421,11 @@ dump_redact_record(drr_packet_t *item)
 	struct drr_redact *drrr = &item->dp_drr.drr_u.drr_redact;
 
 	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-		printf("REDACT object = %zu offset = "
-		    "%zu length = %zu\n",
-		    drrr->drr_object,
-		    drrr->drr_offset,
-		    drrr->drr_length);
+		printf("REDACT object = %llu offset = "
+		    "%llu length = %llu\n",
+		    (u_longlong_t)drrr->drr_object,
+		    (u_longlong_t)drrr->drr_offset,
+		    (u_longlong_t)drrr->drr_length);
 	}
 }
 
@@ -442,11 +443,11 @@ chain_dump_record(drr_packet_t *item, record_type_t *context)
 	context[type].rt_dumper(item);
 
 	if (type != DRR_BEGIN && OPTION_ENABLED(chain_attrs, CA_VERY_VERBOSE)) {
-		printf("    checksum = %zx/%zx/%zx/%zx\n",
-		    cksum->zc_word[0],
-		    cksum->zc_word[1],
-		    cksum->zc_word[2],
-		    cksum->zc_word[3]);
+		printf("    checksum = %llx/%llx/%llx/%llx\n",
+		    (u_longlong_t)cksum->zc_word[0],
+		    (u_longlong_t)cksum->zc_word[1],
+		    (u_longlong_t)cksum->zc_word[2],
+		    (u_longlong_t)cksum->zc_word[3]);
 	}
 
 	return (D_OK);
@@ -543,10 +544,10 @@ zstream_do_dump(int argc, char *argv[])
 		int type = print_order[i];
 		record_type_t *rec = &record_types[type];
 		record_stats_t *stats = &attrs.ca_stats_in[type];
-		printf("\tTotal %s records = %zd (%zu bytes)\n",
+		printf("\tTotal %s records = %llu (%llu bytes)\n",
 		    rec->rt_typename,
-		    stats->rs_num_records,
-		    stats->rs_total_payload_bytes);
+		    (u_longlong_t)stats->rs_num_records,
+		    (u_longlong_t)stats->rs_total_payload_bytes);
 	}
 
 	uint64_t total_payload =
@@ -554,14 +555,15 @@ zstream_do_dump(int argc, char *argv[])
 	uint64_t total_header =
 	    attrs.ca_totals_in.rs_total_header_bytes;
 
-	printf("\tTotal records = %zu\n",
-	    attrs.ca_totals_in.rs_num_records);
-	printf("\tTotal payload size = %zu (0x%zx)\n",
-	    total_payload, total_payload);
-	printf("\tTotal header overhead = %zu (0x%zx)\n",
-	    total_header, total_header);
-	printf("\tTotal stream length = %zu (0x%zx)\n",
-	    total_header + total_payload, total_header + total_payload);
+	printf("\tTotal records = %llu\n",
+	    (u_longlong_t)attrs.ca_totals_in.rs_num_records);
+	printf("\tTotal payload size = %llu (0x%llx)\n",
+	    (u_longlong_t)total_payload, (u_longlong_t)total_payload);
+	printf("\tTotal header overhead = %llu (0x%llx)\n",
+	    (u_longlong_t)total_header, (u_longlong_t)total_header);
+	printf("\tTotal stream length = %llu (0x%llx)\n",
+	    (u_longlong_t)(total_header + total_payload),
+	    (u_longlong_t)(total_header + total_payload));
 
 	if (stream_error) {
 		fflush(stdout);

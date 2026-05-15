@@ -21,6 +21,7 @@
 #include <err.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stdtypes.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_compress.h>
 
@@ -83,9 +84,10 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 		    drro->drr_raw_bonuslen;
 		if (is_raw && bonus_gt_raw) {
 			fprintf(stderr,
-			    "Warning: object %zu has bonuslen = "
+			    "Warning: object %llu has bonuslen = "
 			    "%u > raw_bonuslen = %u\n\n",
-			    drro->drr_object, drro->drr_bonuslen,
+			    (u_longlong_t)drro->drr_object,
+			    drro->drr_bonuslen,
 			    drro->drr_raw_bonuslen);
 		}
 		break;
