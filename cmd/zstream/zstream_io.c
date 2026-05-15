@@ -154,7 +154,8 @@ set_stream_attributes(drr_packet_t *item)
 		SET_ATTR(chain_attrs, CA_BYTESWAPPED);
 		versioninfo = BSWAP_64(versioninfo);
 	} else if (magic != DMU_BACKUP_MAGIC) {
-		errx(1, "invalid ZFS stream, bad magic number %lx", magic);
+		errx(1, "invalid ZFS stream, bad magic number %llx",
+		    (u_longlong_t)magic);
 	}
 	if (i_am_big_endian == ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) {
 		SET_ATTR(chain_attrs, CA_LITTLE_ENDIAN_INPUT);
