@@ -135,10 +135,10 @@ chain_decompress_writes(drr_packet_t *item, compression_spec_t *context)
 	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
 	    drrw->drr_logical_size, drrw->drr_compressiontype);
 	if (debuff == NULL) {
-		errx(4, "decompression type %d failed for ino %zu offset %zu",
+		errx(4, "decompression type %d failed for ino %llu offset %llu",
 		    drrw->drr_compressiontype,
-		    drrw->drr_object,
-		    drrw->drr_offset);
+		    (u_longlong_t)drrw->drr_object,
+		    (u_longlong_t)drrw->drr_offset);
 	}
 	free(item->dp_payload);
 	item->dp_payload = debuff;

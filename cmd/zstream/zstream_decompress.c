@@ -63,7 +63,8 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		return (D_OK);
 	}
 
-	snprintf(key, KEYSIZE, "%zu,%zu", drrw->drr_object, drrw->drr_offset);
+	snprintf(key, KEYSIZE, "%llu,%llu",
+	    (u_longlong_t)drrw->drr_object, (u_longlong_t)drrw->drr_offset);
 	ENTRY e = { .key = key };
 	ENTRY *p = hsearch(e, FIND);
 	if (p == NULL) {
@@ -82,16 +83,18 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 			fprintf(stderr,
 			    "Resetting compression type to "
-			    "off for ino %zu offset %zu\n",
-			    drrw->drr_object, drrw->drr_offset);
+			    "off for ino %llu offset %llu\n",
+			    (u_longlong_t)drrw->drr_object,
+			    (u_longlong_t)drrw->drr_offset);
 		}
 		return (D_OK);
 	}
 
 	if (write_is_encrypted(drrw)) {
-		warnx("the write for ino %zu offset %zu is marked "
+		warnx("the write for ino %llu offset %llu is marked "
 		    "as encrypted. Attempting decompression anyway...",
-		    drrw->drr_object, drrw->drr_offset);
+		    (u_longlong_t)drrw->drr_object,
+		    (u_longlong_t)drrw->drr_offset);
 	}
 
 	dcbuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
@@ -103,8 +106,9 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		 * compression type, possibly because it gets written
 		 * multiple times in this stream.
 		 */
-		warnx("decompression failed for ino %zu offset %zu",
-		    drrw->drr_object, drrw->drr_offset);
+		warnx("decompression failed for ino %llu offset %llu",
+		    (u_longlong_t)drrw->drr_object,
+		    (u_longlong_t)drrw->drr_offset);
 		free(dcbuff);
 	} else {
 		free(item->dp_payload);
@@ -114,8 +118,9 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		drrw->drr_compressed_size = 0;
 		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
 			fprintf(stderr,
-			    "Successfully decompressed ino %zu offset %zu\n",
-			    drrw->drr_object, drrw->drr_offset);
+			    "Successfully decompressed ino %llu offset %llu\n",
+			    (u_longlong_t)drrw->drr_object,
+			    (u_longlong_t)drrw->drr_offset);
 		}
 	}
 	return (D_OK);

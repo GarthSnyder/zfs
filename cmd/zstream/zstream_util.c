@@ -37,6 +37,7 @@
 #include <string.h>
 #include <sys/abd.h>
 #include <sys/fs/zfs.h>
+#include <sys/stdtypes.h>
 #include <sys/sysmacros.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio.h>
@@ -93,8 +94,8 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 		return (B_TRUE);
 	}
 	fflush(stdout);
-	fprintf(stderr, "Incorrect checksum %s (stream offset %zu)\n", where,
-	    stream_offset);
+	fprintf(stderr, "Incorrect checksum %s (stream offset %lld)\n", where,
+	    (longlong_t)stream_offset);
 	fprintf(stderr, "Expected = %s\n", checksum_str(expected, buff,
 	    sizeof (buff)));
 	fprintf(stderr, "  Actual = %s\n", checksum_str(actual, buff,
