@@ -189,7 +189,8 @@ dump_begin_record(drr_packet_t *item)
 	printf("\tfeatures = %llx\n",
 	    DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo));
 	printf("\tmagic = %llx\n", (u_longlong_t)drrb->drr_magic);
-	printf("\tcreation_time = %llx\n", (u_longlong_t)drrb->drr_creation_time);
+	printf("\tcreation_time = %llx\n",
+	    (u_longlong_t)drrb->drr_creation_time);
 	printf("\ttype = %u\n", drrb->drr_type);
 	printf("\tflags = 0x%x\n", drrb->drr_flags);
 	printf("\ttoguid = %llx\n", (u_longlong_t)drrb->drr_toguid);
