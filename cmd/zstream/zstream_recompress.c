@@ -99,7 +99,6 @@ zstream_do_recompress(int argc, char *argv[])
 		exit(1);
 	}
 
-	zfs_refcount_init();
 	abd_init();
 	fletcher_4_init();
 	zio_init();
@@ -354,7 +353,6 @@ zstream_do_recompress(int argc, char *argv[])
 	zio_fini();
 	zstd_fini();
 	abd_fini();
-	zfs_refcount_fini();
 
 	return (0);
 }
