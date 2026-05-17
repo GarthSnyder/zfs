@@ -65,6 +65,7 @@ chain_terminator(void)
 static void
 libraries_init(void)
 {
+	zfs_refcount_init();
 	abd_init();
 	zio_init();
 	zstd_init();
@@ -80,6 +81,7 @@ libraries_fini(void)
 	zio_fini();
 	zstd_fini();
 	abd_fini();
+	zfs_refcount_fini();
 }
 
 /*
