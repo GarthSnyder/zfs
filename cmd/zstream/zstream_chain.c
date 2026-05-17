@@ -49,7 +49,7 @@ serial_null_step(void)
 	chain_step_t step = {
 		.cs_type = CS_SERIAL,
 		.cs_serial = {
-		    .process = (zc_serial_process_f *)chain_null_step;
+		    .process = (zc_serial_process_f *)chain_null_step
 		}
 	};
 	return (step);

@@ -253,7 +253,7 @@ zstream_do_redup(int argc, char *argv[])
 
 	if (OPTION_ENABLED(&attrs, CA_VERBOSE)) {
 		char mem_str[16];
-		record_stats_t *acsi = &attrs.ca_stats_in;
+		record_stats_t *acsi = attrs.ca_stats_in;
 		zfs_nicenum(context.rc_rdt.ddt_count * sizeof (redup_entry_t),
 		    mem_str, sizeof (mem_str));
 		fprintf(stderr, "Converted stream with %llu total records, "
