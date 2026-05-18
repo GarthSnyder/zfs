@@ -41,7 +41,7 @@ serial_byteswap(byteswap_stage_t stage);
 
 /*
  * Unconditionally swap a record. drr_type is passed in separately because
- * we don't know whether we're doing input or out output swapping. We need
+ * we don't know whether we're doing input or output swapping. We need
  * that value in native byte order to know how to swap the rest of the
  * record.
  */
