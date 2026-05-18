@@ -225,8 +225,8 @@ chain_read(drr_packet_t *item, io_context_t *context)
 
 	if (fread(drr, sizeof (dmu_replay_record_t), 1, context->ic_fp) != 1) {
 		if (ferror(context->ic_fp)) {
-			err(1, "error reading record header at offset %lu",
-			    context->ic_offset);
+			err(1, "error reading record header at offset %llu",
+			    (u_longlong_t)context->ic_offset);
 		}
 		fclose(context->ic_fp);
 		return (D_EOF);
@@ -235,7 +235,12 @@ chain_read(drr_packet_t *item, io_context_t *context)
 	if (context->ic_offset == 0)
 		set_stream_attributes(item);
 
-	item->dp_payload_size = calc_payload_size(&item->dp_drr);
+	size_t payload_size = calc_payload_size(&item->dp_drr);
+	if (payload_size > UINT32_MAX) {
+		errx(1, "stated packet size is greater than uint32_t"
+		    "at offset %llu", (u_longlong_t)context->ic_offset);
+	}
+	item->dp_payload_size = payload_size;
 	if (item->dp_payload_size > 0) {
 		item->dp_payload = safe_malloc(item->dp_payload_size);
 		size_t n_read = fread(item->dp_payload, item->dp_payload_size,
@@ -243,16 +248,17 @@ chain_read(drr_packet_t *item, io_context_t *context)
 		if (n_read != 1) {
 			if (ferror(context->ic_fp)) {
 				err(1, "error reading record payload at "
-				    " offset %lu", context->ic_offset);
+				    " offset %llu",
+				    (u_longlong_t)context->ic_offset);
 			} else {
 				/*
 				 * We can't exit here because the ZFS test
 				 * suite depends on being able to process
 				 * streams truncated at random places.
 				 */
-				warnx("input ends mid-record at offset %lu "
+				warnx("input ends mid-record at offset %llu "
 				    "- stream is likely corrupt",
-				    context->ic_offset);
+				    (u_longlong_t)context->ic_offset);
 				fclose(context->ic_fp);
 				free(item->dp_payload);
 				return (D_EOF);
