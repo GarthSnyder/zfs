@@ -46,6 +46,7 @@ NOUNS = [
     "biscuit", "circuit", "summit", "muppet", "trumpet", "basket", "casket",
 ]
 
+
 def random_name(used: set) -> str:
     for _ in range(1000):
         name = f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}"
@@ -67,7 +68,7 @@ def fill_file(path: Path, target_size: int, repeat=False) -> None:
         content_parts.append(para)
         total += len(para) + 1  # +1 for newline
         if not repeat:
-             para = lorem.paragraph()
+            para = lorem.paragraph()
     path.write_text("\n\n".join(content_parts) + "\n")
 
 
@@ -77,18 +78,18 @@ def main():
     )
     parser.add_argument("count", type=int, help="Number of files to create")
     parser.add_argument("-d", "--directory", default=".",
-        help="Target directory (default: .)")
+                        help="Target directory (default: .)")
     parser.add_argument("-r", "--repeat", action="store_true",
-        help="Fill files with reps of a single paragraph")
+                        help="Fill files with reps of a single paragraph")
     parser.add_argument("--min-size", type=int, default=16384,
-        help="Minimum file size in bytes (default: 2048)")
+                        help="Minimum file size in bytes (default: 2048)")
     parser.add_argument("--max-size", type=int, default=128000,
-        help="Maximum file size in bytes (default: 128000)")
+                        help="Maximum file size in bytes (default: 128000)")
     args = parser.parse_args()
 
     if args.min_size >= args.max_size:
         print(f"error: min-size ({args.min_size}) must be less than max-size "
-            f" ({args.max_size})", file=sys.stderr)
+              f" ({args.max_size})", file=sys.stderr)
         sys.exit(1)
 
     directory = Path(args.directory)

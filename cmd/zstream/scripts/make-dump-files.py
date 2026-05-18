@@ -26,6 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 def abbreviate(filename: str) -> str:
     """Split filename at dashes, take first letter of each segment, lc."""
     stem = Path(filename).stem
@@ -34,6 +35,7 @@ def abbreviate(filename: str) -> str:
         if stem.endswith(ext):
             stem = stem[: -len(ext)]
     return "".join(seg[0] for seg in stem.split("-") if seg).lower()
+
 
 def run_dump(zstream: Path, stream: Path, output: Path) -> bool:
     """Run `zstream dump -v < stream > output`.  Returns True on success."""
@@ -52,8 +54,8 @@ def run_dump(zstream: Path, stream: Path, output: Path) -> bool:
             )
             if proc.stderr:
                 print(f"    stderr: "
-                    f"{proc.stderr.decode(errors='replace').rstrip()}",
-                    file=sys.stderr)
+                      f"{proc.stderr.decode(errors='replace').rstrip()}",
+                      file=sys.stderr)
         return True
     except Exception as e:
         print(f"  ERROR: {e}", file=sys.stderr)
