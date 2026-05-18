@@ -75,11 +75,10 @@ def add_xattrs(path: str) -> int:
     total = 0
     while total < TARGET_BYTES:
         remaining = TARGET_BYTES - total
-        length = min(random.randint(40, 200), remaining) if remaining < 40 \
-            else random.randint(40, min(200, remaining))
-        # If remaining < 40, just do one final attr to hit the target
         if remaining < 40:
             length = remaining
+        else:
+            length = random.randint(40, min(200, remaining))
         name = random_attr_name(used_names)
         used_names.add(name)
         value = random_value(length)
