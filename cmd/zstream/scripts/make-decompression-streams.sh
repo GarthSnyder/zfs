@@ -37,7 +37,8 @@ zfs create -o compression=zstd-5 test/unencrypted
 "$SCRIPTDIR/gen-lorem-files.py" -r -d /test/unencrypted --min-size 140000 \
     --max-size 160000 1
 
-zfs create -o compression=lz4 -o encryption=on -o keylocation=file:///test/password -o keyformat=passphrase test/encrypted
+zfs create -o compression=lz4 -o encryption=on \
+    -o keylocation=file:///test/password -o keyformat=passphrase test/encrypted
 "$SCRIPTDIR/gen-lorem-files.py" -r -d /test/encrypted --min-size 12000 \
     --max-size 40000 3
 
