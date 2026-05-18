@@ -82,7 +82,7 @@ def main():
     parser.add_argument("-r", "--repeat", action="store_true",
                         help="Fill files with reps of a single paragraph")
     parser.add_argument("--min-size", type=int, default=16384,
-                        help="Minimum file size in bytes (default: 2048)")
+                        help="Minimum file size in bytes (default: 16384)")
     parser.add_argument("--max-size", type=int, default=128000,
                         help="Maximum file size in bytes (default: 128000)")
     args = parser.parse_args()
