@@ -263,10 +263,15 @@ chain_read(drr_packet_t *item, io_context_t *context)
 	}
 	item->dp_stream_offset = context->ic_offset;
 
-	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
-
 	uint32_t drr_type = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED) ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
+
+	if (drr_type >= DRR_NUMTYPES) {
+		err(1, "invalid record type %lu found at offset %lu",
+		    drr_type, context->ic_offset);
+	}
+
+	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
 
 	record_stats_t *stats = &chain_attrs->ca_stats_in[drr_type];
 	stats->rs_num_records++;
