@@ -69,7 +69,7 @@ def main():
     parser.add_argument("old_zstream", type=Path, help="Path to old zstream")
     parser.add_argument("new_zstream", type=Path, help="Path to new zstream")
     parser.add_argument(
-        "streams", nargs="+", type=Path, help="Compressed streams to process"
+        "streams", nargs="+", type=Path, help="Streams to process"
     )
     args = parser.parse_args()
 
