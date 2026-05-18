@@ -22,7 +22,7 @@
 # Description:
 #
 # Verify that zstream redup produces output identical to input for same-endian
-# test streams These input files contain no dedup records. However, the round
+# test streams. These input files contain no dedup records. However, the round
 # trip does involve the full pipeline as well as validating and regenerating all
 # checksums, so this is a useful check.
 #
