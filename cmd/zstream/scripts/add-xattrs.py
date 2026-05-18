@@ -1,5 +1,5 @@
 #!/tmp/zstream-venv/bin/python3
-"""Add at least 600 bytes of random extended attributes to files."""
+"""Add at least 1024 bytes of random extended attributes to files."""
 
 #
 # SPDX-License-Identifier: CDDL-1.0
