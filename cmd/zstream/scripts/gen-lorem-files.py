@@ -1,5 +1,5 @@
 #!/tmp/zstream-venv/bin/python3
-"""Generate files with random names filled with lorem ipsum paragraphs."""
+"""Generate randomly-named files with lorem ipsum paragraphs."""
 
 #
 # SPDX-License-Identifier: CDDL-1.0
@@ -76,14 +76,19 @@ def main():
         description="Generate files with random names and lorem ipsum content."
     )
     parser.add_argument("count", type=int, help="Number of files to create")
-    parser.add_argument("-d", "--directory", default=".", help="Target directory (default: .)")
-    parser.add_argument("-r", "--repeat", action="store_true", help="Fill files with reps of a single paragraph")
-    parser.add_argument("--min-size", type=int, default=16384, help="Minimum file size in bytes (default: 2048)")
-    parser.add_argument("--max-size", type=int, default=128000, help="Maximum file size in bytes (default: 128000)")
+    parser.add_argument("-d", "--directory", default=".",
+        help="Target directory (default: .)")
+    parser.add_argument("-r", "--repeat", action="store_true",
+        help="Fill files with reps of a single paragraph")
+    parser.add_argument("--min-size", type=int, default=16384,
+        help="Minimum file size in bytes (default: 2048)")
+    parser.add_argument("--max-size", type=int, default=128000,
+        help="Maximum file size in bytes (default: 128000)")
     args = parser.parse_args()
 
     if args.min_size >= args.max_size:
-        print(f"error: min-size ({args.min_size}) must be less than max-size ({args.max_size})", file=sys.stderr)
+        print(f"error: min-size ({args.min_size}) must be less than max-size "
+            f" ({args.max_size})", file=sys.stderr)
         sys.exit(1)
 
     directory = Path(args.directory)

@@ -61,5 +61,7 @@ echo "very small" > /test/redacted/encrypted/small-encrypted
 zfs snapshot -r test/redacted@clean
 
 zfs redact test/source@baseline redaction-bookmark test/redacted@clean
-zfs send -ce --redact redaction-bookmark test/source@baseline > /tmp/all-record-types-base.zsend
-zfs send -Rcew -i test/source@baseline test/redacted@clean > /tmp/all-record-types-incr.zsend
+zfs send -ce --redact redaction-bookmark test/source@baseline \
+    > /tmp/all-record-types-base.zsend
+zfs send -Rcew -i test/source@baseline test/redacted@clean \
+    > /tmp/all-record-types-incr.zsend

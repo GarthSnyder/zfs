@@ -1,5 +1,5 @@
 #!/tmp/zstream-venv/bin/python3
-"""Add random extended attributes to files until 600 bytes of xattrs are added."""
+"""Add at least 600 bytes of random extended attributes to files."""
 
 #
 # SPDX-License-Identifier: CDDL-1.0
@@ -70,12 +70,13 @@ def random_value(length: int) -> bytes:
 
 
 def add_xattrs(path: str) -> int:
-    """Add xattrs to path until TARGET_BYTES total value bytes added. Returns bytes added."""
+    """Add xattrs to path until TARGET_BYTES added. Returns bytes added."""
     used_names = set()
     total = 0
     while total < TARGET_BYTES:
         remaining = TARGET_BYTES - total
-        length = min(random.randint(40, 200), remaining) if remaining < 40 else random.randint(40, min(200, remaining))
+        length = min(random.randint(40, 200), remaining) if remaining < 40 else
+            random.randint(40, min(200, remaining))
         # If remaining < 40, just do one final attr to hit the target
         if remaining < 40:
             length = remaining
@@ -89,9 +90,10 @@ def add_xattrs(path: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(
-        description=f"Add random xattrs to files until {TARGET_BYTES} bytes of xattr values are added."
+        description=f"Add random xattrs to files until {TARGET_BYTES} bytes "
+            "of xattr values are added."
     )
-    parser.add_argument("files", nargs="+", help="Files to annotate with xattrs")
+    parser.add_argument("files", nargs="+", help="Files to add xattrs to")
     args = parser.parse_args()
 
     errors = 0
