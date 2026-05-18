@@ -50,10 +50,6 @@ safe_malloc(size_t size);
 extern void *
 safe_calloc(size_t n);
 
-/*
- * Returns a pointer to a static buffer. The result must be consumed before
- * the next call.
- */
 extern char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 
