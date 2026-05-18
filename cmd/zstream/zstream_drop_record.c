@@ -76,6 +76,22 @@ chain_drop_records(drr_packet_t *item, void *context)
 			    (u_longlong_t)drrw->drr_object,
 			    (u_longlong_t)drrw->drr_offset);
 		}
+		/*
+		 * It really feels like the chain executor ought to be
+		 * responsible for freeing this payload. However, it
+		 * operates at a more abstract level and knows nothing about
+		 * DMU records and their payloads, so this'll have to be
+		 * done here when the drop decision is made.
+		 *
+		 * Fine for now, but if another case like this comes up in
+		 * the future, the issue probably needs to be handled
+		 * through a more clearly defined path.
+		 */
+		if (item->dp_payload_size && item->dp_payload != NULL) {
+			free(item->dp_payload);
+			item->dp_payload = NULL;
+			item->dp_payload_size = 0;
+		}
 		return (D_DROP);
 	}
 
