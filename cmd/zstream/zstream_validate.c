@@ -65,7 +65,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 	} else if (drr->drr_type == DRR_END) {
 		VERIFY3S(context->nesting, >=, 0);
 		context->nesting--;
-	} else if (drr->drr_type > DRR_NUMTYPES) {
+	} else if (drr->drr_type >= DRR_NUMTYPES) {
 		errx(1, "unknown record type: %d", drr->drr_type);
 	} else {
 		VERIFY3S(context->nesting, ==, 1);
