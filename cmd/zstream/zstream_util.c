@@ -90,6 +90,7 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 		actual = &swapped_actual;
 		ZIO_CHECKSUM_BSWAP(actual);
 	}
+	/* cppcheck-suppress uninitvar */
 	if (ZIO_CHECKSUM_EQUAL(*expected, *actual)) {
 		return (B_TRUE);
 	}
