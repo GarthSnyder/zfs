@@ -270,9 +270,7 @@ zstream_do_recompress(int argc, char *argv[])
 				break;
 		}
 		if (ct == ZIO_COMPRESS_FUNCTIONS || IS_UNCOMPRESSED(ct)) {
-			errx(2, "invalid compression type %s. Use "
-			    "'off' to mark records as uncompressed (without "
-			    "decompressing)", argv[0]);
+			errx(2, "invalid compression type %s", argv[0]);
 		}
 		spec.cs_type = ct;
 	}
