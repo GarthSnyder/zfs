@@ -139,11 +139,11 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 		    &stream_offset);
 
 		if (fseeko(context->rc_fp, stream_offset, SEEK_SET) != 0) {
-			err(1, "seek into source file failed, offset %llu: ",
+			err(1, "seek into source file failed, offset %llu",
 			    (u_longlong_t)stream_offset);
 		}
 		if (fread(drr, sizeof (*drr), 1, context->rc_fp) != 1) {
-			err(1, "read of prior write failed: ");
+			err(1, "read of prior write failed");
 		}
 		if (ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) {
 			byteswap_record(drr, BSWAP_32(drr->drr_type));
@@ -160,7 +160,7 @@ chain_redup_writes(drr_packet_t *item, redup_context_t *context)
 		size_t n_read = fread(item->dp_payload, item->dp_payload_size,
 		    1, context->rc_fp);
 		if (n_read != 1)
-			err(1, "read of prior payload failed: ");
+			err(1, "read of prior payload failed");
 
 		drrw->drr_toguid = drrwb.drr_toguid;
 		drrw->drr_object = drrwb.drr_object;

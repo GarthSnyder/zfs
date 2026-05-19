@@ -313,7 +313,7 @@ chain_write(drr_packet_t *item, io_context_t *context)
 		size_t n_written = fwrite(item->dp_payload,
 		    item->dp_payload_size, 1, context->ic_fp);
 		if (n_written != 1) {
-			err(1, "error writing payload: ");
+			err(1, "error writing payload");
 		} else {
 			free(item->dp_payload);
 			item->dp_payload = NULL;
