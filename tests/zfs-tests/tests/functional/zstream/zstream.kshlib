@@ -83,7 +83,7 @@ function recv_and_hash
 	log_must zfs receive -F $POOL/recv < "$stream"
 	typeset mnt=$(get_prop mountpoint $POOL/recv)
 	( cd "$mnt" && find . -type f -print0 | sort -z | \
-	    xargs -0 xxhsum -H2 ) > "$hashfile"
+	    xargs -0 xxh128sum ) > "$hashfile"
 	if [[ -n $cleanup ]]; then
 		log_must zfs destroy -r $POOL/recv
 	fi
