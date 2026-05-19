@@ -28,7 +28,8 @@
 # Strategy:
 # 1. Decompress selected records with type "off"
 # 2. Verify via zstream dump that selected records now show
-#    compression type = 0 and logical_size is unchanged
+#    compression type = 0 and logical_size is unchanged (that is,
+#    the new logical size is the same as the previous compressed size)
 # 3. Receive both original and "off" streams into a test pool
 # 4. Verify that file hashes differ (junk data in affected files)
 #
