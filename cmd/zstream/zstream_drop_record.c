@@ -52,29 +52,27 @@ chain_drop_records(drr_packet_t *item, void *context)
 	struct drr_write *drrw = &drr->drr_u.drr_write;
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 	char key[KEYSIZE];
+	u_longlong_t object, offset;
 	const char *record_type;
 	ENTRY e = {.key = key};
 
 	if (drr->drr_type == DRR_WRITE) {
-		snprintf(key, KEYSIZE, "%llu,%llu",
-		    (u_longlong_t)drrw->drr_object,
-		    (u_longlong_t)drrw->drr_offset);
+		object = drrw->drr_object;
+		offset = drrw->drr_offset;
 		record_type = "WRITE";
 	} else if (drr->drr_type == DRR_WRITE_EMBEDDED) {
-		snprintf(key, KEYSIZE, "%llu,%llu",
-		    (u_longlong_t)drrwe->drr_object,
-		    (u_longlong_t)drrwe->drr_offset);
+		object = drrwe->drr_object;
+		offset = drrwe->drr_offset;
 		record_type = "WRITE_EMBEDDED";
 	} else {
 		return (D_OK);
 	}
 
+	snprintf(key, KEYSIZE, "%llu,%llu", object, offset);
 	if (hsearch(e, FIND) != NULL) {
 		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
-			warnx("dropping %s record for object %llu offset %llu",
-			    record_type,
-			    (u_longlong_t)drrw->drr_object,
-			    (u_longlong_t)drrw->drr_offset);
+			warnx("dropping %s record for object %llu "
+			    "offset %llu", record_type, object, offset);
 		}
 		/*
 		 * It really feels like the chain executor ought to be
