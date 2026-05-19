@@ -62,10 +62,6 @@ typeset failed=""
 
 for stem in "${streams[@]}"; do
 
-	typeset send_src="$ZSTREAM_DATADIR/${stem}.zsend.bz2"
-	typeset ref="$BACKDIR/${abbrev}-new.dump"
-	typeset out="$BACKDIR/${abbrev}-out.dump"
-
 	typeset abbrev=$(get_stream_abbrev "$stem")
 	typeset send_src="$ZSTREAM_DATADIR/${stem}.zsend.bz2"
 	typeset old_src="$ZSTREAM_DATADIR/${abbrev}-old.dump.bz2"

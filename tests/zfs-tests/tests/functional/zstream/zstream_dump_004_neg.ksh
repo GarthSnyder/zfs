@@ -34,7 +34,7 @@
 
 verify_runnable "both"
 
-log_assert "Non-native NATIVE-encoded streams exit with code 95."
+log_assert "Non-native NATIVE-encoded streams exit with code 45 or 95."
 
 typeset sys_endian=$(get_system_endian)
 
@@ -85,4 +85,4 @@ done
 [[ -z $failed ]] || \
     log_fail "Non-native NATIVE stream check failed:$failed"
 
-log_pass "Non-native NATIVE-encoded streams exit with code 95."
+log_pass "Non-native NATIVE-encoded streams exit with code 45 or 95."

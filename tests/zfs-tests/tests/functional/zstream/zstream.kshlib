@@ -72,7 +72,7 @@ function get_stream_abbrev
 #
 # Receive a stream into $POOL/recv, compute sorted xxhsum -H2 of all
 # regular files under the mountpoint, and write the result to $1.
-# Destroys $POOL/recv afterward if $2 is set to "cleanup".
+# Destroys $POOL/recv afterward if $3 is set to "cleanup".
 #
 function recv_and_hash
 {
