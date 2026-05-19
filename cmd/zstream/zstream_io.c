@@ -273,8 +273,8 @@ chain_read(drr_packet_t *item, io_context_t *context)
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	if (drr_type >= DRR_NUMTYPES) {
-		err(1, "invalid record type %lu found at offset %lu",
-		    drr_type, context->ic_offset);
+		err(1, "invalid record type %llu found at offset %llu",
+		    (u_longlong_t)drr_type, (u_longlong_t)context->ic_offset);
 	}
 
 	context->ic_offset += sizeof (*drr) + item->dp_payload_size;
