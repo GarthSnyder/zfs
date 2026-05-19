@@ -24,7 +24,7 @@
 # with zstream produces a stream identical to the original.
 #
 # Strategy:
-# 1. Create an filesystem with compressible data
+# 1. Create a filesystem with compressible data
 # 2. Generate a replication send stream
 # 3. Pipe the stream through zstream recompress lz4 | zstream recompress off
 # 4. Verify the result is byte-identical to the original stream
