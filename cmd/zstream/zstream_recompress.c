@@ -83,11 +83,9 @@ needs_modification(drr_packet_t *item, compression_spec_t *target)
 	if (ctype != target->cs_type) {
 		return (B_TRUE);
 	}
-	if (ZIO_COMPRESS_HASLEVEL(target->cs_type)) {
+	if (target->cs_type == ZIO_COMPRESS_ZSTD) {
 		cur_level = zfs_get_hdrlevel((void *)item->dp_payload);
-		boolean_t is_zstd = target->cs_type == ZIO_COMPRESS_ZSTD;
-		boolean_t dfl_level = target->cs_level == ZIO_COMPLEVEL_DEFAULT;
-		if (is_zstd && dfl_level) {
+		if (target->cs_level == ZIO_COMPLEVEL_DEFAULT) {
 			return (cur_level != ZIO_ZSTD_LEVEL_DEFAULT);
 		}
 		return (target->cs_level != cur_level);
