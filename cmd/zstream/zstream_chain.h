@@ -47,7 +47,7 @@ extern "C" {
  *	zstream_chain_t dump_chain = {
  *		serial_read_stream(infile),
  *		serial_validate_fletcher4(),
- *		serial_byteswap(),
+ *		serial_byteswap(BS_INCOMING),
  *		serial_validate_records(),
  *		serial_dump_records(&dump_args),
  *		serial_null_output(),
