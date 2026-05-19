@@ -78,19 +78,21 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 		break;
 
 	case DRR_OBJECT:
-		boolean_t is_raw = !!(chain_attrs->ca_feature_flags &
-		    DMU_BACKUP_FEATURE_RAW);
-		boolean_t bonus_gt_raw = drro->drr_bonuslen >
-		    drro->drr_raw_bonuslen;
-		if (is_raw && bonus_gt_raw) {
-			fprintf(stderr,
-			    "Warning: object %llu has bonuslen = "
-			    "%u > raw_bonuslen = %u\n\n",
-			    (u_longlong_t)drro->drr_object,
-			    drro->drr_bonuslen,
-			    drro->drr_raw_bonuslen);
+		{
+			boolean_t is_raw = !!(chain_attrs->ca_feature_flags &
+			    DMU_BACKUP_FEATURE_RAW);
+			boolean_t bonus_gt_raw = drro->drr_bonuslen >
+			    drro->drr_raw_bonuslen;
+			if (is_raw && bonus_gt_raw) {
+				fprintf(stderr,
+				    "Warning: object %llu has bonuslen = "
+				    "%u > raw_bonuslen = %u\n\n",
+				    (u_longlong_t)drro->drr_object,
+				    drro->drr_bonuslen,
+				    drro->drr_raw_bonuslen);
+			}
+			break;
 		}
-		break;
 
 	case DRR_WRITE:
 		if (drrw->drr_compressiontype >= ZIO_COMPRESS_FUNCTIONS) {
