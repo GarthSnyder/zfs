@@ -52,10 +52,6 @@ def run_dump(zstream: Path, stream: Path, output: Path) -> bool:
                 f"  WARNING: {zstream} exited {proc.returncode} for "
                 f"{stream.name}", file=sys.stderr
             )
-            if proc.stderr:
-                print(f"    stderr: "
-                      f"{proc.stderr.decode(errors='replace').rstrip()}",
-                      file=sys.stderr)
         return True
     except Exception as e:
         print(f"  ERROR: {e}", file=sys.stderr)
