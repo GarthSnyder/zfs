@@ -104,11 +104,11 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 	chain_attrs = attrs ? attrs : &backup_attrs;
 
 	while (chain[num_steps].cs_type != CS_TERMINATE) {
-		if (num_steps > MAX_CHAIN_LENGTH) {
-			errx(1, "unterminated zstream_chain");
-		}
 		packet_size = MAX(packet_size, chain[num_steps].cs_out_size);
 		num_steps++;
+		if (num_steps >= MAX_CHAIN_LENGTH) {
+			errx(1, "unterminated zstream_chain");
+		}
 	}
 	VERIFY3U(num_steps, >, 0);
 
