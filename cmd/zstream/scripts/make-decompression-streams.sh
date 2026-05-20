@@ -25,6 +25,8 @@ if [ $# -ne 1 ]; then
 	exit 1
 fi
 
+set -e
+
 DEVICE="$1"
 SCRIPTDIR="$(cd "$(dirname "$0")" && pwd)"
 
