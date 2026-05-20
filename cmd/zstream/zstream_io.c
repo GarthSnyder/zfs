@@ -298,8 +298,11 @@ static disposition_t
 chain_write(drr_packet_t *item, io_context_t *context)
 {
 	if (item == NULL) {
-		if (context->ic_fp)
-			fclose(context->ic_fp);
+		if (context->ic_fp) {
+ 			if (fclose(context->ic_fp) != 0)
+ 				err(1, "error closing output stream");
+ 			context->ic_fp = NULL;
+ 		}
 		return (D_OK);
 	}
 
