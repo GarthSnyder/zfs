@@ -97,8 +97,8 @@ open_file(io_context_t *context)
  * a uint8_t value or 0.
  *
  * DRR_WRITE and DRR_SPILL use 64-bit sizes. The other two record types have
- * 32-bit sizes. The drr_payloadlen field shared by all record types is also
- * 32 bits.
+ * 32-bit sizes. The drr_payloadlen field shared by all record types (but
+ * used only by BEGIN records is also 32 bits.
  */
 static size_t
 calc_payload_size(dmu_replay_record_t *drr)
@@ -124,8 +124,10 @@ calc_payload_size(dmu_replay_record_t *drr)
 	} else if (drr_type == DRR_WRITE_EMBEDDED) {
 		size32 = drrwe->drr_psize;
 		round = B_TRUE;
-	} else {
+	} else if (drr_type == DRR_BEGIN) {
 		size32 = drr->drr_payloadlen;
+	} else {
+		return (0);
 	}
 	if (size32 != 0) {
 		size = swap ? BSWAP_32(size32) : size32;
