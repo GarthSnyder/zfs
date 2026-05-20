@@ -109,7 +109,6 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		warnx("decompression failed for ino %llu offset %llu",
 		    (u_longlong_t)drrw->drr_object,
 		    (u_longlong_t)drrw->drr_offset);
-		free(dcbuff);
 	} else {
 		free(item->dp_payload);
 		item->dp_payload = dcbuff;
