@@ -34,7 +34,9 @@ extern "C" {
  * running stream checksum and fails loudly on any mismatch.
  *
  * serial_add_fletcher4() inscribes record checksums from the running
- * stream checksum, replacing whatever was there before.
+ * stream checksum, in theory replacing whatever was there before. But
+ * see note in zstream_fletcher4.c regarding zero checksums generated
+ * by send_conclusion_record(), which are preserved.
  */
 
 /*
