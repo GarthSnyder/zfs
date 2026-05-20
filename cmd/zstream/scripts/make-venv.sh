@@ -20,6 +20,8 @@
 # Copyright (c) 2026 by Garth Snyder. All rights reserved.
 #
 
+set -e
+
 python3 -m venv /tmp/zstream-venv
 . /tmp/zstream-venv/bin/activate
 pip install lorem_text
