@@ -62,7 +62,7 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 
 /*
  * Unconditionally byteswap a DMU replay record. drr_type is passed in
- * separately because we don't know whether we're doing input or out output
+ * separately because we don't know whether we're doing input or output
  * swapping.
  */
 void
@@ -169,7 +169,8 @@ byteswap_record(dmu_replay_record_t *drr, uint32_t drr_type)
 		break;
 
 	default:
-		errx(1, "unknown record type, aborting...");
+		errx(1, "unknown record type %llu, aborting...",
+		    (u_longlong_t)drr_type);
 	}
 
 	if (drr_type != DRR_BEGIN) {
