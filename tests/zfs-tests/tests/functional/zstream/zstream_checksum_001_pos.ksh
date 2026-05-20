@@ -52,12 +52,10 @@ for stem in "${streams[@]}"; do
 	bzcat "$src" > "$orig"
 	log_must eval "zstream redup '$orig' > '$redup_out'"
 
-	if cmp -s "$orig" "$redup_out" > /dev/null 2>&1; then
+	if ! cmp -s "$orig" "$redup_out" > /dev/null 2>&1; then
 		log_note "MISMATCH: $stem"
 		failed="$failed $stem"
 	fi
-
-	log_must cmp -s "$orig" "$redup_out"
 
 done
 
