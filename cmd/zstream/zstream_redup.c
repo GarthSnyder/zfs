@@ -222,7 +222,7 @@ zstream_do_redup(int argc, char *argv[])
 
 	context.rc_fp = fopen(argv[0], "rb");
 	if (context.rc_fp == NULL) {
-		err(1, "unable to open %s: ", argv[0]);
+		err(1, "unable to open %s", argv[0]);
 	}
 
 #ifdef _ILP32
