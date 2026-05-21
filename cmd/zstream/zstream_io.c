@@ -68,7 +68,7 @@ open_file(io_context_t *context)
 {
 	if (context->ic_filename) {
 		context->ic_fp = fopen(context->ic_filename,
-		    context->ic_for_reading ? "r" : "w+");
+		    context->ic_for_reading ? "rb" : "wb+");
 		if (!context->ic_fp) {
 			perror(context->ic_filename);
 			exit(1);

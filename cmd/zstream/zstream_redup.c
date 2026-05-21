@@ -220,7 +220,7 @@ zstream_do_redup(int argc, char *argv[])
 	if (argc != 1)
 		zstream_usage();
 
-	context.rc_fp = fopen(argv[0], "r");
+	context.rc_fp = fopen(argv[0], "rb");
 	if (context.rc_fp == NULL) {
 		err(1, "unable to open %s: ", argv[0]);
 	}
