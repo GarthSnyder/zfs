@@ -30,11 +30,6 @@ extern "C" {
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
 
-/*
- * Determine whether a compression type indicates no compression
- */
-#define	IS_UNCOMPRESSED(ct) (zio_compress_table[(int)(ct)].ci_compress == NULL)
-
 typedef struct {
 	enum zio_compress	cs_type;
 	int			cs_level;
@@ -68,6 +63,16 @@ validate_or_exit(zio_cksum_t *expect, zio_cksum_t *actual, boolean_t swap,
 	if (!validate_checksum(expect, actual, swap, where, stream_offset)) {
 		exit(1);
 	}
+}
+
+/*
+ * Determine whether a compression type indicates no compression
+ */
+static inline boolean_t
+ctype_is_uncompressed(enum zio_compress ct)
+{
+	VERIFY3U((int)ct, <, (int)ZIO_COMPRESS_FUNCTIONS);
+	return (zio_compress_table[(int)(ct)].ci_compress == NULL);
 }
 
 boolean_t

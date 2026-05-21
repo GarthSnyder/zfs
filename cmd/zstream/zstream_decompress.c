@@ -76,7 +76,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		/* Unspecified */
 		ctype = drrw->drr_compressiontype;
 	}
-	if (IS_UNCOMPRESSED(ctype)) {
+	if (ctype_is_uncompressed(ctype)) {
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
 		drrw->drr_logical_size = item->dp_payload_size;

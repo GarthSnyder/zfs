@@ -65,10 +65,12 @@ needs_modification(drr_packet_t *item, compression_spec_t *target)
 	if (DMU_OT_IS_METADATA(drrw->drr_type)) {
 		return (B_FALSE);
 	}
+	boolean_t ctype_uncompressed = ctype_is_uncompressed(ctype);
 	if (target == NULL) {
-		return (!IS_UNCOMPRESSED(ctype) && !write_is_encrypted(drrw));
+		return (!ctype_uncompressed && !write_is_encrypted(drrw));
 	}
-	if (IS_UNCOMPRESSED(target->cs_type) && IS_UNCOMPRESSED(ctype)) {
+	boolean_t target_uncompressed = ctype_is_uncompressed(target->cs_type);
+	if (target_uncompressed && ctype_uncompressed) {
 		return (B_FALSE);
 	}
 	/*
@@ -111,7 +113,7 @@ needs_decompression(drr_packet_t *item, compression_spec_t *context)
 	struct drr_write *drrw	 = &drr->drr_u.drr_write;
 	enum zio_compress ctype	 = drrw->drr_compressiontype;
 
-	if (IS_UNCOMPRESSED(ctype))
+	if (ctype_is_uncompressed(ctype))
 		return (B_FALSE);
 	return (needs_modification(item, context));
 }
@@ -163,7 +165,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	uint8_t *cbuff;
 	size_t	csize;
 
-	VERIFY3B(IS_UNCOMPRESSED(ctype), ==, B_TRUE);
+	VERIFY3B(ctype_is_uncompressed(ctype), ==, B_TRUE);
 	cbuff = compress_buffer(item->dp_payload, item->dp_payload_size,
 	    *context, &csize);
 	if (cbuff == NULL) {
@@ -267,7 +269,7 @@ zstream_do_recompress(int argc, char *argv[])
 			if (strcmp(argv[0], ci_name) == 0)
 				break;
 		}
-		if (ct == ZIO_COMPRESS_FUNCTIONS || IS_UNCOMPRESSED(ct)) {
+		if (ct == ZIO_COMPRESS_FUNCTIONS || ctype_is_uncompressed(ct)) {
 			errx(2, "invalid compression type %s", argv[0]);
 		}
 		spec.cs_type = ct;
