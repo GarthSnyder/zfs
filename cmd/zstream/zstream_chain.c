@@ -142,6 +142,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 				    chain[i].cs_serial.process(buffer,
 				    chain[i].cs_context);
 				if (dispo == D_EOF) {
+					VERIFY0(i);
 					done = B_TRUE;
 				} else if (dispo == D_DROP) {
 					break;
