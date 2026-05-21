@@ -51,6 +51,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 	struct dmu_replay_record *drr	= &item->dp_drr;
 	struct drr_write *drrw		= &drr->drr_u.drr_write;
 	struct drr_object *drro		= &drr->drr_u.drr_object;
+	struct drr_begin *drrb		= &drr->drr_u.drr_begin;
 
 	if (OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE))
 		return (D_OK);
@@ -64,7 +65,8 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 		context->nesting++;
 	} else if (drr->drr_type == DRR_END) {
 		VERIFY3S(context->nesting, >=, 0);
-		context->nesting--;
+		if (!IS_CONCLUSION(drr, drr->drr_type))
+			context->nesting--;
 	} else if (drr->drr_type >= DRR_NUMTYPES) {
 		errx(1, "unknown record type: %d", drr->drr_type);
 	} else {
