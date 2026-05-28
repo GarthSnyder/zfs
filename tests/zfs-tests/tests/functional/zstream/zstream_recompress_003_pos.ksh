@@ -20,24 +20,24 @@
 
 #
 # Description:
-# Verify that zstream recompress with zstd at level 19 produces a smaller
+# Verify that zstream recompress with zstd at level 10 produces a smaller
 # stream that receives with identical file contents.
 #
 # Strategy:
 # 1. Receive the original stream and compute file hashes as baseline
-# 2. Recompress the stream with zstd-19
+# 2. Recompress the stream with zstd-10
 # 3. Verify the recompressed stream is smaller than the original
 # 4. Receive the recompressed stream and verify file hashes match
 #
 
 verify_runnable "both"
 
-log_assert "Verify zstream recompress with zstd-19 produces smaller stream."
+log_assert "Verify zstream recompress with zstd-10 produces smaller stream."
 log_onexit cleanup_pool $POOL
 
 typeset src="$ZSTREAM_DATADIR/decompress.zsend.bz2"
 typeset orig="$BACKDIR/recompress.orig"
-typeset recompressed="$BACKDIR/recompress-zstd19.out"
+typeset recompressed="$BACKDIR/recompress-zstd10.out"
 typeset orig_hash="$BACKDIR/hash-baseline.txt"
 typeset rc_hash="$BACKDIR/hash-rc.txt"
 
@@ -46,8 +46,8 @@ bzcat "$src" > "$orig"
 # Baseline: receive original and hash
 recv_and_hash "$orig_hash" "$orig" cleanup
 
-# Recompress with zstd at level 19
-log_must eval "zstream recompress -l 19 zstd \
+# Recompress with zstd at level 10
+log_must eval "zstream recompress -l 10 zstd \
     < '$orig' > '$recompressed'"
 
 # Verify size is smaller
@@ -61,4 +61,4 @@ log_note "Original size: $orig_size, recompressed size: $recomp_size"
 recv_and_hash "$rc_hash" "$recompressed" cleanup
 log_must diff "$orig_hash" "$rc_hash"
 
-log_pass "zstream recompress with zstd-19 produces smaller stream."
+log_pass "zstream recompress with zstd-10 produces smaller stream."
