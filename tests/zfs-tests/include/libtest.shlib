@@ -3055,16 +3055,37 @@ function write_compressible
 		typeset bs_bytes=4096
 		typeset blocks=$(($file_bytes / $bs_bytes))
 
-		for (( i = 0; i < $nfiles; i++ )); do
-			truncate -s $file_bytes $dir/$fname.$i
+		#
+		# Write every third block with pseudorandom data to get
+		# ~66% compression.  A single python3 invocation replaces
+		# the previous loop of ~(blocks/3) individual dd processes,
+		# which was extremely slow due to per-process fork/exec
+		# overhead (e.g. ~1 400 dd invocations for 16 MB).
+		#
+		# Python's Mersenne Twister PRNG produces output that is
+		# effectively incompressible by lz4/gzip/zstd, which is
+		# all we need here.  Each file gets a different seed so
+		# that multi-file callers get distinct content.
+		#
+		log_must python3 -c "
+import random, os, sys
 
-			# Write every third block to get 66% compression.
-			for (( j = 0; j < $blocks; j += 3 )); do
-				dd if=/dev/urandom of=$dir/$fname.$i \
-				    seek=$j bs=$bs_bytes count=1 \
-				    conv=notrunc >/dev/null 2>&1
-			done
-		done
+file_bytes = $file_bytes
+bs         = $bs_bytes
+blocks     = $blocks
+nfiles     = $nfiles
+directory  = '$dir'
+fname      = '$fname'
+
+for i in range(nfiles):
+    path = os.path.join(directory, '%s.%d' % (fname, i))
+    rng  = random.Random(i)
+    with open(path, 'wb') as f:
+        f.truncate(file_bytes)
+        for j in range(0, blocks, 3):
+            f.seek(j * bs)
+            f.write(rng.getrandbits(bs * 8).to_bytes(bs, 'little'))
+"
 	else
 		command -v fio > /dev/null || log_unsupported "fio missing"
 		log_must eval fio \
