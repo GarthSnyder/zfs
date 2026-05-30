@@ -2272,14 +2272,25 @@ flush_write_batch_impl(struct receive_writer_arg *rwa)
 
 		if (drrw->drr_logical_size != dn->dn_datablksz) {
 			/*
-			 * The WRITE record is larger than the object's block
-			 * size.  We must be receiving an incremental
-			 * large-block stream into a dataset that previously did
-			 * a non-large-block receive.  Lightweight writes must
-			 * be exactly one block, so we need to decompress the
-			 * data (if compressed) and do a normal dmu_write().
+			 * The WRITE record's payload size is different from
+			 * the object's block size. If it is larger, we must
+			 * be receiving an incremental large-block stream
+			 * into a dataset that previously did a
+			 * non-large-block receive. Lightweight writes must
+			 * be exactly one block, so we need to decompress
+			 * the data (if compressed) and do a normal
+			 * dmu_write().
+			 *
+			 * A logical size smaller than the block size
+			 * indicates a malformed stream (e.g. corruption or
+			 * incorrect header rewriting). This was formerly an
+			 * assertion in debug builds but allowed unflagged
+			 * partial writes in release builds.
 			 */
-			ASSERT3U(drrw->drr_logical_size, >, dn->dn_datablksz);
+			if (drrw->drr_logical_size < dn->dn_datablksz) {
+				err = SET_ERROR(EINVAL);
+				break;
+			}
 			if (DRR_WRITE_COMPRESSED(drrw)) {
 				abd_t *decomp_abd =
 				    abd_alloc_linear(drrw->drr_logical_size,
