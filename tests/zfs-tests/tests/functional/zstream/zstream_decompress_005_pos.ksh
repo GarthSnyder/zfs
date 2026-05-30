@@ -22,22 +22,29 @@
 # Description:
 # Verify that zstream decompress with "off" as the compression type
 # changes record headers to mark them as uncompressed but leaves the
-# actual data payload untouched.  This means the received files will
-# contain raw compressed data (junk) for the affected records.
+# actual data payload untouched.
 #
 # Strategy:
 # 1. Decompress selected records with type "off"
 # 2. Verify via zstream dump that selected records now show
-#    compression type = 0 and logical_size is unchanged (that is,
-#    the new logical size is the same as the previous compressed size)
-# 3. Receive both original and "off" streams into a test pool
-# 4. Verify that file hashes differ (junk data in affected files)
+#    compression type = 0 and logical_size equals the original
+#    compressed_size (i.e., the header now claims the record is
+#    uncompressed at the smaller, originally-compressed size)
+#
+# Note: we intentionally do not attempt to zfs receive the resulting
+# stream. The data payloads are still compressed despite the header's
+# claims otherwise, so the affected WRITE records are now inconsistent
+# with the dnodes in the corresponding OBJECT records. zfs receive will
+# fail with EINVAL.
+#
+# zstream decompress off is intended to correct a specific error case
+# in which these header adjustments bring the WRITE records into alignment
+# with their dnodes rather than disrupting that relationship.
 #
 
 verify_runnable "both"
 
 log_assert "Verify decompress with 'off' changes headers but not data."
-log_onexit cleanup_pool $POOL
 
 typeset src="$ZSTREAM_DATADIR/decompress.zsend.bz2"
 typeset orig="$BACKDIR/decompress.orig"
@@ -105,16 +112,4 @@ done
 [[ -z $failed ]] || \
     log_fail "Header verification failed for:$failed"
 
-# Receive original and hash
-recv_and_hash "$BACKDIR/hash-orig.txt" "$orig" cleanup
-
-# Receive "off" stream and hash
-recv_and_hash "$BACKDIR/hash-off.txt" "$off_out" cleanup
-
-# Hashes must differ (affected files now contain junk data)
-if diff -q "$BACKDIR/hash-orig.txt" "$BACKDIR/hash-off.txt" \
-    > /dev/null 2>&1; then
-	log_fail "Expected file contents to differ, but hashes are identical"
-fi
-
-log_pass "Decompress with 'off' changes headers but not data."
+log_pass "Decompress with 'off' changes headers correctly."
