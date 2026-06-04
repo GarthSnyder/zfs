@@ -26,6 +26,7 @@ extern "C" {
 #endif
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
