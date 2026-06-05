@@ -37,16 +37,16 @@ extern "C" {
 #include "zstream_util.h"
 #include "zstream_validate.h"
 
-#define	READ_STEP 0
-
-#define	STANDARD_INPUT_STACK(infile)					\
+#define STANDARD_INPUT_STACK_Q(infile) 					\
 	serial_read_stream(infile),					\
+	parallel_calc_fletcher4(1024),					\
 	serial_validate_fletcher4(),					\
 	serial_byteswap(BS_INCOMING),					\
 	serial_validate_records()
 
-#define	STANDARD_OUTPUT_STACK(outfile)					\
+#define STANDARD_OUTPUT_STACK_Q(outfile) 				\
 	serial_byteswap(BS_OUTGOING),					\
+	parallel_calc_fletcher4(1024),					\
 	serial_add_fletcher4(),						\
 	serial_write_stream(outfile),					\
 	chain_terminator()
