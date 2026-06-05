@@ -67,6 +67,14 @@ serial_checkpoint(const char *name);
 chain_step_t
 serial_null_output(void);
 
+/* Off-the-shelf zstream_queue cost functions */
+
+size_t
+constant_cost_of_one(drr_packet_t *packet, void *context);
+
+size_t
+payload_size_as_cost(drr_packet_t *packet, void *context);
+
 #ifdef __cplusplus
 }
 #endif
