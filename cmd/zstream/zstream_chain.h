@@ -28,6 +28,8 @@ extern "C" {
 #include <stdint.h>
 #include <sys/zfs_ioctl.h>
 
+#include "zstream_queue.h"
+
 /*
  * A chain is a linear series of steps that process packets of data. It's
  * designed to modularize common functionality, reduce code duplication, and
@@ -36,9 +38,9 @@ extern "C" {
  * Some terms:
  *
  * **STEP** - A chain_step_t struct that represents a packet-processing
- * module and any arguments or context that it needs. Chain modules
- * generally define a function named serial_* that produces a chain_step_t
- * that can be incorporated directly into a chain.
+ * module and any arguments or context that it needs. Chain participants
+ * generally define a function named serial_xxx() or parallel_xxx() that
+ * produces a chain_step_t that can be incorporated directly into a chain.
  *
  * **CHAIN** - An array of chain_step_t's. It's just data, so you can create
  * the array however you like. But normally you'd just declare the whole
@@ -46,6 +48,7 @@ extern "C" {
  *
  *	zstream_chain_t dump_chain = {
  *		serial_read_stream(infile),
+ *  		parallel_calc_fletcher4(1024),
  *		serial_validate_fletcher4(),
  *		serial_byteswap(BS_INCOMING),
  *		serial_validate_records(),
@@ -73,20 +76,26 @@ extern "C" {
  * **PROCESSING FUNCTION** - Each step names a processing function that does
  * the actual work of transforming an input buffer into an output buffer.
  * The transformation happens in place, in a single buffer provided by the
- * chain.
+ * chain. (Steps that run in parallel must also identify a cost function; see
+ * zstream_queue.h.)
  *
- * The processing function should return a disposition_t, normally D_OK. A
- * function can return D_DROP to remove an item from the stream entirely. It
- * can also return D_EOF to indicate that no more data will be forthcoming.
- * However, only the first step in the chain should ever return D_EOF.
+ * The processing function for a serial step should return a disposition_t,
+ * normally D_OK. A processing function can return D_DROP to remove an item
+ * from the stream entirely. It can also return D_EOF to indicate that no
+ * more data will be forthcoming. However, only the first step in the chain
+ * should ever return D_EOF.
  *
- * Functions are called with a NULL packet pointer when the end of the
- * stream passes by them.
+ * Serial functions are called with a NULL packet when the end of the
+ * stream passes by them. Since parallel functions may see packets in any
+ * order, they have no concept of "end of stream" and do not receive this
+ * notification.
  *
  * **CONTEXT** - An arbitrary void * that the chain passes along to the
  * processing function as an argument.
  *
- * **CHAIN ATTRIBUTES** - A global set of flags available to all steps.
+ * **CHAIN ATTRIBUTES** - A global set of flags available to all steps. The
+ * chain is also responsible for tracking general statistics such as the
+ * number of records of each type that have been processed.
  */
 
 #define	CA_BYTESWAPPED			(1ULL << 0)	/* ca_attrs */
@@ -137,7 +146,7 @@ typedef struct {
 	record_stats_t	ca_stats_out[DRR_NUMTYPES];
 } chain_attrs_t;
 
-typedef enum { CS_SERIAL, CS_TERMINATE } step_type_t;
+typedef enum { CS_SERIAL, CS_PARALLEL, CS_TERMINATE } step_type_t;
 typedef enum { D_OK, D_EOF, D_DROP } disposition_t;
 
 typedef disposition_t
@@ -149,9 +158,17 @@ typedef struct chain_step
 	size_t		cs_in_size;
 	size_t		cs_out_size;
 	void		*cs_context;
-	struct {
-		zc_serial_process_f	*process;
-	} cs_serial;
+	union {
+		struct {
+			zc_serial_process_f	*process;      /* cs_serial */
+		} cs_serial;
+		struct {
+			size_t			queue_length;  /* cs_parallel */
+			size_t			batch_budget;
+			zq_estimate_cost_f	*cost;
+			zq_process_item_f	*process;
+		} cs_parallel;
+	};
 } chain_step_t;
 
 typedef chain_step_t zstream_chain_t[];
@@ -167,7 +184,7 @@ extern chain_attrs_t *chain_attrs;
 /*
  * Execute a chain. Returns once execution is complete. You can pass NULL
  * for the attrs if you're not interested in preserving them after the chain
- * has run.
+ * has run. (The chain will allocate and dispose of a buffer for them.)
  */
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs);
