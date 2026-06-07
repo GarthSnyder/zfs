@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/dmu.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_compress.h>
 #include <sys/zstd/zstd.h>
@@ -44,7 +45,8 @@
 #include "zstream.h"
 #include "zstream_chain.h"
 #include "zstream_modules.h"
-#include "zstream_util.h"
+#include "zstream_queue.h"
+#include "zstream_recompress.h"
 
 #define	MAX_COMPRESSION_STEPS 4
 

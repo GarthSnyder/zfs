@@ -24,6 +24,9 @@
 extern "C" {
 #endif
 
+#include <sys/spa_checksum.h>
+#include <sys/zfs_ioctl.h>
+
 #include "zstream_io.h"
 
 /*

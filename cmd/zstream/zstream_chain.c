@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <err.h>
 #include <libspl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/abd.h>
@@ -27,9 +28,11 @@
 #include <sys/stdtypes.h>
 #include <sys/zio.h>
 #include <sys/zstd/zstd.h>
+#include <sys/zfs_refcount.h>
 #include <zfs_fletcher.h>
 
 #include "zstream_chain.h"
+#include "zstream_queue.h"
 
 #define	MAX_CHAIN_LENGTH 32
 
