@@ -17,29 +17,30 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include <assert.h>		/* VERIFY3S, VERIFY3B			*/
-#include <atomic.h>		/* atomic_add_32, atomic_sub_32		*/
-#include <pthread.h>		/* pthread_mutex_unlock...		*/
-#include <sched.h>		/* CPU_COUNT, cpu_set_t...		*/
-#include <stdint.h>		/* uint32_t, uint64_t, uint8_t...	*/
-#include <stdio.h>		/* snprintf				*/
-#include <stdlib.h>		/* free					*/
-#include <string.h>		/* memcpy, memmove			*/
-#include <sys/param.h>		/* MAX, MIN				*/
-#include <sys/random.h>		/* random_get_pseudo_bytes		*/
+#include <assert.h>
+#include <atomic.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/param.h>
+#include <sys/random.h>
+#include <sys/stdtypes.h>
 
-#include "zstream_queue.h"	/* zq_params_t, zq_process_item_f...	*/
-#include "zstream_util.h"	/* safe_calloc, safe_malloc		*/
+#include "zstream_queue.h"
+#include "zstream_util.h"
 
-#define MIN_THREADS 	6
-#define MAX_QUEUES 	16	/* Greatest # of queues simultaneously active */
+#define	MIN_THREADS 	6
+#define	MAX_QUEUES 	16	/* Largest # of queues simultaneously active */
 
-#define PLENTY_OF_WORK	       6	/* "Many" items to claim */
-#define NO_WORK		       0.0001	/* No-work score threshold */
-#define DEQUEUE_SCORE_WEIGHT   0.3	/* Dequeue score relative weight */
+#define	PLENTY_OF_WORK		6	/* "Many" items to claim */
+#define	NO_WORK			0.0001	/* No-work score threshold */
+#define	DEQUEUE_SCORE_WEIGHT	0.3	/* Dequeue score relative weight */
 
-#define Q_MOD(queue, index)    ((index) % (queue)->zq_params.qp_queue_length)
-#define Q_SLOT(queue, index)   ((queue)->zq_slots[Q_MOD((queue), (index))])
+#define	Q_MOD(queue, index)	((index) % (queue)->zq_params.qp_queue_length)
+#define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD((queue), (index))])
 
 /*
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
@@ -135,7 +136,7 @@ thread_pool_init(void)
  * Must be called by a function holding the pool mutex
  *
  * sched_affinity() is a better estimate of available threads than
- * sysconf because sysconf doesn't take account of limits that might be
+ * sysconf because sysconf doesn't account for limits that might be
  * set on, e.g., a container.
  */
 static void
@@ -171,8 +172,10 @@ thread_pool_spinup(void)
  * mutexes are locked by separate threads, it is in fact one composite
  * operation for which the locking order is pool, then enqueue - the
  * opposite of the order that assign_queue_and_get_work() has to use. Ergo,
- * it's a deadlock risk. So we have to use a separate condition to make sure
- * no new queues are created while old threads are still being decommissioned.
+ * there is a potential risk of deadlock.
+ *
+ * To remove this risk, we use a separate condition to make sure no new
+ * queues are created while old threads are still being decommissioned.
  */
 static void
 thread_pool_spindown(void)
@@ -215,11 +218,11 @@ zstream_queue_create(zq_params_t *params)
 	*queue = (zstream_queue_t) {
 		.zq_params = *params,
 		.zq_slots = safe_malloc(params->qp_queue_length *
-		    (sizeof (queue_slot_t) + params->qp_item_size))
+		    ((sizeof (queue_slot_t)) + params->qp_item_size))
 	};
 	/*
-	 * Queue slots and item storage are allocated in one block. Connect
-	 * each slot to its item.
+	 * Queue slots and item storage are allocated in one block, so we
+	 * need to wire each slot to its item.
 	 */
 	uint8_t *item = (uint8_t *)&queue->zq_slots[params->qp_queue_length];
 	queue_slot_t *slot = &queue->zq_slots[0];
@@ -234,7 +237,10 @@ zstream_queue_create(zq_params_t *params)
 	pthread_cond_init(&queue->zq_cond.dequeued, NULL);
 
 	pool.tp_num_queues++;
-	pthread_cond_signal(&pool.tp_pool_clear);  /* May be other creators */
+
+	/* There may be other threads waiting to create queues */
+	pthread_cond_signal(&pool.tp_pool_clear);
+
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
 	return (queue);
 }
@@ -242,10 +248,10 @@ zstream_queue_create(zq_params_t *params)
 /*
  * This sweep is necessary because worker threads don't claim items that
  * require no work. They're marked as completed on enqueue, but the
- * "complete" index still needs to move to declare them officially done.
- * However, no-work items don't arrive in any particular order. Whenever we
- * complete a batch or claim a batch, we advance the completion index past
- * all completed items.
+ * "complete" index still needs to move past themm to declare them
+ * officially done. However, no-work items don't arrive in any particular
+ * order. Whenever we claim a batch or complete a batch, we advance the
+ * completion index past all completed items.
  *
  * The calling thread must hold the queue lock.
  */
@@ -275,16 +281,35 @@ advance_completion_index(zstream_queue_t *queue)
  * DEQUEUE_SCORE_WEIGHT.
  *
  * The total score is scaled by a factor that reflects how much work is
- * actually available to be claimed; no point sending threads to queues
- * without work.
+ * actually available to be claimed on the queue; there's no point assigning
+ * threads to queues that have no work.
  *
- * Queues are scored without the queue mutex being held. Ergo, the numbers
- * may be skewed or out of date. It's not a problem to overestimate
- * available work, since that just results in the claimer doing an extra
- * loop. However, there's a potential race condition if new work is enqueued
- * while scoring is going on. We don't want a newly-enqueued item to be
- * overlooked, so both claiming and enqueueing threads must hold the
- * enqueue mutex to do their work.
+ * In English, the scoring tries to assign threads to queues that are
+ * running out of space for new enqueuements or that have little completed
+ * work available to dequeue. Ergo, the main goal is to avoid pipeline
+ * stalls.
+ *
+ * To score queues, a thread must hold both the thread pool mutex and the
+ * global enqueue mutex. However, it does not need to hold mutexes for the
+ * individual queues being scored. Several corollaries:
+ *
+ * 1) Only one thread may score queues at a time.
+ *
+ * 2) Worker threads can still complete work during scoring, so queue scores
+ * may become stale before they are used.
+ *
+ * 3) If a queue score is stale, it will always err on the side of
+ * overstating the amount of work that a queue has available. This is fine
+ * because at worst, a thread is assigned to a no-work queue and loops
+ * immediately.
+ *
+ * 4) Understatement is not possible because the enqueue mutex is locked
+ * during scoring. We don't want a queue to be scored and then receive new
+ * work while the scorer is looking at other queues. That would create a
+ * potential race condition in which a scorer concludes that there is no
+ * work available on any queue and goes back to sleep. If no further items
+ * are submitted to any queue, no worker thread will ever be awakened to
+ * process the newly-enqueued item.
  */
 static inline double
 score_queue(zstream_queue_t *queue)
@@ -337,11 +362,11 @@ await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex)
 
 /*
  * Claim up to MAX_BATCH work items from the given queue, trying to
- * accumulate at least queue->qp_batch_budget worth of work data (== "cost").
- * All items in a batch will be drawn from the same queue.
+ * accumulate at least queue->qp_batch_budget worth of work data (==
+ * "cost"). All items in a batch will be drawn from the same queue.
  *
- * Does not block waiting to fill the budget; returns whatever is
- * available now.
+ * Does not block waiting to fill the budget; returns whatever is available
+ * now.
  *
  * Must be called with the queue mutex held.
  */
@@ -425,6 +450,10 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			*queue = pool.tp_queues[q];
 			pthread_mutex_lock(&(*queue)->zq_mutex);
 			int count = claim_batch(*queue, batch);
+			/*
+			 * If we didn't claim all available work, wake up
+			 * another worker thread.
+			 */
 			if ((*queue)->zq_ix.claim < (*queue)->zq_ix.enqueue ||
 				queues_with_work > 1)
 			{
@@ -538,7 +567,7 @@ zstream_queue_destroy(zstream_queue_t *queue)
 	pool.tp_num_queues--;
 
 	if (pool.tp_num_queues == 0) {
-		thread_pool_spindown();  /* Unlocks mutex */
+		thread_pool_spindown();  /* Unlocks pool mutex while running */
 	} else {
 		/* Gaps are not allowed in the tp_queues array */
 		zstream_queue_t **qscan = &pool.tp_queues[0];
@@ -570,14 +599,15 @@ zstream_dequeue(zstream_queue_t *queue, queue_item *item)
 	}
 }
 
-#ifdef MONITOR_QUEUES
+#ifdef	MONITOR_QUEUES
 
-#define JIFFIES_PER_SEC 100
-#define SAMPLE_DURATION_US 1000000
+#define	JIFFIES_PER_SEC 100
+#define	SAMPLE_DURATION_US 1000000
 
 /*
- * Monitor queue and CPU usage. This is all likely Linux-specific, but it's
- * needed only while tuning queue lengths and batch sizes.
+ * Monitor queue and CPU usage from a separate thread. This is all
+ * Linux-specific, but it's needed only while tuning queue lengths and batch
+ * sizes.
  */
 static void *
 cpu_and_queue_monitor(void *dummy)
@@ -647,10 +677,15 @@ cpu_and_queue_monitor(void *dummy)
 static void
 start_monitor_thread(void)
 {
+	static boolean_t started = B_FALSE;
 	pthread_t monitor;
-	pthread_create(&monitor, NULL, cpu_and_queue_monitor, NULL);
-	pthread_setname_np(monitor, "monitor-0");
-	pthread_detach(monitor);
+
+	if (!started) {
+		pthread_create(&monitor, NULL, cpu_and_queue_monitor, NULL);
+		pthread_setname_np(monitor, "monitor-0");
+		pthread_detach(monitor);
+		started = B_TRUE;
+	}
 }
 
-#endif  /* MONITOR_QUEUES */
+#endif	/* MONITOR_QUEUES */
