@@ -24,6 +24,8 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
 

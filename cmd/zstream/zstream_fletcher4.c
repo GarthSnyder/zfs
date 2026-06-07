@@ -20,15 +20,19 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/byteorder.h>
+#include <sys/param.h>
 #include <sys/spa_checksum.h>
 #include <sys/stdtypes.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/zfs_ioctl.h>
 #include <zfs_fletcher.h>
 
 #include "zstream_fletcher4.h"
 #include "zstream_modules.h"
+#include "zstream_queue.h"
 #include "zstream_util.h"
 
 #define	CK_OFFSET offsetof(dmu_replay_record_t, drr_u.drr_checksum.drr_checksum)
