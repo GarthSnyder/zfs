@@ -42,8 +42,6 @@
 
 typedef enum { F4_SET, F4_VALIDATE } fletcher4_op_t;
 
-typedef zio_cksum_t fletcher4_context_t;
-
 typedef struct {
 	zio_cksum_t	fc_stream_cksum;
 	fletcher4_op_t	fc_operation;
@@ -212,7 +210,7 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context)
 	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
 	    OPTION_ENABLED(chain_attrs, CA_IGNORE_CKSUMS)))
 	{
-		return (B_TRUE);
+		return (D_OK);
 	}
 
 	zio_cksum_t *stream_cksum	= &context->fc_stream_cksum;
@@ -302,7 +300,7 @@ fletcher4_serial_step(fletcher4_op_t operation)
 	ZIO_SET_CHECKSUM(&context->fc_stream_cksum, 0, 0, 0, 0);
 	return ((chain_step_t) {
 		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof (drr_packet_t),
+		.cs_in_size = sizeof (drr_fletcher4_t),
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
 		.cs_serial = {
