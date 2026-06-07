@@ -52,7 +52,7 @@ extern "C" {
 	chain_terminator()
 
 #define	STANDARD_INPUT_STACK(infile)	STANDARD_INPUT_STACK_Q(infile, 1024)
-#define	STANDARD_OUTPUT_STACK(outfile)	STANDARD_INPUT_STACK_Q(outfile, 512)
+#define	STANDARD_OUTPUT_STACK(outfile)	STANDARD_OUTPUT_STACK_Q(outfile, 512)
 
 #define	NULL_OUTPUT_STACK()						\
 	serial_null_output(),						\

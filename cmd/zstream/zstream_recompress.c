@@ -143,7 +143,7 @@ chain_decompress_writes(drr_packet_t *item, void *context)
 	debuff = decompress_buffer(item->dp_payload, item->dp_payload_size,
 	    drrw->drr_logical_size, drrw->drr_compressiontype);
 	if (debuff == NULL) {
-		errx(4. "decompression type %d failed for ino %llu offset %llu",
+		errx(4, "decompression type %d failed for ino %llu offset %llu",
 		    drrw->drr_compressiontype,
 		    (u_longlong_t)drrw->drr_object,
 		    (u_longlong_t)drrw->drr_offset);
@@ -170,7 +170,7 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
 	size_t	csize;
 
 	VERIFY3U(drr->drr_type, ==, DRR_WRITE);
-	VERIFY3B(IS_UNCOMPRESSED(ctype), ==, B_TRUE);
+	VERIFY3B(ctype_is_uncompressed(ctype), ==, B_TRUE);
 	cbuff = compress_buffer(item->dp_payload, item->dp_payload_size,
 	    *context, &csize);
 

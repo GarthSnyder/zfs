@@ -114,7 +114,7 @@ validate_chain(struct chain_info *info)
 {
 	int num_steps = 0;
 	size_t packet_size = 0;
-	zstream_chain_t chain = info->ci_chain;
+	chain_step_t *chain = info->ci_chain;
 
 	while (chain[num_steps].cs_type != CS_TERMINATE) {
 		if (num_steps > MAX_CHAIN_LENGTH) {
@@ -184,9 +184,9 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 	validate_chain(&chain_info);
 
 	int num_steps = chain_info.ci_num_steps;
-	zstream_queue_t	*queues[num_steps] = {0};
-	worker_context_t contexts[num_steps] = {0};
-	pthread_t worker_threads[num_steps] = {0};
+	zstream_queue_t	*queues[num_steps] = {};
+	worker_context_t contexts[num_steps] = {};
+	pthread_t worker_threads[num_steps] = {};
 	int num_workers = 0;
 
 	chain_info.ci_queues = queues;
@@ -206,7 +206,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 			zq_params_t queue_params = {
 				.qp_process	 = ci->cs_parallel.process,
 				.qp_cost	 = ci->cs_parallel.cost,
-				.qp_item_size	 = ci->ci_item_size,
+				.qp_item_size	 = chain_info.ci_item_size,
 				.qp_batch_budget = ci->cs_parallel.batch_budget,
 				.qp_queue_length = ci->cs_parallel.queue_length,
 				.qp_context	 = ci->cs_context
@@ -301,7 +301,7 @@ chain_exec_serialized(chain_info_t *ci)
 
 	while (!done) {
 		for (int i = 0; i < ci->ci_num_steps; i++) {
-			chain_step_t *step = &ci->ci_chain[i]
+			chain_step_t *step = &ci->ci_chain[i];
 			if (step->cs_type == CS_SERIAL) {
 				if (done) {
 					(void) step->cs_serial.process(NULL,
