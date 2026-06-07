@@ -17,44 +17,45 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#ifndef _ZSTREAM_QUEUE_H
-#define _ZSTREAM_QUEUE_H
+#ifndef	_ZSTREAM_QUEUE_H
+#define	_ZSTREAM_QUEUE_H
 
-#ifdef  __cplusplus
+#ifdef	__cplusplus
 extern "C" {
 #endif
 
 #include <stddef.h>
-#include <sys/types.h>
+#include <sys/stdtypes.h>
 
 /*
- * This is a generalized implementation of multithreaded, FIFO work queues.
+ * This is a generalized implementation of multithreaded FIFO work queues.
  *
  * Callers define a fixed item size to be used by each queue and supply two
  * thread-safe functions that 1) estimate individual items' processing cost
- * and 2) perform the actual processing. The queue treats items as black
- * boxes, so processing functions can modify them as desired.
+ * and 2) perform the actual processing. The queue treats items as boxes of
+ * raw data, so processing functions can modify them as desired.
  *
- * The cost function assigns a size_t cost that estimates the amount of
- * work needed to process an item. For operations like hashing and data
- * compression, the natural cost is typically input buffer length. The cost
- * function is run as items enter the queue, so it's single-threaded and
- * should return a value promptly. If cost estimation is important and
- * expensive, use a separate queue to implement it.
- *
- * Threading granularity is specified as a per-batch budget that is set for
- * each queue in the same units used for item costs. Threads claim items
- * until the budget is met, there are no more items available, or MAX_BATCH
- * items have been claimed. When claiming items to work on, threads never
- * block waiting for additional work to arrive. They start work as quickly
- * as possible even if the budget has not been reached.
+ * The cost function assigns a size_t cost that estimates the amount of work
+ * needed to process an item. For operations like hashing and data
+ * compression, the natural cost is typically input buffer length.
  *
  * It's expected that only a subset of input items will require processing.
  * If an item's cost is 0, it is fast-tracked and never presented to the
  * processing function.
  *
+ * The cost function is run as items enter the queue, so it's
+ * single-threaded and should return a value promptly. If cost estimation is
+ * expensive and important, use a separate queue to implement it.
+ *
+ * Dispatch granularity is specified as a per-batch budget that is set for
+ * each queue in the same (arbitrary) units used for item costs. Threads
+ * claim items until the budget is met, there are no more items available,
+ * or MAX_BATCH items have been claimed. When claiming items to work on,
+ * threads never block waiting for additional work to arrive. They start
+ * work as quickly as possible even if the budget has not been reached.
+ *
  * All queues share a single thread pool that is managed to avoid
- * contention. Threads are allocated to queues dynamically according to
+ * contention. Threads are allocated to a queues dynamically according to
  * where work is available. When multiple queues have work, threads are
  * allocated among them stochastically with an eye toward preventing
  * pipeline stalls.
@@ -64,23 +65,20 @@ extern "C" {
 
 typedef void queue_item;
 
-struct zstream_queue;
 typedef struct zstream_queue zstream_queue_t;
 
 /*
- * Required signatures that cost and processing functions must conform to.
+ * Signatures that cost and processing functions must conform to.
  */
-typedef void
-zq_process_item_f(queue_item *item, void *context);
-
 typedef size_t
 zq_estimate_cost_f(queue_item *item, void *context);
 
+typedef void
+zq_process_item_f(queue_item *item, void *context);
+
 /*
- * Create a queue. Must be called before enqueue or dequeue.
- *
- * The zq_context field is passed to the cost and processing functions and
- * is not examined by the queue itself.
+ * Create a queue. The zq_context field is passed to the cost and processing
+ * functions and is not examined by the queue itself.
  */
 
 typedef struct {
@@ -121,8 +119,8 @@ zstream_dequeue(zstream_queue_t *queue, queue_item *item);
 void
 zstream_queue_fini(zstream_queue_t *queue);
 
-#ifdef  __cplusplus
+#ifdef	__cplusplus
 }
 #endif
 
-#endif  /* _ZSTREAM_QUEUE_H */
+#endif	/* _ZSTREAM_QUEUE_H */
