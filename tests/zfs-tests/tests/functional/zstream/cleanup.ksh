@@ -29,11 +29,5 @@
 
 verify_runnable "both"
 
-if is_global_zone ; then
-	destroy_pool $POOL
-else
-	cleanup_pool $POOL
-fi
 log_must rm -rf $BACKDIR
-
-log_pass
+default_cleanup $POOL

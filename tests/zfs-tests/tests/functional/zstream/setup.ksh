@@ -29,9 +29,5 @@
 
 verify_runnable "both"
 
-if is_global_zone ; then
-	log_must zpool create $POOL $DISK1
-fi
 log_must mkdir -p $BACKDIR
-
-log_pass
+default_setup $DISK1
