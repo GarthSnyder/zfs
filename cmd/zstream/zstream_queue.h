@@ -55,7 +55,7 @@ extern "C" {
  * work as quickly as possible even if the budget has not been reached.
  *
  * All queues share a single thread pool that is managed to avoid
- * contention. Threads are allocated to a queues dynamically according to
+ * contention. Threads are allocated to a queue dynamically according to
  * where work is available. When multiple queues have work, threads are
  * allocated among them stochastically with an eye toward preventing
  * pipeline stalls.
@@ -77,7 +77,7 @@ typedef void
 zq_process_item_f(queue_item *item, void *context);
 
 /*
- * Create a queue. The zq_context field is passed to the cost and processing
+ * Create a queue. The qp_context field is passed to the cost and processing
  * functions and is not examined by the queue itself.
  */
 
