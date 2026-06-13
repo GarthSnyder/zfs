@@ -178,6 +178,13 @@ typedef chain_step_t zstream_chain_t[];
 extern chain_attrs_t *chain_attrs;
 
 /*
+ * Set to B_TRUE to force serialized execution. In this mode, queues are not
+ * used and the behavior is similar to that of prior versions of
+ * zstream_chain. Intended for debugging.
+ */
+boolean_t serialize_chains;
+
+/*
  * Execute a chain. Returns once execution is complete. You can pass NULL
  * for the attrs if you're not interested in preserving them after the chain
  * has run. (The chain will allocate and dispose of a buffer for them.)
