@@ -155,7 +155,7 @@ sprintf_bytes(char *str, uint8_t *buf, uint_t buf_len)
 static void
 maybe_dump_payload(drr_packet_t *item)
 {
-	if (OPTION_ENABLED(chain_attrs, CA_DUMP_DATA)) {
+	if (OPTION_ENABLED(CA_DUMP_DATA)) {
 		print_block(item->dp_payload, item->dp_payload_size);
 	}
 }
@@ -198,7 +198,7 @@ dump_begin_record(drr_packet_t *item)
 	printf("\ttoname = %s\n", drrb->drr_toname);
 	printf("\tpayloadlen = %u\n", drr->drr_payloadlen);
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE))
+	if (OPTION_ENABLED(CA_VERBOSE))
 		printf("\n");
 
 	if (drr->drr_payloadlen >= 2) {
@@ -252,7 +252,7 @@ dump_object_record(drr_packet_t *item)
 {
 	struct drr_object *drro = &item->dp_drr.drr_u.drr_object;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("OBJECT object = %llu type = %u "
 		    "bonustype = %u blksz = %u bonuslen = %u "
 		    "dn_slots = %u raw_bonuslen = %u "
@@ -282,7 +282,7 @@ dump_freeobjects_record(drr_packet_t *item)
 {
 	struct drr_freeobjects *drrfo = &item->dp_drr.drr_u.drr_freeobjects;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("FREEOBJECTS firstobj = %llu numobjs = %llu\n",
 		    (u_longlong_t)drrfo->drr_firstobj,
 		    (u_longlong_t)drrfo->drr_numobjs);
@@ -294,7 +294,7 @@ dump_write_record(drr_packet_t *item)
 {
 	struct drr_write *drrw = &item->dp_drr.drr_u.drr_write;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("WRITE object = %llu type = %u "
 		    "checksum type = %u compression type = %u "
 		    "flags = %u offset = %llu "
@@ -322,7 +322,7 @@ dump_write_byref_record(drr_packet_t *item)
 {
 	struct drr_write_byref *drrwbr = &item->dp_drr.drr_u.drr_write_byref;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("WRITE_BYREF object = %llu "
 		    "checksum type = %u props = %llx "
 		    "offset = %llu length = %llu "
@@ -345,7 +345,7 @@ dump_free_record(drr_packet_t *item)
 {
 	struct drr_free *drrf = &item->dp_drr.drr_u.drr_free;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("FREE object = %llu "
 		    "offset = %llu length = %lld\n",
 		    (u_longlong_t)drrf->drr_object,
@@ -359,7 +359,7 @@ dump_spill_record(drr_packet_t *item)
 {
 	struct drr_spill *drrs = &item->dp_drr.drr_u.drr_spill;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("SPILL block for object = %llu "
 		    "length = %llu flags = %u "
 		    "compression type = %u "
@@ -383,7 +383,7 @@ dump_write_embedded_record(drr_packet_t *item)
 	struct drr_write_embedded *drrwe =
 	    &item->dp_drr.drr_u.drr_write_embedded;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("WRITE_EMBEDDED object = %llu "
 		    "offset = %llu length = %llu "
 		    "toguid = %llx comp = %u etype = %u "
@@ -405,7 +405,7 @@ dump_object_range_record(drr_packet_t *item)
 {
 	struct drr_object_range *drror = &item->dp_drr.drr_u.drr_object_range;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("OBJECT_RANGE firstobj = %llu "
 		    "numslots = %llu flags = %u "
 		    "%s\n",
@@ -421,7 +421,7 @@ dump_redact_record(drr_packet_t *item)
 {
 	struct drr_redact *drrr = &item->dp_drr.drr_u.drr_redact;
 
-	if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+	if (OPTION_ENABLED(CA_VERBOSE)) {
 		printf("REDACT object = %llu offset = "
 		    "%llu length = %llu\n",
 		    (u_longlong_t)drrr->drr_object,
@@ -443,7 +443,7 @@ chain_dump_record(drr_packet_t *item, record_type_t *context)
 
 	context[type].rt_dumper(item);
 
-	if (type != DRR_BEGIN && OPTION_ENABLED(chain_attrs, CA_VERY_VERBOSE)) {
+	if (type != DRR_BEGIN && OPTION_ENABLED(CA_VERY_VERBOSE)) {
 		printf("    checksum = %llx/%llx/%llx/%llx\n",
 		    (u_longlong_t)cksum->zc_word[0],
 		    (u_longlong_t)cksum->zc_word[1],

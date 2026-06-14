@@ -70,7 +70,7 @@ chain_drop_records(drr_packet_t *item, void *context)
 
 	snprintf(key, KEYSIZE, "%llu,%llu", object, offset);
 	if (hsearch(e, FIND) != NULL) {
-		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+		if (OPTION_ENABLED(CA_VERBOSE)) {
 			warnx("dropping %s record for object %llu "
 			    "offset %llu", record_type, object, offset);
 		}

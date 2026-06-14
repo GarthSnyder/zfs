@@ -74,7 +74,7 @@ chain_add_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
 	zio_cksum_t *record_cksum  = &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum	   = &drre->drr_checksum;
 
-	boolean_t swap = OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT);
+	boolean_t swap = OPTION_ENABLED(CA_BYTESWAP_ON_OUTPUT);
 	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	if (drr_type == DRR_BEGIN) {
@@ -107,7 +107,7 @@ chain_add_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
 static disposition_t
 chain_validate_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
 {
-	if (item == NULL || OPTION_ENABLED(chain_attrs, CA_IGNORE_CKSUMS)) {
+	if (item == NULL || OPTION_ENABLED(CA_IGNORE_CKSUMS)) {
 		return (D_OK);
 	}
 
@@ -116,7 +116,7 @@ chain_validate_fletcher4(drr_packet_t *item, zio_cksum_t *stream_cksum)
 	zio_cksum_t *record_cksum  = &drr->drr_u.drr_checksum.drr_checksum;
 	zio_cksum_t *end_cksum	   = &drre->drr_checksum;
 
-	boolean_t swap = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+	boolean_t swap = ATTR_IS_SET(CA_BYTESWAPPED);
 	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	if (drr_type == DRR_BEGIN) {

@@ -52,7 +52,7 @@ chain_validate_records(drr_packet_t *item, validate_context_t *context)
 	struct drr_write *drrw		= &drr->drr_u.drr_write;
 	struct drr_object *drro		= &drr->drr_u.drr_object;
 
-	if (OPTION_ENABLED(chain_attrs, CA_DO_NOT_VALIDATE))
+	if (OPTION_ENABLED(CA_DO_NOT_VALIDATE))
 		return (D_OK);
 
 	if (item->dp_stream_offset == 0 && drr->drr_type != DRR_BEGIN) {

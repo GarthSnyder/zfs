@@ -80,7 +80,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
 		drrw->drr_logical_size = item->dp_payload_size;
-		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+		if (OPTION_ENABLED(CA_VERBOSE)) {
 			fprintf(stderr,
 			    "Resetting compression type to "
 			    "off for ino %llu offset %llu\n",
@@ -115,7 +115,7 @@ chain_decompress_named_writes(drr_packet_t *item, void *context)
 		item->dp_payload_size = drrw->drr_logical_size;
 		drrw->drr_compressiontype = 0;
 		drrw->drr_compressed_size = 0;
-		if (OPTION_ENABLED(chain_attrs, CA_VERBOSE)) {
+		if (OPTION_ENABLED(CA_VERBOSE)) {
 			fprintf(stderr,
 			    "Successfully decompressed ino %llu offset %llu\n",
 			    (u_longlong_t)drrw->drr_object,

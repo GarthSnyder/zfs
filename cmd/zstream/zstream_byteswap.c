@@ -48,9 +48,9 @@ chain_byteswap(drr_packet_t *item, byteswap_context_t *context)
 
 	struct dmu_replay_record *drr = &item->dp_drr;
 	boolean_t input_swapped = *context == BS_INCOMING &&
-	    ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+	    ATTR_IS_SET(CA_BYTESWAPPED);
 	boolean_t swap = input_swapped || (*context == BS_OUTGOING &&
-	    OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT));
+	    OPTION_ENABLED(CA_BYTESWAP_ON_OUTPUT));
 	uint32_t drr_type =
 	    input_swapped ? BSWAP_32(drr->drr_type) : drr->drr_type;
 

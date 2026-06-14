@@ -108,7 +108,7 @@ calc_payload_size(dmu_replay_record_t *drr)
 	struct drr_spill *drrs		 = &drr->drr_u.drr_spill;
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
 
-	boolean_t swap = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+	boolean_t swap = ATTR_IS_SET(CA_BYTESWAPPED);
 	uint32_t drr_type = swap ? BSWAP_32(drr->drr_type) : drr->drr_type;
 	uint64_t size, size64 = 0;
 	uint32_t size32 = 0;
@@ -153,38 +153,36 @@ set_stream_attributes(drr_packet_t *item)
 	boolean_t swap_on_output, is_deduped;
 
 	if (magic == BSWAP_64(DMU_BACKUP_MAGIC)) {
-		SET_ATTR(chain_attrs, CA_BYTESWAPPED);
+		SET_ATTR(CA_BYTESWAPPED);
 		versioninfo = BSWAP_64(versioninfo);
 	} else if (magic != DMU_BACKUP_MAGIC) {
 		errx(1, "invalid ZFS stream, bad magic number %llx",
 		    (u_longlong_t)magic);
 	}
-	if (i_am_big_endian == ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED)) {
-		SET_ATTR(chain_attrs, CA_LITTLE_ENDIAN_INPUT);
+	if (i_am_big_endian == ATTR_IS_SET(CA_BYTESWAPPED)) {
+		SET_ATTR(CA_LITTLE_ENDIAN_INPUT);
 	} else {
-		SET_ATTR(chain_attrs, CA_BIG_ENDIAN_INPUT);
+		SET_ATTR(CA_BIG_ENDIAN_INPUT);
 	}
 	chain_attrs->ca_feature_flags = DMU_GET_FEATUREFLAGS(versioninfo);
 
 	is_deduped =
-	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUP) ||
-	    STREAM_HAS_FEATURE(chain_attrs, DMU_BACKUP_FEATURE_DEDUPPROPS);
+	    STREAM_HAS_FEATURE(DMU_BACKUP_FEATURE_DEDUP) ||
+	    STREAM_HAS_FEATURE(DMU_BACKUP_FEATURE_DEDUPPROPS);
 
-	if (OPTION_ENABLED(chain_attrs, CA_FORBID_DEDUP) && is_deduped) {
+	if (OPTION_ENABLED(CA_FORBID_DEDUP) && is_deduped) {
 		errx(1, "input stream is deduplicated, but this subcommand "
 		    "does not support deduplicated streams. Use 'zstream "
 		    "redup' to reduplicate.");
 	}
-	boolean_t req_dedup = OPTION_ENABLED(chain_attrs, CA_REQUIRE_DEDUP);
-	boolean_t is_dedup = STREAM_HAS_FEATURE(chain_attrs,
-	    DMU_BACKUP_FEATURE_DEDUP);
+	boolean_t req_dedup = OPTION_ENABLED(CA_REQUIRE_DEDUP);
+	boolean_t is_dedup = STREAM_HAS_FEATURE(DMU_BACKUP_FEATURE_DEDUP);
 	if (req_dedup && !is_dedup) {
 		errx(1, "this subcommand requires a deduplicated input "
 		    "stream, but the stream is not deduplicated");
 	}
-	boolean_t req_native = OPTION_ENABLED(chain_attrs,
-	    CA_REQUIRE_NATIVE_ENDIAN);
-	boolean_t is_byteswapped = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+	boolean_t req_native = OPTION_ENABLED(CA_REQUIRE_NATIVE_ENDIAN);
+	boolean_t is_byteswapped = ATTR_IS_SET(CA_BYTESWAPPED);
 	if (req_native && is_byteswapped) {
 		errx(1, "this subcommand requires a native-endian "
 		    "input stream");
@@ -200,14 +198,14 @@ set_stream_attributes(drr_packet_t *item)
 	 * and assumes, at least in some cases, that payload data has the
 	 * same order as the DMU wrappers.
 	 */
-	if (OPTION_ENABLED(chain_attrs, CA_BIG_ENDIAN_OUT))
+	if (OPTION_ENABLED(CA_BIG_ENDIAN_OUT))
 		swap_on_output = !i_am_big_endian;
-	else if (OPTION_ENABLED(chain_attrs, CA_LITTLE_ENDIAN_OUT))
+	else if (OPTION_ENABLED(CA_LITTLE_ENDIAN_OUT))
 		swap_on_output = i_am_big_endian;
-	else if (OPTION_ENABLED(chain_attrs, CA_OPPOSITE_ENDIAN_OUT))
-		swap_on_output = !ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+	else if (OPTION_ENABLED(CA_OPPOSITE_ENDIAN_OUT))
+		swap_on_output = !ATTR_IS_SET(CA_BYTESWAPPED);
 	else
-		swap_on_output = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED);
+		swap_on_output = ATTR_IS_SET(CA_BYTESWAPPED);
 
 	if (swap_on_output) {
 		ENABLE_OPTION(chain_attrs, CA_BYTESWAP_ON_OUTPUT);
@@ -271,7 +269,7 @@ chain_read(drr_packet_t *item, io_context_t *context)
 	}
 	item->dp_stream_offset = context->ic_offset;
 
-	uint32_t drr_type = ATTR_IS_SET(chain_attrs, CA_BYTESWAPPED) ?
+	uint32_t drr_type = ATTR_IS_SET(CA_BYTESWAPPED) ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	if (drr_type >= DRR_NUMTYPES) {
@@ -325,7 +323,7 @@ chain_write(drr_packet_t *item, io_context_t *context)
 		}
 	}
 
-	uint32_t drr_type = OPTION_ENABLED(chain_attrs, CA_BYTESWAP_ON_OUTPUT) ?
+	uint32_t drr_type = OPTION_ENABLED(CA_BYTESWAP_ON_OUTPUT) ?
 	    BSWAP_32(drr->drr_type) : drr->drr_type;
 
 	record_stats_t *stats = &chain_attrs->ca_stats_out[drr_type];
