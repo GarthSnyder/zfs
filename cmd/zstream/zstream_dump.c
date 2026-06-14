@@ -496,7 +496,7 @@ zstream_do_dump(int argc, char *argv[])
 			ENABLE_OPTION(&attrs, CA_IGNORE_CKSUMS);
 			break;
 		case 'v':
-			if (OPTION_ENABLED(&attrs, CA_VERBOSE)) {
+			if (attrs.ca_command_opts & CA_VERBOSE) {
 				ENABLE_OPTION(&attrs, CA_VERY_VERBOSE);
 			} else {
 				ENABLE_OPTION(&attrs, CA_VERBOSE);
