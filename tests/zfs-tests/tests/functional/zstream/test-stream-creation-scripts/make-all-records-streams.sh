@@ -45,10 +45,10 @@ rm /test/redacted/to-be-redacted
 "$SCRIPTDIR/gen-lorem-files.py" -r -d /test/redacted --min-size 4096 \
     --max-size 32000 3
 "$SCRIPTDIR/add-xattrs.py" /test/redacted/*
-cd /test/redacted
+cd /test/redacted || exit 1
 tar cf /tmp/dups.tar .
 mkdir copies
-cd copies
+cd copies || exit 1
 tar xvf /tmp/dups.tar
 
 echo "password" > /test/redacted/new-key
