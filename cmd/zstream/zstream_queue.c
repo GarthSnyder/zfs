@@ -19,6 +19,7 @@
 
 #include <assert.h>
 #include <atomic.h>
+#include <err.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -42,6 +43,9 @@
 #define	Q_MOD(queue, index)	((index) % (queue)->zq_params.qp_queue_length)
 #define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD((queue), (index))])
 
+#define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
+	    (queue)->zq_params.qp_queue_length)
+
 /*
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
  * complete, and dequeue, in that order. No index can move beyond its
@@ -50,21 +54,51 @@
  * leave the ring buffer, so FIFO order is guaranteed on dequeueing.
  *
  * In concept, every index has a corresponding condition that threads can
- * wait on if they are interested in knowing when that index moves. However,
- * no condition is needed for "claimed" because the transition to
- * "completed" occurs as work is done. That is, the same thread moves both
- * the "claimed" index and the "completed" index at different phases of the
- * same operation.
+ * wait on if they are interested in knowing when that index moves:
+ * enqueued, claimed, completed, dequeued. However, the exact reality
+ * deviates from this model in two ways:
  *
- * The "enqueued" condition is shared among all queues and lives at the
- * level of the thread pool. That's because threads are not associated with
- * any particular queue while waiting for work.
+ * - There is no "claimed" condition because no thread would wait on it.
+ * Claiming and processing are one unified operation. Dequeuers await the
+ * "completed" condition.
  *
- * Worker threads hold no locks while performing actual work.
+ * - All queues share one thread pool, so idle threads are not bound to any
+ * particular queue. Instead of having queue-specific "enqueued" conditions,
+ * one condition is shared by all queues. Each worker thread is assigned to
+ * a queue on awakening through a scoring mechanism described in the
+ * comments preceding score_queue().
+ *
+ * THREAD SAFETY STRATEGY
+ *
+ * There are four types of lock:
+ *
+ * - One global lock that gates changes to the thread pool and queue cohort
+ * - A second global lock that controls the creation of new queues
+ * - A third global lock associated with the shared "enqueued" condition
+ * - One lock for each queue
+ *
+ * Although the "enqueued" condition and its associated lock are stored as
+ * part of the global thread pool, they are logically separate from the pool
+ * itself.
+ *
+ * For the most part, locking is straightforward. Any operation that adds or
+ * removes queues or threads should hold the pool lock. Any operation that
+ * moves a queue's indices should hold the queue lock. Any thread waiting
+ * for work should wait on the "enqueued" condition.
+ *
+ * Worker threads hold no locks while they are actually processing items.
+ *
+ * Several operations require multiple locks. In these cases, a standardized
+ * locking order is used to avoid the possibility of deadlocks: enqueue ->
+ * pool -> queue -> create.
+ *
+ * Several cases merit additional commentary regarding locking. These are
+ * marked with a "locking note" in the comments preceding the relevant
+ * function.
  */
 
 typedef struct {
-	queue_item	*qs_item;
+	queue_item_t	*qs_item;
 	size_t		qs_cost;
 	boolean_t	qs_completed;
 	boolean_t	qs_end_of_stream;
@@ -83,8 +117,8 @@ typedef struct {
 } zq_conditions_t;
 
 typedef struct {
-	int		max_depth;
 	int		min_depth;
+	int		max_depth;
 } zq_stats_t;
 
 struct zstream_queue {
@@ -99,14 +133,13 @@ struct zstream_queue {
 
 typedef struct {
 	pthread_mutex_t	tp_pool_mutex;
+	pthread_mutex_t tp_create_mutex;
 	pthread_mutex_t tp_enqueue_mutex;
 	pthread_cond_t	tp_enqueued;
 	zstream_queue_t	*tp_queues[MAX_QUEUES];
 	int		tp_num_queues;
 	pthread_t	*tp_threads;
 	int		tp_num_threads;
-	boolean_t	tp_in_spindown;
-	pthread_cond_t	tp_pool_clear;
 } thread_pool_t;
 
 typedef void cleanup_f(void *);
@@ -127,13 +160,13 @@ static void
 thread_pool_init(void)
 {
 	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
+	pthread_mutex_init(&pool.tp_create_mutex, NULL);
 	pthread_mutex_init(&pool.tp_enqueue_mutex, NULL);
 	pthread_cond_init(&pool.tp_enqueued, NULL);
-	pthread_cond_init(&pool.tp_pool_clear, NULL);
 }
 
 /*
- * Must be called by a function holding the pool mutex
+ * Locking note: must be called by a function holding the pool mutex
  *
  * sched_affinity() is a better estimate of available threads than
  * sysconf because sysconf doesn't account for limits that might be
@@ -166,22 +199,30 @@ thread_pool_spinup(void)
 }
 
 /*
- * Must be called by a thread holding the pool mutex. However, we can't
- * leave the pool mutex locked during thread joining because threads need to
- * be able to lock the enqueue mutex to be canceled. Even though the two
- * mutexes are locked by separate threads, it is in fact one composite
- * operation for which the locking order is pool, then enqueue - the
- * opposite of the order that assign_queue_and_get_work() has to use. Ergo,
- * there is a potential risk of deadlock.
+ * Locking note: thread_pool_spindown() is a pool-level operation and by
+ * rights should hold the pool mutex. (And in fact, the caller must already
+ * hold that mutex.)
  *
- * To remove this risk, we use a separate condition to make sure no new
- * queues are created while old threads are still being decommissioned.
+ * However, we can't leave the pool mutex locked while canceling threads
+ * because most threads will be waiting on the "enqueued" condition. That
+ * condition is protected by the enqueue mutex, which threads must lock just
+ * to wake up and be canceled.
+ *
+ * Even though the two mutexes are locked by different threads, it is still
+ * one composite operation for which the locking order is pool -> enqueue.
+ * That's incompatible with our standard locking order of enqueue -> pool ->
+ * queue -> create, so continuing to hold the pool mutex risks deadlock.
+ *
+ * If we are here, that means there are no existing queues, so we needn't
+ * worry about operations being attempted on queues. The one potential
+ * conflict is with zstream_queue_create(). That's the reason for the
+ * existence of the seemingly redundant "create" mutex. It lets us prevent
+ * the creation of new queues while simultaneously dropping the pool lock.
  */
 static void
 thread_pool_spindown(void)
 {
-	pool.tp_in_spindown = B_TRUE;
-
+	pthread_mutex_lock(&pool.tp_create_mutex);
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
 
 	for (int i = 0; i < pool.tp_num_threads; i++) {
@@ -193,21 +234,20 @@ thread_pool_spindown(void)
 	pool.tp_num_threads = 0;
 
 	pthread_mutex_lock(&pool.tp_pool_mutex);
-
-	pool.tp_in_spindown = B_FALSE;
-	pthread_cond_signal(&pool.tp_pool_clear);
+	pthread_mutex_unlock(&pool.tp_create_mutex);
 }
 
+/*
+ * Locking note: see comments on thread_pool_spindown() for an explanation
+ * of why this operation requires two locks.
+ */
 zstream_queue_t *
 zstream_queue_create(zq_params_t *params)
 {
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
+	pthread_mutex_lock(&pool.tp_create_mutex);
 	VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
-
-	while (pool.tp_in_spindown) {
-		pthread_cond_wait(&pool.tp_pool_clear, &pool.tp_pool_mutex);
-	}
 
 	if (!pool.tp_num_threads) {
 		thread_pool_spinup();
@@ -222,7 +262,7 @@ zstream_queue_create(zq_params_t *params)
 	};
 	/*
 	 * Queue slots and item storage are allocated in one block, so we
-	 * need to wire each slot to its item.
+	 * need to wire each slot to its item buffer.
 	 */
 	uint8_t *item = (uint8_t *)&queue->zq_slots[params->qp_queue_length];
 	queue_slot_t *slot = &queue->zq_slots[0];
@@ -239,23 +279,41 @@ zstream_queue_create(zq_params_t *params)
 	pool.tp_num_queues++;
 
 	/* There may be other threads waiting to create queues */
-	pthread_cond_signal(&pool.tp_pool_clear);
-
+	pthread_mutex_unlock(&pool.tp_create_mutex);
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
+
 	return (queue);
 }
 
 /*
- * This sweep is necessary because worker threads don't claim items that
- * require no work. They're marked as completed on enqueue, but the
- * "complete" index still needs to move past themm to declare them
- * officially done. However, no-work items don't arrive in any particular
- * order. Whenever we claim a batch or complete a batch, we advance the
- * completion index past all completed items.
+ * Try to advance the "complete" index as far as possible by examining the
+ * qs_completed flag on each item. This can't be done directly by the
+ * threads that complete the work, for a couple of reasons:
  *
- * The calling thread must hold the queue lock.
+ * - Items can be completed in any order. Just because you (a thread) have
+ * finished your batch doesn't mean that all prior batches have completed.
+ * If there are uncompleted items ahead of you in the ring buffer, you can't
+ * advance the completion index past them.
+ *
+ * - Items for which the cost function returns 0 are marked as qs_completed
+ * on enqueue and are never seen by a worker thread. So, there needs to be
+ * an independent mechanism to sweep the completion index past these items
+ * whenever that becomes possible.
+ *
+ * This function is called:
+ *
+ * - Whenever a thread completes a batch
+ * - Whenever a thread claims a batch
+ * - Whenever an item of cost 0 is enqueued
+ *
+ * Strictly speaking, advancing on claiming a batch is not logically
+ * necessary. However, the claimer already holds the queue mutex, and
+ * it's in our interest to make completed items available for dequeueing as
+ * expeditiously as possible.
+ *
+ * Locking note: the calling thread must hold the queue mutex.
  */
-static void
+static inline void
 advance_completion_index(zstream_queue_t *queue)
 {
 	boolean_t any_completed = B_FALSE;
@@ -271,8 +329,14 @@ advance_completion_index(zstream_queue_t *queue)
 }
 
 /*
- * Score a queue according to its need for workers. Higher is better. The
- * calling thread must hold the enqueue mutex and the pool mutex.
+ * Locking note: the calling thread must hold the enqueue mutex and the
+ * thread pool mutex.
+ *
+ * This function scores a queue according to its need for workers. Higher is
+ * better. The scoring tries to assign threads to queues that are running
+ * out of space for new enqueuements or that have little completed work
+ * available to dequeue. The broader goal is to try to avoid pipeline
+ * stalls.
  *
  * Two measures are used for scoring. The "open score" is 1/M where M is the
  * number of slots available to receive new items. The "dequeue score" is
@@ -280,18 +344,13 @@ advance_completion_index(zstream_queue_t *queue)
  * two measures are added together with the dequeue score scaled by
  * DEQUEUE_SCORE_WEIGHT.
  *
- * The total score is scaled by a factor that reflects how much work is
+ * The composite score is scaled by a factor that reflects how much work is
  * actually available to be claimed on the queue; there's no point assigning
  * threads to queues that have no work.
  *
- * In English, the scoring tries to assign threads to queues that are
- * running out of space for new enqueuements or that have little completed
- * work available to dequeue. Ergo, the main goal is to avoid pipeline
- * stalls.
- *
  * To score queues, a thread must hold both the thread pool mutex and the
- * global enqueue mutex. However, it does not need to hold mutexes for the
- * individual queues being scored. Several corollaries:
+ * global enqueue mutex. However, it does not need to hold the mutex for the
+ * queue being scored. Several corollaries:
  *
  * 1) Only one thread may score queues at a time.
  *
@@ -327,6 +386,10 @@ score_queue(zstream_queue_t *queue)
 	return (need * claim_factor);
 }
 
+/*
+ * Return a random index from an array of doubles, with the likelihood of
+ * index i being selected equal to weights[i] / sum(weights).
+ */
 static inline int
 select_stochastic(double weights[], int num_values)
 {
@@ -368,7 +431,18 @@ await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex)
  * Does not block waiting to fill the budget; returns whatever is available
  * now.
  *
- * Must be called with the queue mutex held.
+ * Locking note: this function must be called with both the queue mutex and
+ * the thread pool mutex held. zstream_queue_destroy() can't hold a queue's
+ * mutex while destroying it (because destruction entails destroying the
+ * queue mutex, which must be unlocked), so holding the queue mutex while
+ * attempting to claim work is not a sufficient guarantee of correctness.
+ *
+ * In other contexts, we have more certainty about whether a queue still has
+ * work to do. If it does, it can't be destroyed while we hold the queue
+ * mutex alone. But here, we merely suspect that there's work available
+ * based on possibly outdated queue scoring information. By the time we get
+ * here, the queue might already have been finalized. Holding the thread
+ * pool mutex as well guarantees no interference.
  */
 static int
 claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
@@ -378,8 +452,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 	boolean_t more_to_claim, more_slots, more_budget;
 	boolean_t first_and_only, ok_to_claim;
 
-	while (B_TRUE)
-	{
+	while (B_TRUE) {
 		more_to_claim = queue->zq_ix.claim < queue->zq_ix.enqueue;
 		more_slots = count < MAX_BATCH;
 		more_budget = cost_claimed < queue->zq_params.qp_batch_budget;
@@ -406,22 +479,25 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * Threads are assigned to a queue on each loop so they can be shifted
  * dynamically to follow available work.
  *
- * This is the only operation during which multiple mutexes are held. At
- * first we must hold both the enqueue mutex (to be sure new work doesn't
- * get sneaked in after a queue is scored, which might cause it to be
- * overlooked entirely) and the pool mutex (to guarantee that no queue can
- * be destroyed out from under us).
+ * Locking note: this function has complex locking behavior. At first we
+ * must hold both the enqueue mutex (to be sure new work doesn't get sneaked
+ * in after a queue is scored, which might cause it to be overlooked
+ * entirely) and the thread pool mutex (to guarantee that no queue can be
+ * destroyed out from under us).
  *
- * After scoring, we can release the enqueue mutex. However, we need to
+ * After scoring, we can release the enqueue mutex. However, we need to then
  * obtain the queue mutex without releasing the pool mutex because there is
  * still the potential for a claim-vs-destroy race.
  *
- * If additional multi-mutex operations are ever added, they must be
- * compatible with the acquisition ordering
+ * This sequence dictates the lock acquisition ordering for all of
+ * zstream_queue:
  *
- *    enqueue > pool > queue
+ * enqueue -> pool -> queue -> create
  *
- * to guarantee that the system can't deadlock.
+ * If everyone follows that order, deadlocks can't occur. Unfortunately,
+ * thread_pool_spindown() would like to acquire two of these locks in the
+ * wrong order, so it uses a separate work-around. See the comments for that
+ * function.
  */
 static int
 assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
@@ -483,10 +559,10 @@ queue_worker(void *dummy)
 		void *context = queue->zq_params.qp_context;
 		atomic_add_32(&items_claimed, count);
 		/*
-		 * Complete the whole batch without holding any locks. We
-		 * can't mark items as completed without holding the queue
-		 * lock because that creates a race condition with
-		 * advance_completion_index().
+		 * Locking note: we complete the whole batch without holding
+		 * any locks. However, we can't mark items as completed
+		 * without holding the queue lock because that creates a
+		 * race condition with advance_completion_index().
 		 */
 		for (int i = 0; i < count; i++) {
 			process(batch[i]->qs_item, context);
@@ -507,15 +583,12 @@ queue_worker(void *dummy)
  * Implements both _enqueue and _fini. item == NULL for fini.
  */
 void
-zstream_enqueue(zstream_queue_t *queue, queue_item *item)
+zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
-
 	VERIFY3B(queue->zq_disallow_enqueue, ==, B_FALSE);
 
-	while (queue->zq_ix.enqueue - queue->zq_ix.dequeue >=
-	    queue->zq_params.qp_queue_length)
-	{
+	while (Q_FULL(queue)) {
 		await_condition(&queue->zq_cond.dequeued, &queue->zq_mutex);
 	}
 
@@ -526,6 +599,9 @@ zstream_enqueue(zstream_queue_t *queue, queue_item *item)
 		slot->qs_completed = slot->qs_cost == 0;
 		slot->qs_end_of_stream = B_FALSE;
 		memcpy(slot->qs_item, item, queue->zq_params.qp_item_size);
+		if (slot->qs_completed) {
+			advance_completion_index(queue);
+		}
 	} else {
 		slot->qs_cost = 0;
 		slot->qs_completed = B_TRUE;
@@ -558,8 +634,13 @@ zstream_queue_destroy(zstream_queue_t *queue)
 	pthread_mutex_lock(&pool.tp_pool_mutex);
 
 	pthread_mutex_destroy(&queue->zq_mutex);
-	pthread_cond_destroy(&queue->zq_cond.completed);
 	pthread_cond_destroy(&queue->zq_cond.dequeued);
+
+	if (pthread_cond_destroy(&queue->zq_cond.completed) != 0) {
+		errx(1, "cannot destroy zstream_queue completed condition - "
+		    "are you attempting to dequeue from multiple threads "
+		    "simultaneously?");
+	}
 
 	free(queue->zq_slots);
 	queue->zq_slots = NULL;
@@ -578,8 +659,18 @@ zstream_queue_destroy(zstream_queue_t *queue)
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
+/*
+ * Locking note: if more than one thread attempts to dequeue items
+ * simultaneously, disaster is nearly certain. It will work fine until the
+ * end of the stream, at which point it's a tossup between a race condition
+ * with multiple attempts to destroy the whole queue vs. an attempt to
+ * delete a condition that another thread is waiting on. The latter will be
+ * trapped in zstream_queue_destroy(), but the former will likely just
+ * crash. Hence the warning not to do multithreaded dequeues in
+ * zstream_queue.h.
+ */
 boolean_t
-zstream_dequeue(zstream_queue_t *queue, queue_item *item)
+zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
 	while (queue->zq_ix.dequeue >= queue->zq_ix.complete) {
@@ -589,6 +680,7 @@ zstream_dequeue(zstream_queue_t *queue, queue_item *item)
 	queue->zq_ix.dequeue++;
 	if (slot->qs_end_of_stream) {
 		pthread_mutex_unlock(&queue->zq_mutex);
+		/* Potential race point */
 		zstream_queue_destroy(queue);
 		return (B_FALSE);
 	} else {

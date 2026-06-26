@@ -31,9 +31,10 @@ extern "C" {
  * This is a generalized implementation of multithreaded FIFO work queues.
  *
  * Callers define a fixed item size to be used by each queue and supply two
- * thread-safe functions that 1) estimate individual items' processing cost
- * and 2) perform the actual processing. The queue treats items as boxes of
- * raw data, so processing functions can modify them as desired.
+ * thread-safe functions that 1) estimate individual items' processing costs
+ * and 2) perform the actual processing. The queue never inspects or
+ * interprets items in the queue, so processing functions can modify them as
+ * desired.
  *
  * The cost function assigns a size_t cost that estimates the amount of work
  * needed to process an item. For operations like hashing and data
@@ -63,7 +64,7 @@ extern "C" {
 
 #define MAX_BATCH 16	/* The most items that can be claimed at once */
 
-typedef void queue_item;
+typedef void queue_item_t;
 
 typedef struct zstream_queue zstream_queue_t;
 
@@ -71,10 +72,10 @@ typedef struct zstream_queue zstream_queue_t;
  * Signatures that cost and processing functions must conform to.
  */
 typedef size_t
-zq_estimate_cost_f(queue_item *item, void *context);
+zq_estimate_cost_f(queue_item_t *item, void *context);
 
 typedef void
-zq_process_item_f(queue_item *item, void *context);
+zq_process_item_f(queue_item_t *item, void *context);
 
 /*
  * Create a queue. The qp_context field is passed to the cost and processing
@@ -95,10 +96,11 @@ zstream_queue_create(zq_params_t *params);
 
 /*
  * Submit a work item. Blocks if the input queue is full. The work item
- * struct is shallow-copied into the queue.
+ * struct is shallow-copied into the queue. Multiple threads may enqueue at
+ * once.
  */
 void
-zstream_enqueue(zstream_queue_t *queue, queue_item *item);
+zstream_enqueue(zstream_queue_t *queue, queue_item_t *item);
 
 /*
  * Retrieve a completed work item. The caller must provide a buffer into
@@ -106,10 +108,12 @@ zstream_enqueue(zstream_queue_t *queue, queue_item *item);
  * ready, this call will block.
  *
  * If zstream_dequeue returns B_FALSE, the stream is complete. The returned
- * item is not valid and no further calls may be made.
+ * item is not valid and no further calls may be made on the queue.
+ *
+ * Only one thread may dequeue at once.
  */
 boolean_t
-zstream_dequeue(zstream_queue_t *queue, queue_item *item);
+zstream_dequeue(zstream_queue_t *queue, queue_item_t *item);
 
 /*
  * Declare that all items have been submitted. The queue will continue to
