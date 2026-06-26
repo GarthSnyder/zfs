@@ -44,7 +44,7 @@ extern "C" {
  *
  * **CHAIN** - An array of chain_step_t's. It's just data, so you can create
  * the array however you like. But normally you'd just declare the whole
- * thing:
+ * chain at once:
  *
  *	zstream_chain_t dump_chain = {
  *		serial_read_stream(infile),
@@ -170,19 +170,10 @@ typedef struct chain_step
 typedef chain_step_t zstream_chain_t[];
 
 /*
- * Chain attributes accessible to any step on the chain. In theory this
- * could cause a race condition between reading and setting, but all
- * attributes are typically set by the time the first record has been read.
- * Ergo, nobody else will be executing while that first chain_read() runs.
+ * Chain attributes accessible to any step on the chain. These are normally
+ * accessed through the macros defined above.
  */
 extern chain_attrs_t *chain_attrs;
-
-/*
- * Set to B_TRUE to force serialized execution. In this mode, queues are not
- * used and the behavior is similar to that of prior versions of
- * zstream_chain. Intended for debugging.
- */
-boolean_t serialize_chains;
 
 /*
  * Execute a chain. Returns once execution is complete. You can pass NULL
@@ -192,8 +183,18 @@ boolean_t serialize_chains;
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs);
 
-chain_step_t
-serial_null_step(void);
+/*
+ * Execute a chain linearly, without queues and without multithreading. This
+ * form of execution is intended as a debugging aid, both for clients and
+ * for the chain mechanism itself. If this variant doesn't produce results
+ * identical to zstream_chain_exec(), there's a multithreading-related bug
+ * somewhere.
+ *
+ * It is not necessary to remove parallel steps from the input chain. They
+ * are accepted as-is, but their execution won't be parallelized.
+ */
+void
+zstream_chain_exec_serialized(zstream_chain_t chain, chain_attrs_t *attrs);
 
 chain_step_t
 chain_terminator(void);
