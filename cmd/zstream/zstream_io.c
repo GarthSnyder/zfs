@@ -17,6 +17,7 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+#include "zstream_io.h"
 #include <arpa/inet.h>
 #include <err.h>
 #include <libzutil.h>
@@ -369,8 +370,8 @@ setup_io(const char *filename, boolean_t for_reading)
 
 	chain_step_t step = {
 		.cs_type = CS_SERIAL,
-		.cs_in_size = 0,
-		.cs_out_size = sizeof (drr_packet_t),
+		.cs_in_size = for_reading ? 0 : sizeof (drr_packet_t),
+		.cs_out_size = for_reading ? sizeof (drr_packet_t) : 0,
 		.cs_context = &io_contexts[context_num],
 		.cs_serial = {
 			.process = (zc_serial_process_f *)
