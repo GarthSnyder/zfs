@@ -50,7 +50,7 @@
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
  * complete, and dequeue, in that order. No index can move beyond its
  * preceding index. Every interval between indices contains work items in a
- * particular state: enqueued, claimed for work, pt completed. Items never
+ * particular state: enqueued, claimed for work, or completed. Items never
  * leave the ring buffer, so FIFO order is guaranteed on dequeueing.
  *
  * In concept, every index has a corresponding condition that threads can
@@ -501,7 +501,8 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 
 /*
  * Threads are assigned to a queue on each loop so they can be shifted
- * dynamically to follow available work.
+ * dynamically to follow available work. Idle threads will typically
+ * be awaiting the "enqueued" condition within this function.
  *
  * Locking note: this function has complex locking behavior. At first we
  * must hold both the enqueue mutex (to be sure new work doesn't get sneaked
@@ -654,6 +655,11 @@ zstream_queue_fini(zstream_queue_t *queue) {
 	zstream_enqueue(queue, NULL);
 }
 
+/*
+ * Note that this function is not public. The only way to destroy a queue
+ * through the public API is to call zstream_queue_fini(), wait for all
+ * items to be processed, and then dequeue all items.
+ */
 static void
 zstream_queue_destroy(zstream_queue_t *queue)
 {
