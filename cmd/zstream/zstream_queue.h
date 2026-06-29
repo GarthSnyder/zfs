@@ -34,11 +34,11 @@ extern "C" {
  * thread-safe functions that 1) estimate individual items' processing costs
  * and 2) perform the actual processing. The queue never inspects or
  * interprets items in the queue, so processing functions can modify them as
- * desired.
+ * they wish.
  *
  * The cost function assigns a size_t cost that estimates the amount of work
  * needed to process an item. For operations like hashing and data
- * compression, the natural cost is typically input buffer length.
+ * compression, the natural cost is typically payload length.
  *
  * It's expected that only a subset of input items will require processing.
  * If an item's cost is 0, it is fast-tracked and never presented to the
@@ -56,7 +56,7 @@ extern "C" {
  * work as quickly as possible even if the budget has not been reached.
  *
  * All queues share a single thread pool that is managed to avoid
- * contention. Threads are allocated to a queue dynamically according to
+ * contention. Threads are assigned to queues dynamically according to
  * where work is available. When multiple queues have work, threads are
  * allocated among them stochastically with an eye toward preventing
  * pipeline stalls.
@@ -78,6 +78,15 @@ typedef void
 zq_process_item_f(queue_item_t *item, void *context);
 
 /*
+ * Set the number of threads to be spawned for queue work. Since all queues
+ * share a thread pool, this value affects all queues. The value must be set
+ * before any queues are created. By default, one thread is spawned for
+ * every CPU core.
+ */
+void
+zstream_queue_set_num_threads(u_int num_threads);
+
+/*
  * Create a queue. The qp_context field is passed to the cost and processing
  * functions and is not examined by the queue itself.
  */
@@ -95,9 +104,8 @@ zstream_queue_t *
 zstream_queue_create(zq_params_t *params);
 
 /*
- * Submit a work item. Blocks if the input queue is full. The work item
- * struct is shallow-copied into the queue. Multiple threads may enqueue at
- * once.
+ * Submit a work item. Blocks if the queue is full. The work item is
+ * shallow-copied into the queue. Multiple threads may enqueue at once.
  */
 void
 zstream_enqueue(zstream_queue_t *queue, queue_item_t *item);

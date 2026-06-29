@@ -281,16 +281,25 @@ zstream_do_recompress(int argc, char *argv[])
 {
 	int c;
 	int level = ZIO_COMPLEVEL_DEFAULT;
+	uint_t num_threads = 0;
 
 	chain_attrs_t attrs = { .ca_command_opts = CA_FORBID_DEDUP };
 
-	while ((c = getopt(argc, argv, "l:")) != -1) {
+	while ((c = getopt(argc, argv, "t:l:")) != -1) {
 		switch (c) {
 		case 'l':
 			if (sscanf(optarg, "%d", &level) != 1) {
 				warnx("failed to parse level '%s'", optarg);
 				zstream_usage();
 			}
+			break;
+		case 't':
+			if (sscanf(optarg, "%u", &num_threads) != 1) {
+				warnx("failed to parse num_threads '%s'",
+				    optarg);
+				zstream_usage();
+			}
+			zstream_queue_set_num_threads(num_threads);
 			break;
 		case '?':
 			warnx("invalid option '%c'", optopt);

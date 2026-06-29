@@ -64,9 +64,9 @@
  *
  * - All queues share one thread pool, so idle threads are not bound to any
  * particular queue. Instead of having queue-specific "enqueued" conditions,
- * one condition is shared by all queues. Each worker thread is assigned to
- * a queue on awakening through a scoring mechanism described in the
- * comments preceding score_queue().
+ * one condition is shared by all queues. On awakening, each worker thread
+ * is dynamically assigned to a queue using a scoring mechanism described
+ * in the comments on score_queue().
  *
  * THREAD SAFETY STRATEGY
  *
@@ -89,8 +89,7 @@
  * Worker threads hold no locks while they are actually processing items.
  *
  * Several operations require multiple locks. In these cases, a standardized
- * locking order is used to avoid the possibility of deadlocks: enqueue ->
- * pool -> queue -> create.
+ * locking order is used to avoid deadlocks: enqueue -> pool -> queue -> create.
  *
  * Several cases merit additional commentary regarding locking. These are
  * marked with a "locking note" in the comments preceding the relevant
@@ -154,7 +153,23 @@ start_monitor_thread(void);
 #endif
 
 static thread_pool_t	pool = {0};
+static int		num_threads = 0;
+static boolean_t	pool_initialized = B_FALSE;
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
+
+void
+zstream_queue_set_num_threads(uint_t n)
+{
+	if (pool_initialized) {
+		errx(1, "thread pool size must be set before creating queues");
+	} else if (n < MIN_THREADS) {
+		errx(1, "number of threads must be at least %d", MIN_THREADS);
+	} else if (n > 256) {
+		warnx("num_threads = %u seems suspiciously high, setting "
+		    "anyway...", n);
+	}
+	num_threads = n;
+}
 
 static void
 thread_pool_init(void)
@@ -163,11 +178,13 @@ thread_pool_init(void)
 	pthread_mutex_init(&pool.tp_create_mutex, NULL);
 	pthread_mutex_init(&pool.tp_enqueue_mutex, NULL);
 	pthread_cond_init(&pool.tp_enqueued, NULL);
+	pool_initialized = B_TRUE;
 }
 
 /*
  * Locking note: must be called by a function holding the pool mutex
  *
+ * If num_threads is nonzero, it sets the number of
  * sched_affinity() is a better estimate of available threads than
  * sysconf because sysconf doesn't account for limits that might be
  * set on, e.g., a container.
@@ -176,13 +193,17 @@ static void
 thread_pool_spinup(void)
 {
 	pool.tp_num_queues = 0;
-#ifdef CPU_COUNT
-	cpu_set_t cpu_set;
-	sched_getaffinity(0, sizeof (cpu_set_t), &cpu_set);
-	pool.tp_num_threads = CPU_COUNT(&cpu_set);
+	if (num_threads > 0) {
+		pool.tp_num_threads = num_threads;
+	} else {
+#ifdef	CPU_COUNT
+		cpu_set_t cpu_set;
+		sched_getaffinity(0, sizeof (cpu_set_t), &cpu_set);
+		pool.tp_num_threads = CPU_COUNT(&cpu_set);
 #else
-	pool.tp_num_threads = sysconf(_SC_NPROCESSORS_ONLN);
+		pool.tp_num_threads = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
+	}
 	pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	pool.tp_threads = safe_malloc(sizeof (pthread_t) * pool.tp_num_threads);
 	for (int i = 0; i < pool.tp_num_threads; i++) {
