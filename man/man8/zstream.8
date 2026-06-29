@@ -198,12 +198,12 @@ Note that encrypted send streams cannot be recompressed.
 .It Fl t Ar num_threads
 Specifies the number of compression worker threads. By default,
 .Nm zstream Cm recompress
-spawns a thread for every CPU core. It's generally unhelpful to raise
+creates a thread for every CPU core. It's generally unproductive to raise
 .Ar num_threads
 above this default. On some architectures, contention for
 resources such as memory caches can reduce efficiency when many threads are
-active. It may be helpful to run with fewer threads, particularly when
-automating operations on shared servers.
+active. On those systems, it may be helpful to run with fewer threads,
+particularly when automating operations on shared servers.
 .El
 .Bl -tag -width "-l"
 .It Fl l Ar level
