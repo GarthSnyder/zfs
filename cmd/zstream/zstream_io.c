@@ -17,7 +17,6 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
-#include "zstream_io.h"
 #include <arpa/inet.h>
 #include <err.h>
 #include <libzutil.h>
@@ -32,7 +31,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "zstream_chain.h"
 #include "zstream_modules.h"
 #include "zstream_util.h"
 

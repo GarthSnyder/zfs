@@ -40,7 +40,7 @@
 
 /*
  * Copied from zfs_fletcher.c. See comments below regarding the
- * fletcher_4_incremental_combine function.
+ * fletcher_4_incremental_combine() function.
  */
 #define	MAX_FLETCHER_BLOCK	(8ULL << 20)
 
@@ -75,8 +75,8 @@ fletcher_4(boolean_t swap, void *buff, size_t size, void *cksum)
 }
 
 /*
- * The function below (and the MAX_FLETCHER_BLOCK define) are
- * copied from zfs_fletcher.c, where they're internal.
+ * The function below and the MAX_FLETCHER_BLOCK define are copied from
+ * zfs_fletcher.c, where they're internal.
  *
  * Fletcher checksums CAN be computed in parallel, with the segments later
  * being reassembled. However, the combine function needs to know the
@@ -86,9 +86,9 @@ fletcher_4(boolean_t swap, void *buff, size_t size, void *cksum)
  *
  * My understanding of this is that the checksum fields themselves can and
  * will overflow for long hash texts. However, they still function properly
- * as checksums when this happens. It's just that overflow has to be
- * handled correctly in a structured fashion, not by allowing intermediate
- * calculations to overflow.
+ * as checksums when this happens. But overflow has to be handled correctly
+ * in a structured fashion, not by allowing intermediate calculations to
+ * overflow.
  */
 static inline void
 fletcher4_incremental_combine(zio_cksum_t *zcp, const uint64_t size,
@@ -115,14 +115,14 @@ fletcher4_incremental_combine(zio_cksum_t *zcp, const uint64_t size,
 
 /*
  * This is the parallel portion of checksum calculation. We calculate only
- * the checksum blocks for the payloads. The records themselves are summed
- * in the serial step.
+ * the checksum blocks for payloads. The records themselves are summed in
+ * the serial step.
  *
  * Because MAX_FLETCHER_BLOCK is 8MB, the great majority of payloads need
- * only a single checksum calculation. The drr_fletcher4_t struct has both
- * a first-block checksum field and a pointer to an overflow block. The
- * overflow block is not allocated unless the payload size is greater than
- * MAX_FLETCHER_BLOCK.
+ * only a single checksum calculation. The drr_fletcher4_t struct has both a
+ * first-block checksum field and a pointer to an overflow block on the
+ * heap. The overflow block is not allocated unless the payload size is
+ * greater than MAX_FLETCHER_BLOCK.
  */
 static void
 chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
@@ -180,9 +180,9 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
 
 /*
  * This function implements the serial portions of both validation and
- * inscription, based on fc_operation. Checksumming is either very early
- * in a chain or very late, so records are potentially byteswapped in
- * either mode.
+ * inscription, based on the fc_operation field of the context struct.
+ * Checksumming is either very early in a chain or very late, so records
+ * are potentially in non-native endianness in either mode.
  *
  * This function emits or validates a replay record with proper checksums
  * and with proper maintenance of the stream checksum. That is:
@@ -205,7 +205,7 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
  * Null zstream transformations should be idempotent. E.g., a zstream redup
  * that does not redup anything should yield a stream that is bit-for-bit
  * identical to the original stream. So, it's helpful to emulate zfs send's
- * checksumming practices just to minimize spurious differences between
+ * checksumming pattern just to minimize spurious differences between
  * input and output streams.
  */
 static disposition_t
@@ -275,7 +275,9 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context)
 
 /*
  * Since checksumming is either very early or very late in the chain, these
- * queues double as I/O buffers. Ergo, the default queue length is long.
+ * queues effectively double as I/O buffers. Ergo, the default queue length
+ * is long. The batch budget is also large because Fletcher 4 calculations
+ * are fast.
  */
 chain_step_t
 parallel_calc_fletcher4(int queue_length)
@@ -307,8 +309,7 @@ fletcher4_serial_step(fletcher4_op_t operation)
 		.cs_out_size = sizeof (drr_packet_t),
 		.cs_context = context,
 		.cs_serial = {
-			.process =
-			    (zc_serial_process_f *)chain_fletcher4,
+			.process = (zc_serial_process_f *)chain_fletcher4,
 		}
 	});
 }

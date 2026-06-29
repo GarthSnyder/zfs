@@ -50,7 +50,7 @@ typedef struct {
 } chain_stats_t;
 
 /*
- * Minimal set of data passed to worker threads.
+ * Data passed to worker threads
  */
 typedef struct {
 	chain_step_t	*wc_steps;
@@ -198,8 +198,8 @@ validate_chain(zstream_chain_t chain)
  *
  * Parallel steps are double-covered, which is the intended behavior. If a
  * worker's domain begins with a parallel step, it dequeues items from the
- * associated queue. If it ends with a parallel step, it submits items to
- * that queue.
+ * associated queue. If the domain ends with a parallel step, it submits
+ * items to that queue.
  */
 void
 zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)

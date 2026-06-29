@@ -35,7 +35,7 @@ extern "C" {
  *
  * Checksums are calculated for the entire stream between a DRR_BEGIN record
  * and its corresponding DRR_END, so the final checksum assembly must be
- * performed as a serial step. However, we can precalculate the checksums
+ * performed as a serial step. However, we can pre-calculate the checksums
  * for individual payloads in parallel.
  *
  * The normal sequence is a parallel_calc_fletcher4() step followed by a

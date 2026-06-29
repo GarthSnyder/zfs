@@ -44,7 +44,7 @@ extern "C" {
  *
  * **CHAIN** - An array of chain_step_t's. It's just data, so you can create
  * the array however you like. But normally you'd just declare the whole
- * chain at once:
+ * chain at once, e.g.:
  *
  *	zstream_chain_t dump_chain = {
  *		serial_read_stream(infile),
