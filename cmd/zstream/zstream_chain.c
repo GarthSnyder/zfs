@@ -156,9 +156,9 @@ validate_chain(zstream_chain_t chain)
 	}
 	VERIFY3U(num_steps, >, 0);
 
-	if (chain[num_steps-1].cs_type == CS_PARALLEL ||
-	    chain[0].cs_type == CS_PARALLEL)
-	{
+	boolean_t first_parallel = chain[0].cs_type == CS_PARALLEL;
+	boolean_t last_parallel = chain[num_steps-1].cs_type == CS_PARALLEL;
+	if (first_parallel || last_parallel) {
 		errx(1, "a chain cannot start or end with a parallel step");
 	}
 
@@ -173,11 +173,12 @@ validate_chain(zstream_chain_t chain)
 		}
 	}
 
-	return ((chain_stats_t) {
-		.ct_num_steps = num_steps,
-		.ct_num_queues = num_queues,
-		.ct_item_size = item_size
-	});
+	chain_stats_t stats = {
+	    .ct_num_steps = num_steps,
+	    .ct_num_queues = num_queues,
+	    .ct_item_size = item_size
+	};
+	return (stats);
 }
 
 /*
@@ -222,12 +223,13 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 
 	int worker = 0;
 
-	contexts[worker] = (worker_context_t){
-		.wc_steps = chain,
-		.wc_num_steps = 0,
-		.wc_buffer_size = stats.ct_item_size,
-		.wc_in_queue = NULL
+	worker_context_t context = {
+	    .wc_steps = chain,
+	    .wc_num_steps = 0,
+	    .wc_buffer_size = stats.ct_item_size,
+	    .wc_in_queue = NULL
 	};
+	contexts[worker] = context;
 
 	for (int i = 0; i < stats.ct_num_steps; i++) {
 		contexts[worker].wc_num_steps++;
@@ -244,12 +246,13 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 			queue = zstream_queue_create(&queue_params);
 			contexts[worker].wc_out_queue = queue;
 			worker++;
-			contexts[worker] = (worker_context_t){
-				.wc_steps = cs,
-				.wc_num_steps = 1,
-				.wc_buffer_size = stats.ct_item_size,
-				.wc_in_queue = queue
+			worker_context_t next_context = {
+			    .wc_steps = cs,
+			    .wc_num_steps = 1,
+			    .wc_buffer_size = stats.ct_item_size,
+			    .wc_in_queue = queue
 			};
+			contexts[worker] = next_context;
 		}
 	}
 
@@ -264,8 +267,8 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 	for (int i = 0; i < num_workers; i++) {
 		char buff[32];
 		int ret = pthread_create(&worker_threads[i], NULL,
-			(chain_worker_f *)zstream_chain_worker,
-			&contexts[i]);
+		    (chain_worker_f *)zstream_chain_worker,
+		    &contexts[i]);
 		VERIFY3S(ret, ==, 0);
 		snprintf(buff, sizeof (buff), "chain-%d", i);
 		pthread_setname_np(worker_threads[i], buff);

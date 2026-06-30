@@ -156,10 +156,10 @@ typedef struct chain_step
 	void		*cs_context;
 	union {
 		struct {
-			zc_serial_process_f	*process;      /* cs_serial */
+			zc_serial_process_f	*process;	/* serial */
 		} cs_serial;
 		struct {
-			size_t			queue_length;  /* cs_parallel */
+			size_t			queue_length;	/* parallel */
 			size_t			batch_budget;
 			zq_estimate_cost_f	*cost;
 			zq_process_item_f	*process;

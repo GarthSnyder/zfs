@@ -245,18 +245,19 @@ parallel_decompress_writes(compression_spec_t *target)
 	} else {
 		*context = *target;
 	}
-	return ((chain_step_t) {
-		.cs_type = CS_PARALLEL,
-		.cs_in_size = sizeof (drr_packet_t),
-		.cs_out_size = sizeof (drr_packet_t),
-		.cs_context = context,
-		.cs_parallel = {
-			.queue_length = 256,
-			.batch_budget = 256 * 1024,
-			.process = (zq_process_item_f *)chain_decompress_writes,
-			.cost = (zq_estimate_cost_f *)chain_decompress_cost
-		}
-	});
+	chain_step_t step = {
+	    .cs_type = CS_PARALLEL,
+	    .cs_in_size = sizeof (drr_packet_t),
+	    .cs_out_size = sizeof (drr_packet_t),
+	    .cs_context = context,
+	    .cs_parallel = {
+		.queue_length = 256,
+		.batch_budget = 256 * 1024,
+		.process = (zq_process_item_f *)chain_decompress_writes,
+		.cost = (zq_estimate_cost_f *)chain_decompress_cost
+	    }
+	};
+	return (step);
 }
 
 chain_step_t
@@ -267,18 +268,20 @@ parallel_compress_writes(compression_spec_t *target)
 
 	VERIFY3P(target, !=, NULL);
 	*context = *target;
-	return ((chain_step_t) {
-		.cs_type = CS_PARALLEL,
-		.cs_in_size = sizeof (drr_packet_t),
-		.cs_out_size = sizeof (drr_packet_t),
-		.cs_context = context,
-		.cs_parallel = {
-			.queue_length = 1024,
-			.batch_budget = 32 * 1024,
-			.process = (zq_process_item_f *)chain_compress_writes,
-			.cost = (zq_estimate_cost_f *)chain_compress_cost
-		}
-	});
+
+	chain_step_t step = {
+	    .cs_type = CS_PARALLEL,
+	    .cs_in_size = sizeof (drr_packet_t),
+	    .cs_out_size = sizeof (drr_packet_t),
+	    .cs_context = context,
+	    .cs_parallel = {
+		.queue_length = 1024,
+		.batch_budget = 32 * 1024,
+		.process = (zq_process_item_f *)chain_compress_writes,
+		.cost = (zq_estimate_cost_f *)chain_compress_cost
+	    }
+	};
+	return (step);
 }
 
 int

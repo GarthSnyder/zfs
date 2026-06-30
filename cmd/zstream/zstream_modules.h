@@ -37,7 +37,7 @@ extern "C" {
 #include "zstream_util.h"
 #include "zstream_validate.h"
 
-#define STANDARD_INPUT_STACK_Q(infile, queue_size) 			\
+#define	STANDARD_INPUT_STACK_Q(infile, queue_size) 			\
 	serial_read_stream(infile),					\
 	parallel_calc_fletcher4(queue_size),				\
 	serial_validate_fletcher4(),					\

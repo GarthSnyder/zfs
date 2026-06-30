@@ -279,11 +279,12 @@ zstream_queue_create(zq_params_t *params)
 	zstream_queue_t *queue = safe_malloc(sizeof (zstream_queue_t));
 	pool.tp_queues[pool.tp_num_queues] = queue;
 
-	*queue = (zstream_queue_t) {
-		.zq_params = *params,
-		.zq_slots = safe_malloc(params->qp_queue_length *
-		    ((sizeof (queue_slot_t)) + params->qp_item_size))
+	zstream_queue_t new_queue = {
+	    .zq_params = *params,
+	    .zq_slots = safe_malloc(params->qp_queue_length *
+		((sizeof (queue_slot_t)) + params->qp_item_size))
 	};
+	*queue = new_queue;
 	/*
 	 * Queue slots and item storage are allocated in one block, so we
 	 * need to manually wire each slot to its item buffer.
@@ -341,8 +342,7 @@ advance_completion_index(zstream_queue_t *queue)
 {
 	boolean_t any_completed = B_FALSE;
 	while (queue->zq_ix.complete < queue->zq_ix.claim &&
-	    Q_SLOT(queue, queue->zq_ix.complete).qs_completed)
-	{
+	    Q_SLOT(queue, queue->zq_ix.complete).qs_completed) {
 		queue->zq_ix.complete++;
 		any_completed = B_TRUE;
 	}
@@ -404,7 +404,7 @@ score_queue(zstream_queue_t *queue)
 	double open_score = (open_slots > 0) ? (1.0 / open_slots) : 2.0;
 	double dq_score = (dequeueable > 0) ? (1.0 / dequeueable) : 2.0;
 	double claim_factor = MIN(claimable, PLENTY_OF_WORK) /
-		(double)PLENTY_OF_WORK;
+	    (double)PLENTY_OF_WORK;
 	double need = open_score + dq_score * DEQUEUE_SCORE_WEIGHT;
 	return (need * claim_factor);
 }
@@ -426,7 +426,8 @@ select_stochastic(double weights[], int num_values)
 	random_get_pseudo_bytes((uint8_t *)&numerator, sizeof (uint32_t));
 	double select_val = total * numerator / denominator;
 	for (int i = 0; i < num_values; i++) {
-		if (select_val <= weights[i]) { return (i); }
+		if (select_val <= weights[i])
+			return (i);
 		select_val -= weights[i];
 	}
 	return (num_values - 1);
@@ -555,9 +556,9 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			 * If we didn't claim all available work, wake up
 			 * another worker thread.
 			 */
-			if ((*queue)->zq_ix.claim < (*queue)->zq_ix.enqueue ||
-				queues_with_work > 1)
-			{
+			boolean_t more_here = (*queue)->zq_ix.claim <
+			    (*queue)->zq_ix.enqueue;
+			if (more_here || queues_with_work > 1) {
 				pthread_cond_signal(&pool.tp_enqueued);
 			}
 			pthread_mutex_unlock(&(*queue)->zq_mutex);

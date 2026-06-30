@@ -212,8 +212,7 @@ static disposition_t
 chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context)
 {
 	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
-	    OPTION_ENABLED(CA_IGNORE_CKSUMS)))
-	{
+	    OPTION_ENABLED(CA_IGNORE_CKSUMS))) {
 		return (D_OK);
 	}
 
@@ -282,17 +281,18 @@ chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context)
 chain_step_t
 parallel_calc_fletcher4(int queue_length)
 {
-	return ((chain_step_t) {
-		.cs_type = CS_PARALLEL,
-		.cs_in_size = sizeof (drr_packet_t),
-		.cs_out_size = sizeof (drr_fletcher4_t),
-		.cs_parallel = {
-			.queue_length = queue_length,
-			.batch_budget = 256 * 1024,
-			.process = (zq_process_item_f *)chain_calc_fletcher4,
-			.cost = (zq_estimate_cost_f *)payload_size_as_cost
-		}
-	});
+	chain_step_t step = {
+	    .cs_type = CS_PARALLEL,
+	    .cs_in_size = sizeof (drr_packet_t),
+	    .cs_out_size = sizeof (drr_fletcher4_t),
+	    .cs_parallel = {
+		.queue_length = queue_length,
+		.batch_budget = 256 * 1024,
+		.process = (zq_process_item_f *)chain_calc_fletcher4,
+		.cost = (zq_estimate_cost_f *)payload_size_as_cost
+	    }
+	};
+	return (step);
 }
 
 static chain_step_t
@@ -303,15 +303,17 @@ fletcher4_serial_step(fletcher4_op_t operation)
 
 	context->fc_operation = operation;
 	ZIO_SET_CHECKSUM(&context->fc_stream_cksum, 0, 0, 0, 0);
-	return ((chain_step_t) {
-		.cs_type = CS_SERIAL,
-		.cs_in_size = sizeof (drr_fletcher4_t),
-		.cs_out_size = sizeof (drr_packet_t),
-		.cs_context = context,
-		.cs_serial = {
-			.process = (zc_serial_process_f *)chain_fletcher4,
-		}
-	});
+
+	chain_step_t step = {
+	    .cs_type = CS_SERIAL,
+	    .cs_in_size = sizeof (drr_fletcher4_t),
+	    .cs_out_size = sizeof (drr_packet_t),
+	    .cs_context = context,
+	    .cs_serial = {
+		.process = (zc_serial_process_f *)chain_fletcher4,
+	    }
+	};
+	return (step);
 }
 
 chain_step_t
