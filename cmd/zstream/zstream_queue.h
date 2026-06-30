@@ -84,7 +84,7 @@ zq_process_item_f(queue_item_t *item, void *context);
  * every CPU core.
  */
 void
-zstream_queue_set_num_threads(u_int num_threads);
+zstream_queue_set_num_threads(uint_t num_threads);
 
 /*
  * Create a queue. The qp_context field is passed to the cost and processing

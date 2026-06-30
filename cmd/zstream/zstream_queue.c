@@ -29,6 +29,7 @@
 #include <sys/param.h>
 #include <sys/random.h>
 #include <sys/stdtypes.h>
+#include <unistd.h>
 
 #include "zstream_queue.h"
 #include "zstream_util.h"
@@ -106,10 +107,10 @@ typedef struct {
 } queue_slot_t;
 
 typedef struct {
-	int		enqueue;
-	int		claim;
-	int		complete;
-	int		dequeue;
+	uint64_t	enqueue;
+	uint64_t	claim;
+	uint64_t	complete;
+	uint64_t	dequeue;
 } zq_indices_t;
 
 typedef struct {
@@ -766,7 +767,7 @@ cpu_and_queue_monitor(void *dummy)
 			p++;
 		}
 		VERIFY3U(sscanf(p, "%lu %lu", &utime, &stime), ==, 2);
-		pthread_mutex_lock(&pool.tp_mutex);
+		pthread_mutex_lock(&pool.tp_pool_mutex);
 		clock_gettime(CLOCK_MONOTONIC, &clock);
 		end_us = clock.tv_sec * 1000000 + clock.tv_nsec / 1000;
 		if (cpu_jif_prior) {
@@ -791,7 +792,7 @@ cpu_and_queue_monitor(void *dummy)
 			q->zq_stats.max_depth = 0;
 		}
 
-		pthread_mutex_unlock(&pool.tp_mutex);
+		pthread_mutex_unlock(&pool.tp_pool_mutex);
 		fprintf(stderr, "\n");
 		cpu_jif_prior = utime + stime;
 		start_us = end_us;

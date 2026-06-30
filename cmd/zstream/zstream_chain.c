@@ -144,7 +144,7 @@ validate_chain(zstream_chain_t chain)
 	size_t item_size = 0;
 
 	while (chain[num_steps].cs_type != CS_TERMINATE) {
-		if (num_steps > MAX_CHAIN_LENGTH) {
+		if (num_steps >= MAX_CHAIN_LENGTH) {
 			errx(1, "unterminated zstream_chain");
 		}
 		chain_step_t *step = &chain[num_steps];

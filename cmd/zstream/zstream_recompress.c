@@ -133,9 +133,10 @@ needs_decompression(drr_packet_t *item, compression_spec_t *context)
  * we have to decompress.
  */
 static void
-chain_decompress_writes(drr_packet_t *item, void *context)
+chain_decompress_writes(queue_item_t *item_in, void *context)
 {
 	(void) context;
+	drr_packet_t *item = (drr_packet_t *)item_in;
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw	= &drr->drr_u.drr_write;
@@ -162,8 +163,11 @@ chain_decompress_writes(drr_packet_t *item, void *context)
  * by the cost function. If we're here, we need to compress.
  */
 static void
-chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
+chain_compress_writes(queue_item_t *item_in, void *context_in)
 {
+	drr_packet_t *item = (drr_packet_t *)item_in;
+	compression_spec_t *context = (compression_spec_t *)context_in;
+
 	dmu_replay_record_t *drr = &item->dp_drr;
 
 	struct drr_write *drrw = &drr->drr_u.drr_write;
@@ -196,11 +200,13 @@ chain_compress_writes(drr_packet_t *item, compression_spec_t *context)
  * profile can be ignored.
  */
 static size_t
-chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
+chain_compress_cost(queue_item_t *item_in, void *context_in)
 {
+	compression_spec_t *context = (compression_spec_t *)context_in;
+	drr_packet_t *item = (drr_packet_t *)item_in;
 	dmu_replay_record_t *drr = &item->dp_drr;
 
-	if (!item || drr->drr_type != DRR_WRITE) {
+	if (drr->drr_type != DRR_WRITE) {
 		return (0);
 	}
 	struct drr_write *drrw = &drr->drr_u.drr_write;
@@ -213,11 +219,13 @@ chain_compress_cost(drr_packet_t *item, compression_spec_t *context)
  * profile that's already in use.
  */
 static size_t
-chain_decompress_cost(drr_packet_t *item, compression_spec_t *context)
+chain_decompress_cost(queue_item_t *item_in, void *context_in)
 {
+	compression_spec_t *context = (compression_spec_t *)context_in;
+	drr_packet_t *item = (drr_packet_t *)item_in;
 	dmu_replay_record_t *drr = &item->dp_drr;
 
-	if (!item || drr->drr_type != DRR_WRITE)
+	if (drr->drr_type != DRR_WRITE)
 		return (0);
 
 	struct drr_write *drrw   = &drr->drr_u.drr_write;
@@ -253,8 +261,8 @@ parallel_decompress_writes(compression_spec_t *target)
 	    .cs_parallel = {
 		.queue_length = 256,
 		.batch_budget = 256 * 1024,
-		.process = (zq_process_item_f *)chain_decompress_writes,
-		.cost = (zq_estimate_cost_f *)chain_decompress_cost
+		.process = chain_decompress_writes,
+		.cost = chain_decompress_cost
 	    }
 	};
 	return (step);
@@ -277,8 +285,8 @@ parallel_compress_writes(compression_spec_t *target)
 	    .cs_parallel = {
 		.queue_length = 1024,
 		.batch_budget = 32 * 1024,
-		.process = (zq_process_item_f *)chain_compress_writes,
-		.cost = (zq_estimate_cost_f *)chain_compress_cost
+		.process = chain_compress_writes,
+		.cost = chain_compress_cost
 	    }
 	};
 	return (step);

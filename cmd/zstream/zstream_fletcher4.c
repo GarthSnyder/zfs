@@ -125,9 +125,11 @@ fletcher4_incremental_combine(zio_cksum_t *zcp, const uint64_t size,
  * greater than MAX_FLETCHER_BLOCK.
  */
 static void
-chain_calc_fletcher4(drr_fletcher4_t *item, void *context)
+chain_calc_fletcher4(queue_item_t *item_in, void *context)
 {
 	(void) context;
+	drr_fletcher4_t *item = (drr_fletcher4_t *)item_in;
+
 	VERIFY3U(item->dp_base.dp_payload_size, >, 0);
 
 	ssize_t remaining = item->dp_base.dp_payload_size;
@@ -209,8 +211,11 @@ assemble_payload_cksum(drr_fletcher4_t *item, zio_cksum_t *stream_ck)
  * input and output streams.
  */
 static disposition_t
-chain_fletcher4(drr_fletcher4_t *item, fletcher4_context_t *context)
+chain_fletcher4(queue_item_t *item_in, void *context_in)
 {
+	drr_fletcher4_t *item = (drr_fletcher4_t *)item_in;
+	fletcher4_context_t *context = (fletcher4_context_t *)context_in;
+
 	if (item == NULL || (context->fc_operation == F4_VALIDATE &&
 	    OPTION_ENABLED(CA_IGNORE_CKSUMS))) {
 		return (D_OK);
@@ -288,8 +293,8 @@ parallel_calc_fletcher4(int queue_length)
 	    .cs_parallel = {
 		.queue_length = queue_length,
 		.batch_budget = 256 * 1024,
-		.process = (zq_process_item_f *)chain_calc_fletcher4,
-		.cost = (zq_estimate_cost_f *)payload_size_as_cost
+		.process = chain_calc_fletcher4,
+		.cost = payload_size_as_cost
 	    }
 	};
 	return (step);
@@ -310,7 +315,7 @@ fletcher4_serial_step(fletcher4_op_t operation)
 	    .cs_out_size = sizeof (drr_packet_t),
 	    .cs_context = context,
 	    .cs_serial = {
-		.process = (zc_serial_process_f *)chain_fletcher4,
+		.process = chain_fletcher4,
 	    }
 	};
 	return (step);
