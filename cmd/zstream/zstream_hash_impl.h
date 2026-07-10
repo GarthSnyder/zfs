@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * CDDL HEADER START
+ *
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ *
+ * CDDL HEADER END
+ */
+
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
+#ifndef _ZSTREAM_HASH_IMPL_H
+#define _ZSTREAM_HASH_IMPL_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "zstream_alloc.h"
+#include "zstream_hash.h"
+#include "zstream_hash_stats.h"
+
+#define ENTRIES_PER_BUCKET 6
+
+#define ITER_BUCKET(lh, bucket) {					\
+		.ei_lh = lh,						\
+		.ei_alloc = lh->lh_bucket_alloc,			\
+		.ei_bucket_ix = bucket,					\
+		.ei_entry_ix = -1					\
+	}
+
+/* Entry in a bucket: hash value + locator to data */
+typedef struct {
+	uint64_t  	be_hash;
+	record_ix_t 	be_record;  /* index of actual data */
+} bucket_entry_t;
+
+/* Bucket structure: fixed array of entries + overflow pointer */
+typedef struct {
+	bucket_entry_t	b_entries[ENTRIES_PER_BUCKET];
+	record_ix_t	b_overflow;  /* 0 if no overflow */
+} bucket_t;
+
+/* Internal iterator for bucket entries */
+typedef struct {
+	linear_hash_t	*ei_lh;
+	allocator_t	*ei_alloc;
+	record_ix_t	ei_bucket_ix;	/* -1 == overflow not yet assigned */
+	record_ix_t	ei_entry_ix;	/* -1 == bucket not yet retrieved */
+	bucket_t	ei_bucket;	/* Working copy of allocator version */
+	boolean_t	ei_dirty;	/* Needs writeback */
+} entry_iterator_t;
+
+/* Iterator for retrieving records by hash */
+typedef struct lh_iterator {
+	uint64_t		lhi_hash;
+	entry_iterator_t	lhi_entry_iterator;
+} lh_iterator_t;
+
+typedef struct {
+	op_stats_t	*ot_stat_bin;
+	uint64_t	ot_start_ops;
+	uint64_t	ot_latest_ops;
+} ops_tracker_t;
+
+typedef struct {
+	uint64_t	lhs_num_entries;	/* Total entries in table */
+	uint64_t	lhs_mem_highwater;	/* Most memory used by allocs */
+	op_stats_t	lhs_inserts;		/* Inserts from caller */
+	op_stats_t	lhs_retrieves;		/* Retrieves from caller */
+	op_stats_t	lhs_splits;		/* Splits, internal */
+} lh_stats_t;
+
+/* Hash table structure */
+struct linear_hash {
+	size_t		lh_record_size;
+	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
+	record_ix_t	lh_split_pointer;    	/* Next bucket to split */
+	boolean_t	lh_validate;		/* Validation per op (slow) */
+	uint64_t	lh_max_memory;
+	int     	lh_next_memory_check;	/* # of splits before check */
+	int       	lh_next_iterator;
+	lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
+	lh_stats_t	lh_stats;
+	ops_tracker_t	lh_ops_tracker;
+	allocator_t	*lh_data_alloc;		/* Data records */
+	allocator_t	*lh_bucket_alloc;	/* Main buckets */
+	allocator_t	*lh_overflow_alloc;	/* Overflow buckets */
+};
+
+typedef long long unsigned int llu;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _ZSTREAM_HASH_IMPL_H */
