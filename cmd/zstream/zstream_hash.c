@@ -1,0 +1,427 @@
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * https://opensource.org/license/CDDL-1.0.
+ */
+
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
+#include <assert.h>
+#include <err.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/stdtypes.h>
+#include <sys/types.h>
+
+#include "zstream_alloc.h"
+#include "zstream_hash.h"
+#include "zstream_hash_impl.h"
+#include "zstream_util.h"
+
+/*
+ * The Wikipedia article for linear hashing isn't exhaustively complete, so
+ * here are a few more details on the basic concept.
+ *
+ * Hash keys enter the system as 64-bit values, but they are masked to reduce
+ * their effective length. At any given time, two mask lengths are in use,
+ * the longer being one bit longer than the shorter. Buckets hashed with the
+ * long mask appear at the beginning of the table, followed by a series of
+ * short-mask-hashed buckets and then another set of long-hashed buckets. A
+ * cursor, the split pointer, points to the first bucket hashed with the
+ * shorter mask.
+ *
+ *      +----------------------------+ <- index 0
+ *      |                            |
+ *      |   long-mask (h+1) buckets  |
+ *      |       already split        |
+ *      |                            |
+ *      +----------------------------+
+ *      |                            | <- split pointer
+ *      |   short-mask (h) buckets   |    (buckets to be split)
+ *      |       not yet split        |
+ *      |                            |
+ *      +----------------------------+ <- power-of-2 boundary
+ *      |                            |   (cycle restarts when split
+ *      |   long-mask (h+1) buddies  |    pointer gets here)
+ *      |    of buckets below the    |
+ *      |       split pointer        |
+ *      |                            |
+ *      +----------------------------+ <- current end of table
+ *      |                            |
+ *      |      not yet allocated     |
+ *      |    (will hold buddies of   |
+ *      |      short-mask buckets    |
+ *      |       at or above the      |
+ *      |        split pointer)      |
+ *      |                            |
+ *      +----------------------------+ <- power-of-2 boundary
+ *
+ * When occupancy exceeds a given limit, the contents of the bucket pointed
+ * to by the split pointer are rehashed using the longer key length. Since
+ * there's only one bit's difference between the two masks, there are only
+ * two possible destinations for rehashed entries: the same bucket they're
+ * already in, or one that's 2^n slots later, at the very end of the table.
+ * On average, half the entries are relocated. The split pointer is then
+ * incremented.
+ *
+ * Eventually, all short-key buckets have been rehashed with the longer
+ * mask. At that point, what was previously the long key becomes the short
+ * key and a new one-bit-longer mask is introduced. The split pointer is
+ * reset to the beginning of the hash table.
+ *
+ * This scheme grows the table linearly and incrementally. It's useful for
+ * stream processing because it's space-efficient and because we often don't
+ * know how long the input stream will be. When the table becomes too large
+ * to keep in memory, the tail can spill over to disk storage without
+ * abandoning or reshuffling the existing in-memory entries. If 90% of
+ * buckets are in memory, then 90% of lookups will happen at memory speed.
+ *
+ * This implementation uses open hashing (overflow buckets) and is
+ * insert-only. Linear hashing can allow deletions, but they aren't useful
+ * here and are not implemented.
+ *
+ * Each hash table has three allocator_t's underneath it: one for the data
+ * being stored, one for hash buckets, and one for overflow buckets.
+ *
+ * Struct definitions are in zstream_hash_impl.h to make them available
+ * to selftests.
+ */
+
+#define	INITIAL_HASH_SUFFIX_LENGTH	10
+#define	MAX_OCCUPANCY			0.75
+
+#define	MAX_TOP_ENTRIES(top_buckets)	\
+	    ((double)((top_buckets) * ENTRIES_PER_BUCKET) * MAX_OCCUPANCY)
+
+#define	ITER_BUCKET(lh, bucket) {					\
+		.ei_lh = lh,						\
+		.ei_bucket_ix = bucket,					\
+		.ei_entry_ix = -1					\
+	}
+
+/*
+ * Determine the allocator for the given entry_iterator. The current bucket
+ * struct might either be a primary bucket or an overflow bucket, and the
+ * allocator switches based on that.
+ */
+#define	ALLOC_FOR(iter) ((iter)->ei_in_overflow ? \
+	    (iter)->ei_lh->lh_alloc.overflow : (iter)->ei_lh->lh_alloc.bucket)
+
+#define	BUCKET_ENTRY(iter) (&(iter)->ei_bucket.b_entries[(iter)->ei_entry_ix])
+
+/*
+ * Memory management controls. These are variables rather than #defines so
+ * that tests can tweak them. The margin should be sized so that a table
+ * under sustained memory pressure performs a reasonable number of memory
+ * clawbacks (dozens) over its lifetime.
+ */
+size_t	lh_memory_margin	= 32ULL << 20;	/* 32MB */
+int	lh_mem_check_interval	= 8192;		/* Insertions per check */
+
+static unsigned int	next_iterator = 0;
+static lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
+
+/*
+ * Every allocator_t is initialized to the same maximum memory size. We do
+ * memory management from the hash (rather than the individual allocators)
+ * so we can control the order in which data gets spilled to disk.
+ */
+linear_hash_t *
+lh_init(size_t record_size, size_t max_mem, const char *dir)
+{
+	if (max_mem == 0 && dir == NULL)
+		errx(1, "linear_hash_t requires memory or disk backing");
+	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
+	uint64_t top_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH;
+	*lh = (linear_hash_t) {
+		.lh_record_size = record_size,
+		.lh_alloc = {
+		    .data     = allocator_init(record_size, max_mem, dir),
+		    .overflow = allocator_init(sizeof (bucket_t), max_mem, dir),
+		    .bucket   = allocator_init(sizeof (bucket_t), max_mem, dir),
+		},
+		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
+		.lh_max_memory = max_mem,
+		.lh_stats = {
+		    .top_buckets = top_buckets,
+		    .max_top_entries = MAX_TOP_ENTRIES(top_buckets),
+		    .next_memory_check = lh_mem_check_interval
+		}
+	};
+	/* The index 0 is a sentinel value for these allocators */
+	allocator_skip(lh->lh_alloc.data);
+	allocator_skip(lh->lh_alloc.overflow);
+	return (lh);
+}
+
+/*
+ * Calculate the destination bucket for a given hash value.
+ *
+ * lh_hash_suffix_length is the hash suffix length in effect at or above the
+ * split point. Below the split, it is one bit longer. E.g., if
+ * lh_hash_suffix_length == 3, items below the split point are hashed into
+ * 16 buckets. At the split point or above, they are hashed into 8 buckets.
+ * Ergo, when the split pointer reaches index 8, 2^lh_hash_suffix_length,
+ * all mod 8 entries have been upgraded. The split pointer is reset to zero
+ * and the suffix length increases.
+ */
+static inline uint64_t
+bucket_for_hash(linear_hash_t *lh, uint64_t hash)
+{
+	uint64_t mask = (1ULL << (lh->lh_hash_suffix_length)) - 1;
+	if ((hash & mask) < lh->lh_split_pointer)
+		mask = (mask << 1) | 1;
+	return (hash & mask);
+}
+
+static inline void
+read_bucket(entry_iterator_t *iter)
+{
+	allocator_retrieve(ALLOC_FOR(iter), iter->ei_bucket_ix,
+	    &iter->ei_bucket);
+	iter->ei_entry_ix = 0;
+	iter->ei_dirty = B_FALSE;
+}
+
+static inline void
+save_bucket(entry_iterator_t *iter, boolean_t force)
+{
+	if (!force && iter->ei_dirty == B_FALSE)
+		return;
+	allocator_store(ALLOC_FOR(iter), iter->ei_bucket_ix, &iter->ei_bucket);
+	iter->ei_dirty = B_FALSE;
+}
+
+/*
+ * Prepare an entry iterator to examine the next bucket entry. Updates the
+ * entry_iterator_t struct and returns a pointer to the next (now current)
+ * bucket entry. Returns NULL when there are no more entries, or,
+ * alternately, extends the bucket chain by adding an overflow bucket.
+ */
+static inline bucket_entry_t *
+entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
+{
+	if (iter->ei_entry_ix < 0) {
+		read_bucket(iter);
+		return (BUCKET_ENTRY(iter));
+	} else if (iter->ei_entry_ix == ENTRIES_PER_BUCKET - 1) {
+		save_bucket(iter, B_FALSE);
+		if (iter->ei_bucket.b_overflow != 0) {
+			iter->ei_in_overflow = B_TRUE;
+			iter->ei_bucket_ix = iter->ei_bucket.b_overflow;
+			read_bucket(iter);
+			return (BUCKET_ENTRY(iter));
+		} else if (!extend) {
+			return (NULL);
+		} else {
+			/* Extend by adding an overflow bucket */
+			record_ix_t record =
+			    allocator_skip(iter->ei_lh->lh_alloc.overflow);
+			iter->ei_bucket.b_overflow = record;
+			save_bucket(iter, B_TRUE);
+			*iter = (entry_iterator_t) {
+				.ei_lh = iter->ei_lh,
+				.ei_bucket_ix = record,
+				.ei_in_overflow = B_TRUE
+			};
+			return (BUCKET_ENTRY(iter));
+		}
+	} else {
+		iter->ei_entry_ix++;
+		return (BUCKET_ENTRY(iter));
+	}
+}
+
+/*
+ * Split the bucket pointed to by the split pointer, rehashing entries
+ * according to the one-higher suffix length. Since only one bit is added,
+ * existing entries either stay where they are or go to one alternate buddy
+ * bucket at the end of the table.
+ *
+ * During the partition pass, the source bucket has both a read iterator and
+ * a write iterator. This is fine because each iterator has its own copy of
+ * the bucket and the read iterator will always precede the write iterator.
+ * The bucket is not modified through the read iterator.
+ *
+ * At steady state, bucket entries are packed at the front of the bucket
+ * chain and all inactive entries are zeroed out. The first entry with a
+ * record number of 0 marks the end of entries. So after partitioning a
+ * bucket, we have to zero out its now-potentially-unoccupied tail.
+ */
+static void
+split_bucket(linear_hash_t *lh)
+{
+	record_ix_t bucket_ix = lh->lh_split_pointer;
+	record_ix_t buddy_ix  = bucket_ix | (1ULL << lh->lh_hash_suffix_length);
+
+	entry_iterator_t source = ITER_BUCKET(lh, bucket_ix);
+	entry_iterator_t stay   = ITER_BUCKET(lh, bucket_ix);
+	entry_iterator_t move   = ITER_BUCKET(lh, buddy_ix);
+
+	/*
+	 * Increment the split pointer early so that bucket_for_hash() will
+	 * now use the extended mask length.
+	 */
+	lh->lh_split_pointer++;
+
+	bucket_entry_t *source_be;
+	while ((source_be = entry_iterator_next(&source, B_FALSE)) &&
+	    source_be->be_record != 0) {
+		if (!source.ei_in_overflow)
+			lh->lh_stats.top_entries--;
+		boolean_t this_entry_stays =
+		    bucket_for_hash(lh, source_be->be_hash) == bucket_ix;
+		entry_iterator_t *dest = this_entry_stays ? &stay : &move;
+		bucket_entry_t *dest_be = entry_iterator_next(dest, B_TRUE);
+		if (!dest->ei_in_overflow)
+			lh->lh_stats.top_entries++;
+		if (source_be->be_record != dest_be->be_record) {
+			*dest_be = *source_be;
+			dest->ei_dirty = B_TRUE;
+		}
+	}
+
+	lh->lh_stats.top_buckets++;
+	lh->lh_stats.max_top_entries =
+	    MAX_TOP_ENTRIES(lh->lh_stats.top_buckets);
+
+	/*
+	 * Continue iterating the "stay" bucket to zero out the tail. This
+	 * is the writable copy of the original bucket. We know that the
+	 * bucket started out fully consolidated, so as soon as we see a
+	 * blank slot, there are no more slots in need of zeroing.
+	 */
+	bucket_entry_t *ent;
+	while ((ent = entry_iterator_next(&stay, B_FALSE)) && ent->be_record) {
+		*ent = (bucket_entry_t) {0};
+		stay.ei_dirty = B_TRUE;
+	}
+	save_bucket(&stay, B_FALSE);
+	save_bucket(&move, B_FALSE);
+
+	/*
+	 * Have we completed the full hashing cycle at this suffix length?
+	 */
+	record_ix_t buckets_this_cycle = 1ULL << (lh->lh_hash_suffix_length);
+	if (lh->lh_split_pointer >= buckets_this_cycle) {
+		lh->lh_hash_suffix_length++;
+		lh->lh_split_pointer = 0;
+	}
+}
+
+/*
+ * Free up memory if we're over budget. If we free, we reclaim
+ * lh_memory_margin more bytes than is strictly necessary to give ourselves
+ * some operating room until the next memory check. We want to free in
+ * relatively large chunks, not just because this memory check is nontrivial
+ * but also because we want to limit the frequency of reshuffling.
+ *
+ * Memory clawbacks are prioritized by allocator. The data allocator is the
+ * first target, followed by the overflow allocator and the bucket
+ * allocator. Depending on state, we may need to perform multiple reclaims,
+ * hence the loop.
+ */
+static void
+check_memory_use(linear_hash_t *lh)
+{
+	size_t current_use[NUM_ALLOC];
+	ssize_t total_used = 0;
+	for (int i = 0; i < NUM_ALLOC; i++) {
+		current_use[i] = allocator_memory_used(lh->lh_alloc.all[i]);
+		total_used += current_use[i];
+	}
+	ssize_t overage = total_used - (ssize_t)lh->lh_max_memory;
+	while (overage > 0) {
+		size_t to_trim = overage +
+		    MIN(lh_memory_margin, lh->lh_max_memory / 8);
+		for (int i = 0; i < NUM_ALLOC; i++) {
+			if (current_use[i] > 0) {
+				size_t trimmed = allocator_trim_memory(
+				    lh->lh_alloc.all[i], to_trim);
+				overage -= trimmed;
+				current_use[i] -= trimmed;
+				break;
+			}
+		}
+	}
+}
+
+void
+lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
+{
+	VERIFY(lh != NULL && data != NULL);
+	record_ix_t record = allocator_append(lh->lh_alloc.data, data);
+	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
+
+	bucket_entry_t *entry;
+	while ((entry = entry_iterator_next(&iter, B_TRUE))) {
+		if (entry->be_record == 0) {
+			*entry = (bucket_entry_t) { hash, record };
+			save_bucket(&iter, B_TRUE);
+			break;
+		}
+	}
+	if (!iter.ei_in_overflow) {
+		lh->lh_stats.top_entries++;
+		while (lh->lh_stats.top_entries > lh->lh_stats.max_top_entries)
+			split_bucket(lh);
+	}
+	if (--lh->lh_stats.next_memory_check <= 0) {
+		lh->lh_stats.next_memory_check = lh_mem_check_interval;
+		check_memory_use(lh);
+	}
+	lh->lh_generation++;
+}
+
+lh_iterator_t *
+lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
+{
+	ASSERT(lh != NULL);
+	unsigned which_iterator = next_iterator++ % MAX_LH_ITERATORS;
+	lh_iterator_t *iter = &lh_iterators[which_iterator];
+	*iter = (lh_iterator_t) {
+		.lhi_hash = hash,
+		.lhi_generation = lh->lh_generation,
+		.lhi_entry_iterator = ITER_BUCKET(lh, bucket_for_hash(lh, hash))
+	};
+	return (iter);
+}
+
+boolean_t
+lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
+{
+	ASSERT(lh_iter != NULL);
+	uint64_t current = lh_iter->lhi_entry_iterator.ei_lh->lh_generation;
+	if (lh_iter->lhi_generation != current)
+		errx(1, "%s called on an invalidated iterator", __func__);
+	entry_iterator_t *ei = &lh_iter->lhi_entry_iterator;
+	bucket_entry_t *entry;
+	while ((entry = entry_iterator_next(ei, B_FALSE))) {
+		if (entry->be_record == 0)
+			break;
+		if (entry->be_hash == lh_iter->lhi_hash) {
+			allocator_retrieve(ei->ei_lh->lh_alloc.data,
+			    entry->be_record, buffer);
+			return (B_TRUE);
+		}
+	}
+	return (B_FALSE);
+}
+
+void
+lh_fini(linear_hash_t *lh) {
+	VERIFY(lh != NULL);
+	for (int i = 0; i < NUM_ALLOC; i++) {
+		if (lh->lh_alloc.all[i] != NULL)
+			allocator_fini(lh->lh_alloc.all[i]);
+	}
+	free(lh);
+}

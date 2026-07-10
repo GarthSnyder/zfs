@@ -1,0 +1,963 @@
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * https://opensource.org/license/CDDL-1.0.
+ */
+
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
+/*
+ * Selftests for the zstream_alloc.[ch] record-store API.
+ *
+ * These tests are built around a shadow-model harness. A shadow_allocator_t
+ * wraps an allocator_t together with a full record of what each record
+ * index should contain: a deterministic pattern derived from a tag (for
+ * stored records) or zeros (for never-written records). After any sequence
+ * of operations, the entire allocator can be swept and compared against the
+ * model byte for byte.
+ *
+ * The trickiest allocator operation is allocator_trim_memory(), which
+ * lowers the split point between the memory-resident and disk-resident
+ * portions of the record space. Trimming is relative to memory actually in
+ * use. Memory consumption can only be reduced, and the arithmetic has to
+ * handle a requested delta larger than the amount in use. predict_trim()
+ * below duplicates the intended arithmetic independently so the tests can
+ * pin the resulting split point exactly rather than just bounding it.
+ */
+
+#include <err.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "zstream_alloc.h"
+#include "zstream_alloc_impl.h"
+#include "zstream_selftest.h"
+#include "zstream_util.h"
+
+typedef enum {
+	REC_EMPTY = 0,		/* Never written; must read as zeros */
+	REC_KNOWN,		/* Stored; content derived from sr_tags[] */
+} record_state_t;
+
+typedef struct {
+	allocator_t	*sa_alloc;
+	boolean_t	sa_disk;	/* Has a backing file */
+	size_t		sa_record_size;
+	uint64_t	sa_capacity;	/* Model size, in records */
+	uint64_t	sa_count;	/* Highest index written, plus one */
+	uint64_t	sa_next_tag;
+	uint64_t	*sa_tags;
+	uint8_t		*sa_state;
+	uint8_t		*sa_buf;	/* Scratch: retrieved record */
+	uint8_t		*sa_expect;	/* Scratch: expected record */
+} shadow_allocator_t;
+
+/*
+ * Deterministic record content: a function of the tag alone, so the model
+ * only needs to remember one uint64_t per record.
+ */
+static void
+fill_record(uint8_t *buf, size_t len, uint64_t tag)
+{
+	uint64_t x = selftest_mix64(selftest_seed ^ tag);
+	for (size_t i = 0; i < len; i++) {
+		if ((i & 7) == 0)
+			x = selftest_mix64(x + i);
+		buf[i] = (uint8_t)(x >> ((i & 7) << 3));
+	}
+}
+
+static boolean_t
+all_zero(const uint8_t *buf, size_t len)
+{
+	for (size_t i = 0; i < len; i++) {
+		if (buf[i] != 0)
+			return (B_FALSE);
+	}
+	return (B_TRUE);
+}
+
+/*
+ * The layout allocator_init() will settle on for this host. The layout
+ * calculation itself is checked independently by alloc_granularity, so the
+ * behavioral tests can take it as given.
+ */
+static granularity_t
+host_granularity(size_t record_size)
+{
+	return (calc_granularities(record_size, (size_t)sysconf(_SC_PAGESIZE)));
+}
+
+/*
+ * The memory/disk transition moves in whole memory units, each of which
+ * holds recs_per_unit() records packed back to back, followed by any waste
+ * space. Every budget the allocator reports is a multiple of this unit.
+ */
+static size_t
+mem_unit(size_t record_size)
+{
+	return (host_granularity(record_size).memory);
+}
+
+static uint64_t
+recs_per_unit(size_t record_size)
+{
+	return (host_granularity(record_size).records_per_mem_unit);
+}
+
+/*
+ * Memory needed to hold records [0, nrecs) entirely on the memory side.
+ */
+static size_t
+bytes_for(size_t record_size, uint64_t nrecs)
+{
+	uint64_t rpu = recs_per_unit(record_size);
+	return (((nrecs + rpu - 1) / rpu) * mem_unit(record_size));
+}
+
+/*
+ * Byte offset of a record, restated from record_offset() in the allocator.
+ */
+static uint64_t
+test_record_offset(size_t record_size, uint64_t ix)
+{
+	uint64_t rpu = recs_per_unit(record_size);
+	return ((ix / rpu) * mem_unit(record_size) +
+	    (ix % rpu) * record_size);
+}
+
+/*
+ * Memory in use after the first store into a fresh allocator: one frontier
+ * step, clipped to the budget as rounded up by allocator_init().
+ */
+static size_t
+frontier_step(size_t record_size, size_t budget)
+{
+	granularity_t g = host_granularity(record_size);
+	return (MIN(g.frontier, ROUND_UP(budget, g.memory)));
+}
+
+/*
+ * This function is an independent calculation of the memory
+ * allocator_trim_memory() should leave behind, given the bytes in use
+ * before the call. Trimming rounds the first-pass value up and then, if
+ * that would not have freed any actual memory, surrenders one additional
+ * rounding unit.
+ */
+static size_t
+predict_trim(size_t used, size_t delta, size_t unit)
+{
+	if (used == 0)
+		return (0);
+	size_t keep = (delta >= used) ? 0 : used - delta;
+	size_t new_max = ROUND_UP(keep, unit);
+	if (new_max >= used)
+		new_max -= unit;
+	return (new_max);
+}
+
+/*
+ * Trim, then check that the return value accounts for the whole change in
+ * memory use, the split lands where predict_trim() determined it should,
+ * and that it lies on a proper boundary. Verify also that memory use never
+ * grows.
+ */
+static void
+shadow_trim(shadow_allocator_t *sh, size_t delta)
+{
+	size_t unit = mem_unit(sh->sa_record_size);
+	size_t before = allocator_memory_used(sh->sa_alloc);
+	size_t want = predict_trim(before, delta, unit);
+
+	size_t freed = allocator_trim_memory(sh->sa_alloc, delta);
+	size_t after = allocator_memory_used(sh->sa_alloc);
+
+	if (after != want) {
+		errx(1, "trim of %zu from %zu bytes left %zu, expected %zu "
+		    "(unit %zu)", delta, before, after, want, unit);
+	}
+	VERIFY3U(freed, ==, before - after);
+	VERIFY3U(after, <=, before);
+	VERIFY0(after % unit);
+	if (before > 0)
+		VERIFY3U(freed, >, 0);
+}
+
+static shadow_allocator_t *
+shadow_init(size_t record_size, size_t mem_size, boolean_t disk_backed,
+    uint64_t capacity)
+{
+	shadow_allocator_t *shadow = safe_malloc(sizeof (shadow_allocator_t));
+	*shadow = (shadow_allocator_t) {
+		.sa_alloc = allocator_init(record_size, mem_size,
+		    disk_backed ? selftest_scratch_dir() : NULL),
+		.sa_disk = disk_backed,
+		.sa_record_size = record_size,
+		.sa_capacity = capacity,
+		.sa_next_tag = 1,
+		.sa_tags = safe_calloc(capacity * sizeof (uint64_t)),
+		.sa_state = safe_calloc(capacity),
+		.sa_buf = safe_malloc(record_size),
+		.sa_expect = safe_malloc(record_size)
+	};
+	VERIFY(shadow->sa_alloc != NULL);
+	return (shadow);
+}
+
+static void
+shadow_fini(shadow_allocator_t *sh)
+{
+	allocator_fini(sh->sa_alloc);	/* Closes the backing file */
+	free(sh->sa_tags);
+	free(sh->sa_state);
+	free(sh->sa_buf);
+	free(sh->sa_expect);
+	free(sh);
+}
+
+static void
+shadow_store(shadow_allocator_t *sh, uint64_t ix)
+{
+	VERIFY3U(ix, <, sh->sa_capacity);
+	uint64_t tag = sh->sa_next_tag++;
+	fill_record(sh->sa_buf, sh->sa_record_size, tag);
+	allocator_store(sh->sa_alloc, ix, sh->sa_buf);
+	sh->sa_tags[ix] = tag;
+	sh->sa_state[ix] = REC_KNOWN;
+	sh->sa_count = MAX(sh->sa_count, ix + 1);
+}
+
+static void
+shadow_append(shadow_allocator_t *sh)
+{
+	VERIFY3U(sh->sa_count, <, sh->sa_capacity);
+	uint64_t tag = sh->sa_next_tag++;
+	fill_record(sh->sa_buf, sh->sa_record_size, tag);
+	record_ix_t ix = allocator_append(sh->sa_alloc, sh->sa_buf);
+	VERIFY3U(ix, ==, sh->sa_count);
+	sh->sa_tags[ix] = tag;
+	sh->sa_state[ix] = REC_KNOWN;
+	sh->sa_count++;
+}
+
+static void
+shadow_skip(shadow_allocator_t *sh)
+{
+	VERIFY3U(sh->sa_count, <, sh->sa_capacity);
+	record_ix_t ix = allocator_skip(sh->sa_alloc);
+	VERIFY3U(ix, ==, sh->sa_count);
+	sh->sa_state[ix] = REC_EMPTY;
+	sh->sa_count++;
+}
+
+static void
+shadow_verify(shadow_allocator_t *sh, uint64_t ix)
+{
+	VERIFY3U(ix, <, sh->sa_capacity);
+	allocator_retrieve(sh->sa_alloc, ix, sh->sa_buf);
+	if (sh->sa_state[ix] == REC_KNOWN) {
+		fill_record(sh->sa_expect, sh->sa_record_size, sh->sa_tags[ix]);
+		int ret = memcmp(sh->sa_buf, sh->sa_expect, sh->sa_record_size);
+		if (ret != 0) {
+			errx(1, "record %llu corrupted", (u_longlong_t)ix);
+		}
+	} else if (!all_zero(sh->sa_buf, sh->sa_record_size)) {
+		errx(1, "unwritten record %llu is not zero-filled",
+		    (u_longlong_t)ix);
+	}
+}
+
+/*
+ * Sweep the entire record space against the model: every record below
+ * sh_count, plus (for disk-backed allocators, where any index is always
+ * readable) a few probes beyond the end, which must read as zeros.
+ */
+static void
+shadow_verify_all(shadow_allocator_t *sh)
+{
+	for (uint64_t ix = 0; ix < sh->sa_count; ix++)
+		shadow_verify(sh, ix);
+
+	if (sh->sa_disk) {
+		for (uint64_t ix = sh->sa_count;
+		    ix < MIN(sh->sa_count + 3, sh->sa_capacity); ix++) {
+			allocator_retrieve(sh->sa_alloc, ix, sh->sa_buf);
+			if (!all_zero(sh->sa_buf, sh->sa_record_size)) {
+				errx(1, "read beyond end of records (index %llu"
+				    ") is not zero-filled", (u_longlong_t)ix);
+			}
+		}
+	}
+}
+
+/*
+ * An independent statement of the memory-unit selection rule: among units
+ * of 1 to MAX_PAGES_PER_MEMORY_UNIT pages that hold at least one record,
+ * choose the one with the smallest fraction of waste, and among equals, the
+ * smallest. Fractions are compared by cross-multiplication rather than in
+ * floating point.
+ */
+static size_t
+oracle_mem_unit(size_t record_size, size_t pagesize)
+{
+	size_t best = 0, best_waste = 0;
+
+	for (size_t n = 1; n <= MAX_PAGES_PER_MEMORY_UNIT; n++) {
+		size_t unit = n * pagesize;
+		if (unit < record_size)
+			continue;
+		size_t waste = unit % record_size;
+		if (best == 0 || (uint64_t)waste * best <
+		    (uint64_t)best_waste * unit) {
+			best = unit;
+			best_waste = waste;
+		}
+	}
+	return (best);
+}
+
+/*
+ * Check one calc_granularities() result against the oracle and against
+ * the properties the rest of the allocator depends on.
+ */
+static void
+check_granularity(size_t record_size, size_t pagesize)
+{
+	granularity_t g = calc_granularities(record_size, pagesize);
+	size_t want = oracle_mem_unit(record_size, pagesize);
+
+	if (g.memory != want) {
+		errx(1, "record size %zu, page size %zu: memory unit %zu, "
+		    "expected %zu", record_size, pagesize, g.memory, want);
+	}
+	VERIFY0(g.memory % pagesize);
+	VERIFY3U(g.memory, <=, MAX_PAGES_PER_MEMORY_UNIT * pagesize);
+	VERIFY3U(g.records_per_mem_unit, ==, g.memory / record_size);
+	VERIFY3U(g.records_per_mem_unit, >=, 1);
+	/* Documented bound: under 5% waste for sub-page records */
+	if (record_size < pagesize)
+		VERIFY3U(20 * (g.memory % record_size), <, g.memory);
+	VERIFY3U(g.frontier, ==, P2ROUNDUP(TARGET_FRONTIER_MOVEMENT, pagesize));
+}
+
+/*
+ * The layout calculation, checked directly rather than through an
+ * allocator so that page sizes other than the host's are covered. A table
+ * of known-good layouts pins the policy (4K pages unless noted), then every
+ * record size the allocator accepts is compared against the oracle at
+ * several page sizes. For 64K pages, sizes above two pages are sampled.
+ */
+static void
+alloc_granularity(void)
+{
+	static const struct {
+		size_t	page, rsize, unit, rpu;
+	} known[] = {
+		{ 4096,		1,	4096,	4096 },
+		{ 4096,		3,	12288,	4096 },
+		{ 4096,		8,	4096,	512 },
+		{ 4096,		24,	12288,	512 },
+		{ 4096,		104,	53248,	512 },
+		{ 4096,		1000,	86016,	86 },	/* 16 bytes waste */
+		{ 4096,		4095,	4096,	1 },	/* All N tie */
+		{ 4096,		4096,	4096,	1 },
+		{ 4096,		4097,	135168,	32 },	/* Max pages */
+		{ 4096,		5000,	45056,	9 },
+		{ 4096,		69633,	73728,	1 },	/* 5.55% waste */
+		{ 4096,		135167,	135168,	1 },
+		{ 4096,		135168,	135168,	1 },	/* Largest allowed */
+		{ 16384,	24,	49152,	2048 },
+		{ 16384,	1000,	344064,	344 },
+		{ 16384,	16385,	540672,	32 },
+		{ 65536,	1000,	1835008, 1835 },
+		{ 65536,	65537,	2162688, 32 },
+	};
+
+	for (size_t i = 0; i < sizeof (known) / sizeof (known[0]); i++) {
+		granularity_t g = calc_granularities(known[i].rsize,
+		    known[i].page);
+		if (g.memory != known[i].unit ||
+		    g.records_per_mem_unit != known[i].rpu) {
+			errx(1, "record size %zu, page size %zu: got unit %zu "
+			    "x %zu records, expected %zu x %zu",
+			    known[i].rsize, known[i].page, g.memory,
+			    g.records_per_mem_unit, known[i].unit,
+			    known[i].rpu);
+		}
+	}
+	VERIFY3U(calc_granularities(24, 4096).frontier, ==, 4 << 20);
+
+	static const size_t pages[] = { 4096, 8192, 16384, 65536 };
+	for (size_t p = 0; p < sizeof (pages) / sizeof (pages[0]); p++) {
+		size_t page = pages[p];
+		size_t max = MAX_PAGES_PER_MEMORY_UNIT * page;
+		for (size_t rsize = 1; rsize <= max; ) {
+			check_granularity(rsize, page);
+			rsize += (page > 16384 && rsize > 2 * page) ? 7 : 1;
+		}
+		check_granularity(max, page);
+	}
+
+	/* And whatever the host uses */
+	size_t host = (size_t)sysconf(_SC_PAGESIZE);
+	check_granularity(24, host);
+	check_granularity(MAX_PAGES_PER_MEMORY_UNIT * host, host);
+}
+
+/*
+ * Basic operation of all three allocator configurations: memory-only,
+ * disk-only, and dual-backed. Checks round-trip integrity, append/skip
+ * index sequencing, zero-fill of unwritten records, overwrite of existing
+ * records, and which side of the split (memory vs. disk) the bytes actually
+ * landed on.
+ */
+static void
+alloc_basic(void)
+{
+	const size_t rsize = 24;
+	const uint64_t cap = 4096;
+	const size_t full = bytes_for(rsize, cap);
+
+	for (int config = 0; config < 3; config++) {
+		boolean_t disk = (config != 0);
+		size_t mem;
+		switch (config) {
+		case 0:
+			/* Memory-only */
+			mem = 2 * full;
+			break;
+		case 1:
+			/* Disk-only */
+			mem = 0;
+			break;
+		default:
+			/* Dual: about a quarter of the data fits */
+			mem = full / 4;
+			break;
+		}
+
+		shadow_allocator_t *sh = shadow_init(rsize, mem, disk, cap);
+
+		for (int i = 0; i < 200; i++)
+			shadow_append(sh);
+		for (int i = 0; i < 3; i++)
+			shadow_skip(sh);
+		for (int i = 0; i < 5; i++)
+			shadow_append(sh);
+
+		/* Overwrites and stores that leave gaps */
+		shadow_store(sh, 0);
+		shadow_store(sh, 100);
+		shadow_store(sh, 300);
+		shadow_store(sh, cap - 1);
+		shadow_verify_all(sh);
+		VERIFY3U(sh->sa_count, ==, cap);
+
+		/* Overwrite the same record repeatedly */
+		for (int i = 0; i < 10; i++)
+			shadow_store(sh, 77);
+		shadow_verify(sh, 77);
+
+		/*
+		 * A disk-only allocator must never allocate memory; the
+		 * other two must, since record 0 is always on the memory
+		 * side.
+		 */
+		size_t used = allocator_memory_used(sh->sa_alloc);
+		if (config == 1)
+			VERIFY3U(used, ==, 0);
+		else
+			VERIFY3U(used, >, 0);
+
+		shadow_fini(sh);
+	}
+}
+
+/*
+ * Record sizes with awkward relationships to the page size: tiny, odd,
+ * non-power-of-2 multiples of 8 (whose memory units span several pages),
+ * sizes that leave waste at the tail of each unit, exact page size, page+,
+ * one record per unit, and the largest record size allowed. Each is filled
+ * past its budget and then walked down to disk-only.
+ */
+static void
+alloc_record_sizes(void)
+{
+	static const size_t sizes[] =
+	    { 1, 3, 7, 8, 12, 24, 56, 104, 512, 1000, 4095, 4096, 4097, 5000,
+	    12288, 69633 };
+
+	for (size_t s = 0; s < sizeof (sizes) / sizeof (sizes[0]); s++) {
+		size_t rsize = sizes[s];
+		size_t unit = mem_unit(rsize);
+		uint64_t cap = 3 * recs_per_unit(rsize) + 17;
+
+		shadow_allocator_t *sh = shadow_init(rsize, 3 * unit, B_TRUE,
+		    cap);
+		while (sh->sa_count < cap)
+			shadow_append(sh);
+		shadow_verify_all(sh);
+
+		/* Down one unit at a time, then all the way to disk-only */
+		while (allocator_memory_used(sh->sa_alloc) > unit) {
+			shadow_trim(sh, unit);
+			shadow_verify_all(sh);
+		}
+		shadow_trim(sh, SIZE_MAX / 2);
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+}
+
+/*
+ * The trim arithmetic itself, at the deltas most likely to be mishandled:
+ * zero, one byte, either side of a unit boundary, and a delta far larger
+ * than the memory actually in use. The last of these underflowed in an
+ * earlier version of the allocator and produced a negative file offset, so
+ * it is checked from a fresh allocator every time rather than only as the
+ * tail of a longer sequence.
+ */
+static void
+alloc_trim_arithmetic(void)
+{
+	const size_t rsize = 24;
+	const size_t unit = mem_unit(rsize);
+	const size_t budget = 16 * unit;
+	static const size_t deltas[] = { 0, 1, 4096 };
+
+	/* Deltas expressed relative to the unit are added below */
+	for (size_t d = 0; d < sizeof (deltas) / sizeof (deltas[0]) + 4; d++) {
+		size_t delta;
+		switch (d) {
+		case 3: delta = unit - 1;	break;
+		case 4: delta = unit;		break;
+		case 5: delta = unit + 1;	break;
+		case 6: delta = SIZE_MAX / 2;	break;	/* Far beyond use */
+		default: delta = deltas[d];	break;
+		}
+
+		uint64_t cap = 16 * recs_per_unit(rsize);
+		shadow_allocator_t *sh = shadow_init(rsize, budget, B_TRUE,
+		    cap);
+		while (sh->sa_count < cap)
+			shadow_append(sh);
+
+		size_t used = allocator_memory_used(sh->sa_alloc);
+		VERIFY3U(used, >, 0);
+		/* Repeat until memory is gone; each call must make progress */
+		while (allocator_memory_used(sh->sa_alloc) > 0) {
+			shadow_trim(sh, delta);
+			shadow_verify_all(sh);
+		}
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+
+	/*
+	 * Here we test that the allocator's writable frontier moves at the
+	 * frontier granularity and not at the granularity at which the
+	 * memory/disk split moves. We make the memory budget large to
+	 * remove its influence.
+	 *
+	 * The frontier step is not generally a multiple of the memory unit,
+	 * so the frontier can come to rest partway through a record. That
+	 * record must read as zeros until it's written, and writing it must
+	 * advance the frontier by another step. All three sizes here put the
+	 * first frontier inside a record with 4K pages; with other page sizes
+	 * the straddling checks are skipped if no record straddles.
+	 */
+	static const size_t big_sizes[] = { 24, 1000, 5000 };
+	for (size_t s = 0; s < sizeof (big_sizes) / sizeof (big_sizes[0]);
+	    s++) {
+		const size_t big = 64 << 20;
+		size_t brsize = big_sizes[s];
+		size_t bunit = mem_unit(brsize);
+		size_t step = frontier_step(brsize, big);
+
+		/* Find the record, if any, that straddles the first frontier */
+		uint64_t rpu = recs_per_unit(brsize);
+		uint64_t in_unit = (step % bunit) / brsize;
+		uint64_t straddler = (step / bunit) * rpu + in_unit;
+		uint64_t soff = test_record_offset(brsize, straddler);
+		boolean_t straddles = in_unit < rpu && straddler > 0 &&
+		    soff < step && soff + brsize > step;
+
+		uint64_t cap = straddles ? straddler + 2 : 64;
+		shadow_allocator_t *sh = shadow_init(brsize, big, B_TRUE, cap);
+		shadow_append(sh);
+		size_t used = allocator_memory_used(sh->sa_alloc);
+		VERIFY3U(used, ==, step);
+		VERIFY3U(used, <, big);
+
+		if (straddles) {
+			/* Partly reified, never written: reads as zeros */
+			shadow_verify(sh, straddler);
+			/* Its predecessor is wholly reified */
+			shadow_store(sh, straddler - 1);
+			VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, step);
+			shadow_store(sh, straddler);
+			VERIFY3U(allocator_memory_used(sh->sa_alloc), ==,
+			    MIN(2 * step, ROUND_UP(big, bunit)));
+			shadow_verify(sh, straddler - 1);
+			shadow_verify(sh, straddler);
+		}
+
+		/* Each small trim must still give back at least one unit */
+		for (int i = 0; i < 4; i++) {
+			size_t before = allocator_memory_used(sh->sa_alloc);
+			shadow_trim(sh, 1);
+			VERIFY3U(allocator_memory_used(sh->sa_alloc), <,
+			    before);
+			shadow_verify_all(sh);
+		}
+		/* And the descent still terminates */
+		while (allocator_memory_used(sh->sa_alloc) > 0)
+			shadow_trim(sh, 4 * bunit);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+
+	/* Trimming an allocator that never reified any pages is a no-op */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, budget, B_TRUE, 8);
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+		shadow_trim(sh, unit);
+		shadow_trim(sh, SIZE_MAX / 2);
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+
+	/* And so is trimming a disk-only allocator, which owns no pages */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, 0, B_TRUE, 64);
+		for (int i = 0; i < 64; i++)
+			shadow_append(sh);
+		shadow_trim(sh, SIZE_MAX / 2);
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+}
+
+/*
+ * Walk the memory/disk split all the way down through a full record space,
+ * verifying every record after each move; then do a randomized descent with
+ * interleaved mutations so the split passes through *changing* data.
+ */
+static void
+alloc_trim_sweep(void)
+{
+	const size_t rsize = 24;
+	const size_t unit = mem_unit(rsize);
+	const uint64_t cap = 8 * recs_per_unit(rsize);
+
+	/* Deterministic descent, one unit at a time */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, 8 * unit, B_TRUE,
+		    cap);
+		while (sh->sa_count < cap)
+			shadow_append(sh);
+		shadow_verify_all(sh);
+
+		int steps = 0;
+		while (allocator_memory_used(sh->sa_alloc) > 0) {
+			shadow_trim(sh, unit);
+			shadow_verify_all(sh);
+			steps++;
+			VERIFY3S(steps, <, 1000);	/* Must make progress */
+		}
+		shadow_fini(sh);
+	}
+
+	/* Randomized descent with mutation between moves */
+	{
+		selftest_rng_t rng;
+		selftest_rng_init(&rng, 42);
+		shadow_allocator_t *sh = shadow_init(rsize, 8 * unit, B_TRUE,
+		    cap);
+		while (sh->sa_count < cap)
+			shadow_append(sh);
+
+		for (int iter = 0; iter < 300; iter++) {
+			for (int i = 0; i < 8; i++)
+				shadow_store(sh, selftest_rng_below(&rng, cap));
+			if (allocator_memory_used(sh->sa_alloc) > 0 &&
+			    selftest_rng_below(&rng, 4) == 0) {
+				shadow_trim(sh,
+				    selftest_rng_below(&rng, 3 * unit));
+			}
+			for (int i = 0; i < 32; i++)
+				shadow_verify(sh,
+				    selftest_rng_below(&rng, cap));
+			if (iter % 25 == 24)
+				shadow_verify_all(sh);
+		}
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+}
+
+/*
+ * Corner cases that deserve individual attention.
+ */
+static void
+alloc_boundaries(void)
+{
+	const size_t rsize = 24;
+	const size_t unit = mem_unit(rsize);
+	const uint64_t rpu = recs_per_unit(rsize);
+
+	/* Trimming an empty allocator, repeatedly */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, 4 * unit, B_TRUE,
+		    64);
+		for (int i = 0; i < 4; i++)
+			shadow_trim(sh, unit);
+		shadow_verify_all(sh);
+		VERIFY3U(sh->sa_count, ==, 0);
+		/* Still usable afterwards, just on disk now */
+		shadow_append(sh);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+
+	/* A single record chased onto disk by a trim */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, 4 * unit, B_TRUE,
+		    64);
+		shadow_append(sh);
+		shadow_verify_all(sh);
+		while (allocator_memory_used(sh->sa_alloc) > 0) {
+			shadow_trim(sh, unit);
+			shadow_verify_all(sh);
+		}
+		shadow_fini(sh);
+	}
+
+	/*
+	 * Data that exactly fills one split unit, plus the first record on
+	 * the far side of that boundary.
+	 */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, unit, B_TRUE,
+		    rpu * 4);
+		while (sh->sa_count < rpu)
+			shadow_append(sh);
+		shadow_verify_all(sh);
+		shadow_store(sh, rpu);	/* First disk record */
+		shadow_verify_all(sh);
+		shadow_trim(sh, unit);
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+
+	/*
+	 * Sparse disk-only data on a dual-backed allocator. Tne record is
+	 * written to a high index, with the memory region below the split
+	 * left untouched.
+	 */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, 4 * unit, B_TRUE,
+		    rpu * 8);
+		shadow_store(sh, rpu * 6);	/* Disk-side */
+		shadow_verify_all(sh);
+		while (allocator_memory_used(sh->sa_alloc) > 0) {
+			shadow_trim(sh, unit);
+			shadow_verify_all(sh);
+		}
+		shadow_fini(sh);
+	}
+
+	/* Disk-only from birth: no memory to trim, everything still works */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, 0, B_TRUE, 512);
+		selftest_rng_t rng;
+		selftest_rng_init(&rng, 43);
+		for (int cycle = 0; cycle < 6; cycle++) {
+			for (int i = 0; i < 100; i++)
+				shadow_store(sh, selftest_rng_below(&rng, 512));
+			shadow_trim(sh, unit);
+			shadow_verify_all(sh);
+		}
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+		shadow_fini(sh);
+	}
+
+	/* A budget far larger than anything ever written */
+	{
+		shadow_allocator_t *sh = shadow_init(rsize, 64 * unit,
+		    B_TRUE, 64);
+		shadow_append(sh);
+		shadow_verify_all(sh);
+		VERIFY3U(allocator_memory_used(sh->sa_alloc), ==,
+		    frontier_step(rsize, 64 * unit));
+		shadow_fini(sh);
+	}
+}
+
+/*
+ * Repeated create/destroy cycles must not leak file descriptors.
+ */
+static void
+alloc_lifecycle(void)
+{
+	int probe = open("/dev/null", O_RDONLY);
+	VERIFY3S(probe, >=, 0);
+	int baseline_fd = probe;
+	(void) close(probe);
+
+	for (int i = 0; i < 50; i++) {
+		shadow_allocator_t *sh = shadow_init(64, (i % 2) ? 0 : 1 << 16,
+		    B_TRUE, 256);
+		for (int j = 0; j < 50; j++)
+			shadow_append(sh);
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+
+	probe = open("/dev/null", O_RDONLY);
+	VERIFY3S(probe, >=, 0);
+	if (probe > baseline_fd + 2) {
+		errx(1, "file descriptors leaked: probe fd went from %d to %d",
+		    baseline_fd, probe);
+	}
+	(void) close(probe);
+}
+
+#if defined(__linux__)
+static size_t
+current_rss(void)
+{
+	FILE *fp = fopen("/proc/self/statm", "r");
+	unsigned long total, resident;
+
+	VERIFY(fp != NULL);
+	VERIFY3S(fscanf(fp, "%lu %lu", &total, &resident), ==, 2);
+	(void) fclose(fp);
+	return ((size_t)resident * (size_t)sysconf(_SC_PAGESIZE));
+}
+#endif
+
+/*
+ * Trimming must actually return pages to the OS, not just move a
+ * bookkeeping pointer. The ejected memory-resident data must survive the
+ * trip to disk intact. The RSS check is Linux-only; the integrity check
+ * runs everywhere.
+ */
+static void
+alloc_memory_release(void)
+{
+	const size_t rsize = 4096;
+	const uint64_t cap = 8192;		/* 32MB of records */
+	const size_t data_bytes = cap * rsize;
+
+	shadow_allocator_t *sh =
+	    shadow_init(rsize, data_bytes, B_TRUE, cap + 8);
+	while (sh->sa_count < cap)
+		shadow_append(sh);
+	shadow_verify_all(sh);
+
+	VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, data_bytes);
+
+#if defined(__linux__)
+	size_t rss_full = current_rss();
+#endif
+	shadow_trim(sh, data_bytes - (2 << 20));
+	VERIFY3U(allocator_memory_used(sh->sa_alloc), <=, 2 << 20);
+#if defined(__linux__)
+	size_t rss_shrunk = current_rss();
+	if (rss_full < rss_shrunk ||
+	    rss_full - rss_shrunk < data_bytes / 2) {
+		errx(1, "trimming did not release memory (RSS %zu -> %zu)",
+		    rss_full, rss_shrunk);
+	}
+#endif
+	shadow_verify_all(sh);
+
+	/* And the rest of the way to disk-only */
+	shadow_trim(sh, SIZE_MAX / 2);
+	VERIFY3U(allocator_memory_used(sh->sa_alloc), ==, 0);
+	shadow_verify_all(sh);		/* Includes beyond-end zero probes */
+
+	shadow_fini(sh);
+}
+
+/*
+ * Random operation mixes against the shadow model across randomized
+ * configurations. Failures replay with -s.
+ */
+static void
+alloc_stress(void)
+{
+	static const size_t sizes[] = { 8, 24, 104, 512, 1000, 4096, 5000 };
+	selftest_rng_t rng;
+	selftest_rng_init(&rng, 4242);
+
+	for (int round = 0; round < 6; round++) {
+		size_t rsize = sizes[selftest_rng_below(&rng,
+		    sizeof (sizes) / sizeof (sizes[0]))];
+		size_t unit = mem_unit(rsize);
+		uint64_t cap = 1024 + selftest_rng_below(&rng, 1024);
+		boolean_t disk = selftest_rng_below(&rng, 4) != 0;
+		/*
+		 * A memory-only allocator can never spill, so it has to be
+		 * born large enough for every index below cap and can never
+		 * be trimmed. Disk-backed ones get an arbitrary budget.
+		 */
+		size_t full = bytes_for(rsize, cap);
+		size_t budget = disk ?
+		    selftest_rng_below(&rng, 2 * full) : 2 * full;
+
+		shadow_allocator_t *sh = shadow_init(rsize, budget, disk, cap);
+
+		for (int op = 0; op < 4000; op++) {
+			uint64_t k = selftest_rng_below(&rng, 100);
+			if (k < 35) {
+				shadow_store(sh,
+				    selftest_rng_below(&rng, cap));
+			} else if (k < 50) {
+				if (sh->sa_count < cap)
+					shadow_append(sh);
+			} else if (k < 55) {
+				if (sh->sa_count < cap)
+					shadow_skip(sh);
+			} else if (k < 85 || !disk) {
+				shadow_verify(sh,
+				    selftest_rng_below(&rng, cap));
+			} else {
+				shadow_trim(sh,
+				    selftest_rng_below(&rng, 4 * unit));
+			}
+		}
+		shadow_verify_all(sh);
+		shadow_fini(sh);
+	}
+}
+
+const test_case_t selftest_alloc_cases[] = {
+	{ "alloc_granularity",		alloc_granularity },
+	{ "alloc_basic",		alloc_basic },
+	{ "alloc_record_sizes",		alloc_record_sizes },
+	{ "alloc_trim_arithmetic",	alloc_trim_arithmetic },
+	{ "alloc_trim_sweep",		alloc_trim_sweep },
+	{ "alloc_boundaries",		alloc_boundaries },
+	{ "alloc_lifecycle",		alloc_lifecycle },
+	{ "alloc_memory_release",	alloc_memory_release },
+	{ "alloc_stress",		alloc_stress },
+	{ NULL,				NULL },
+};

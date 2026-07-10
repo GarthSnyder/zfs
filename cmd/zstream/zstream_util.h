@@ -36,6 +36,11 @@ extern "C" {
 #include <sys/zio_compress.h>
 
 /*
+ * Round up to an arbitrary (not necessarily power-of-2) multiple
+ */
+#define	ROUND_UP(size, align) ((((size) + (align) - 1) / (align)) * (align))
+
+/*
  * As with the libzfs-native ZIO_* encodings, only zstd compression has a
  * separately-defined level. gzip levels are bundled into the compression
  * type.
@@ -65,6 +70,24 @@ safe_malloc(size_t size);
 
 void *
 safe_calloc(size_t n);
+
+/*
+ * In addition to quitting on error, safe_pwrite() and safe_pread() handle
+ * partial reads and writes correctly and do not return until the full
+ * buffer has been transferred.
+ */
+void
+safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
+
+void
+safe_pread(int fd, void *buf, size_t count, off64_t offset);
+
+/*
+ * Like safe_pread(), except that reading past end-of-file is not an error:
+ * any portion of the buffer that lies beyond EOF is filled with zeros.
+ */
+void
+safe_pread_zero(int fd, void *buf, size_t count, off64_t offset);
 
 void
 safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
@@ -152,7 +175,7 @@ lookup_record_specifier(uint64_t object, uint64_t offset,
  * Frees the hash table used by lookup_record_specifier().
  */
 void
-destroy_record_specifier_hash(void);
+record_specifier_hash_fini(void);
 
 boolean_t
 write_is_encrypted(struct drr_write *drrw);
@@ -164,6 +187,16 @@ decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
 uint8_t *
 compress_buffer(uint8_t *inbuff, size_t inbuff_size,
     compression_spec_t compress_type, size_t *compressed_size);
+
+/*
+ * Create a temporary file in the named directory, returning an open file
+ * descriptor. The file is unlinked on creation, so closing deletes it.
+ */
+int
+safe_create_temp_file(const char *dir_path);
+
+size_t
+least_common_multiple(size_t a, size_t b);
 
 #ifdef __cplusplus
 }
