@@ -32,15 +32,22 @@
 #include <atomic.h>
 #include <err.h>
 #include <errno.h>
+<<<<<<< HEAD
 #include <pthread.h>
+=======
+#include <fcntl.h>
+>>>>>>> 7117bf3110 (Expansion done?)
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/abd.h>
 #include <sys/fs/zfs.h>
+#include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/stdtypes.h>
 #include <sys/sysmacros.h>
+#include <sys/types.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio.h>
 #include <sys/zio_compress.h>
@@ -49,8 +56,14 @@
 
 #include "zstream_util.h"
 
+<<<<<<< HEAD
 static pthread_key_t thread_count_key;
 uint32_t num_pthreads = 0;
+=======
+#if defined(__linux__)
+#include <linux/falloc.h>
+#endif
+>>>>>>> 7117bf3110 (Expansion done?)
 
 void *
 safe_malloc(size_t size)
@@ -70,6 +83,44 @@ safe_calloc(size_t size)
 		errx(1, "failed to allocate %zu bytes, aborting...", size);
 	}
 	return (rv);
+}
+
+void
+safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
+{
+	ssize_t n;
+	size_t done = 0;
+
+	while (done < len) {
+		ssize_t n = pwrite(fd, buf + done, len - done, offset + done);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue; /* zero progress this call, retry */
+			err(1, "pwrite64() failed");
+		}
+		if (n == 0)
+			errx(1, "pwrite of %llu bytes failed", count);
+		done += (size_t)n;
+	}
+}
+
+void
+safe_pread(int fd, const void *buf, size_t count, off64_t offset)
+{
+	ssize_t n;
+	size_t done = 0;
+
+	while (done < len) {
+		ssize_t n = pread(fd, buf + done, len - done, offset + done);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue; /* zero progress this call, retry */
+			err(1, "pread failed");
+		}
+		if (n == 0)
+			errx(1, "pread of %llu bytes failed", count);
+		done += (size_t)n;
+	}
 }
 
 char *
@@ -185,6 +236,7 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 	return (outbuff);
 }
 
+<<<<<<< HEAD
 static void
 thread_destroyed(void *arg)
 {
@@ -212,4 +264,97 @@ pthread_register_self(void)
 	if (pthread_setspecific(thread_count_key, (void *)&sentinel) != 0)
 		err(1, "pthread_setspecific failed");
 	atomic_inc_32(&num_pthreads);
+}
+
+/*
+ * Ask the filesystem (which may not be ZFS) to deallocate the storage that
+ * backs a region of a regular file. This doesn't change the file size, but
+ * it may/should result in the region reading as zeros.
+ *
+ * This is best-effort. Some systems (older FreeBSD systems in particular)
+ * may not support it at all.
+ *
+ * Returns 0 if the whole region was punched, -1 with errno set otherwise
+ * (EOPNOTSUPP if this platform or filesystem has no way to do it). Failure
+ * is harmless; file contents outside the given region are never affected.
+ */
+static int
+punch_hole(int fd, off_t offset, off_t length)
+{
+	if (offset < 0 || length <= 0) {
+		errno = EINVAL;
+		return (-1);
+	}
+
+#if defined(__linux__) && defined(FALLOC_FL_PUNCH_HOLE)
+	/*
+	 * Linux >= 2.6.38. The kernel zeroes partial blocks at the edges
+	 * and deallocates whole blocks in the interior, so no alignment is
+	 * required of the caller. FALLOC_FL_KEEP_SIZE is required to avoid
+	 * truncation.
+	 */
+	return (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+	    offset, length));
+#elif defined(__FreeBSD__) && defined(SPACECTL_DEALLOC)
+	/*
+	 * FreeBSD >= 14 (older releases have no hole punching API at
+	 * all). fspacectl() handles alignment like Linux, but is allowed
+	 * to complete partially, returning the remaining range; loop
+	 * until it is done.
+	 */
+	struct spacectl_range range = {
+		.r_offset = offset,
+		.r_len = length,
+	};
+
+	while (range.r_len > 0) {
+		if (fspacectl(fd, SPACECTL_DEALLOC, &range, 0, &range) != 0) {
+			if (errno == EINTR)
+				continue;
+			return (-1);
+		}
+	}
+	return (0);
+#elif defined(__APPLE__) && defined(F_PUNCHHOLE)
+	/*
+	 * macOS (APFS only; HFS+ returns ENOTSUP). Unlike Linux and
+	 * FreeBSD, F_PUNCHHOLE fails with EINVAL unless the range is
+	 * aligned to the filesystem block size, so on EINVAL retry with
+	 * the range shrunk inward to the nearest block boundaries.
+	 * That punches a subset of the requested region, which is safe.
+	 */
+	struct fpunchhole hole = {
+		.fp_flags = 0,
+		.reserved = 0,
+		.fp_offset = offset,
+		.fp_length = length,
+	};
+
+	if (fcntl(fd, F_PUNCHHOLE, &hole) == 0)
+		return (0);
+	if (errno != EINVAL)
+		return (-1);
+
+	struct stat st;
+	off_t align = 4096;
+
+	if (fstat(fd, &st) == 0 && st.st_blksize > 0 && ISP2(st.st_blksize))
+		align = st.st_blksize;
+
+	off_t start = P2ROUNDUP(offset, align);
+	off_t end = P2ALIGN_TYPED(offset + length, align, off_t);
+
+	if (end <= start) {
+		errno = EINVAL;	/* range doesn't span a full block */
+		return (-1);
+	}
+
+	hole.fp_offset = start;
+	hole.fp_length = end - start;
+	return (fcntl(fd, F_PUNCHHOLE, &hole));
+#else
+	(void) fd;
+	errno = EOPNOTSUPP;
+	return (-1);
+#endif
 }
