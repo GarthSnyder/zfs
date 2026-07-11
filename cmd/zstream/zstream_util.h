@@ -74,6 +74,12 @@ safe_create_thread(thread_f *body, void *body_arg, const char *name,
     boolean_t detach);
 
 char *
+safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
+
+void
+safe_pread(int fd, const void *buf, size_t count, off64_t offset);
+
+extern char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 
 /*
@@ -164,6 +170,21 @@ decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
 uint8_t *
 compress_buffer(uint8_t *inbuff, size_t inbuff_size,
     compression_spec_t compress_type, size_t *compressed_size);
+
+/*
+ * Ask the filesystem (which may not be ZFS) to deallocate the storage that
+ * backs a region of a regular file. This doesn't change the file size, but
+ * it may/should result in the region reading as zeros.
+ *
+ * This is best-effort. Some systems (older FreeBSD in particular) may not
+ * support it at all.
+ *
+ * Returns 0 if the whole region was punched, -1 with errno set otherwise
+ * (EOPNOTSUPP if this platform or filesystem has no way to do it). Failure
+ * is harmless; file contents outside the given region are never affected.
+ */
+static int
+punch_hole(int fd, off_t offset, off_t length);
 
 #ifdef __cplusplus
 }
