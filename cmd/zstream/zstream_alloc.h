@@ -26,15 +26,29 @@
 #include <stdio.h>
 
 /*
- * This module defines a generalized storage allocator that can be backed up
- * by either memory or a disk file; the API is the same. An allocator can
- * convert from memory backing to disk backing "in flight", without clients
- * being aware that this transition has occurred. The goal is to use memory
- * as long as it's available but not crap out arbitrarily when memory gets
- * tight. With disk backing, it should be possible to process petabyte-scale
- * streams.
+ * zstream_alloc.[ch] define a thin block storage API that can be backed by
+ * either memory, a disk file, or both; the API is the same. An allocator's
+ * backing strategy can change on the fly without clients being aware that a
+ * transition has occurred.
+ *
+ * The goal is to use memory as long as it's available but not give up
+ * arbitrarily when memory has been exhausted. With sufficient disk space,
+ * it is possible to process petabyte-scale streams.
+ *
+ * Dual-backed allocators keep the first N records in memory and later
+ * records on disk. For data that grow linearly but are accessed randomly
+ * (e.g., hash tables), this arrangement allows for gradual performance
+ * degradation after memory is full.
+ *
+ * - Blocks are of uniform fixed size.
+ * - Every block lives at a 64-bit record_ix_t address.
+ * - Record indexes are in block units, not bytes.
+ * - You may read a block at any index, even if you haven't written it.
+ * - Uninitialized blocks are zero-filled.
+ * - Allocators are not thread-safe.
  */
-typedef int64_t record_ix_t;
+
+typedef uint64_t record_ix_t;
 
 struct allocator;
 typedef struct allocator allocator_t;
@@ -46,63 +60,58 @@ typedef struct {
 } allocator_stats_t;
 
 /*
- * Initialize an allocator. If a file handle is provided and max_memory is
- * 0, the allocator will use disk backing. If both a memory limit and a file
- * handle are supplied, the allocator is a convertible allocator that starts
- * by using memory but converts to disk storage if memory use is exceeded.
- * Conversion can also be triggered externally by calling
- * allocator_convert_to_disk().
+ * Initialize an allocator. The backing_fd can be omitted (set to -1), but
+ * since it cannot later be changed, the allocator will be memory-only.
  *
- * If no file handle is supplied, the allocator will be memory-only.
- * max_memory must be specified and nonzero.
+ * The max_memory parameter determines how much RAM the allocator is allowed
+ * to consume, in bytes. If it is 0, the allocator will initially be
+ * disk-only.
  */
 allocator_t *
-allocator_init(size_t record_size, size_t max_memory, FILE *file);
+allocator_init(size_t record_size, size_t max_memory, int backing_fd);
 
 /*
- * Convert a memory-backed allocator to disk-backed.
- * The file handle must have been provided during initialization.
- * A negative return value indicates an error.
+ * An allocator's memory budget can be changed at any time. On a dual-backed
+ * allocator, this operation incurs a disk-write cost proportionate to the
+ * difference between old and new budgets. However, all data remain intact.
+ *
+ * If the allocator is memory-only, the new memory budget must be sufficient
+ * to accomodate all existing records. If it is not, the program will abort.
+ * You can check the current memory consumption with allocator_get_stats().
+ *
+ * You can also use this function to convert a disk-only allocator to a
+ * dual-backed allocator.
  */
 int
-allocator_convert_to_disk(allocator_t *alloc);
+allocator_set_max_memory(allocator_t *alloc, size_t max_memory);
 
 /*
- * Append a new data record. A negative return value indicates
- * an error.
+ * Append a new record and return its index.
  */
 record_ix_t
-allocator_append(allocator_t *alloc, const void* data);
+allocator_append(allocator_t *alloc, const void *data);
 
 /*
- * Skip a record (allocate space but leave it zero-filled). A 
- * negative return value indicates an error.
+ * Append a zero-filled record. This operation is potentially more efficient
+ * than allocator_append() because zero-filling is implicit.
  */
-record_ix_t
+void
 allocator_skip(allocator_t *alloc);
 
-/*
- * Store data at a specific record index (can skip records). A
- * negative return value indicates an error.
- */
-record_ix_t
-allocator_store(allocator_t *alloc, record_ix_t record, const void *data);
+void
+allocator_store(allocator_t *alloc, record_ix_t record, const void *buff);
+
+void
+allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);
 
 /*
- * Retrieve a data record. A negative value indicates an error.
+ * Overwrites stats with information about allocator utilization.
  */
-record_ix_t
-allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buffer);
-
 void
 allocator_get_stats(allocator_t *alloc, allocator_stats_t *stats);
 
 /*
  * Destroy allocator and free all resources.
- * For memory allocators: frees all allocated memory.
- * For disk allocators: closes and deletes the file.
- *
- * @param alloc Allocator instance (may be NULL)
  */
 void
 allocator_destroy(allocator_t *alloc);
