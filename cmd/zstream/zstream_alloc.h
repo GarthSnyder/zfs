@@ -68,7 +68,7 @@ typedef struct {
  * disk-only.
  */
 allocator_t *
-allocator_init(size_t record_size, size_t max_memory, int backing_fd);
+allocator_init(size_t record_size, size_t mem_size, int backing_fd);
 
 /*
  * An allocator's memory budget can be changed at any time. On a dual-backed
@@ -83,7 +83,7 @@ allocator_init(size_t record_size, size_t max_memory, int backing_fd);
  * dual-backed allocator.
  */
 int
-allocator_set_max_memory(allocator_t *alloc, size_t max_memory);
+allocator_set_max_memory(allocator_t *alloc, size_t new_size);
 
 /*
  * Append a new record and return its index.
