@@ -51,6 +51,24 @@
 #define	RECORD_ALIGN 8
 
 /*
+ * Round to ensure memory/disk transition is at both a record boundary and a
+ * page boundary.
+ */
+#define MEM_ROUNDUP(size, pagesize, recsize) \
+	    P2ROUNDUP(size, lcm(pagesize, recsize))
+
+#define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_record_size_rounded)
+#define OFFSET_TO_REC(alloc, off) ((off) / (alloc)->a_record_size_rounded)
+
+#define OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
+#define ADDR_TO_OFFSET(alloc, addr) ((addr) - (alloc)->a_base_addr)
+
+#define	REC_TO_ADDR(alloc, rec) OFFSET_TO_ADDR(alloc, \
+	    REC_TO_OFFSET(alloc, rec))
+#define	ADDR_TO_REC(alloc, addr) OFFSET_TO_REC(alloc, \
+	    ADDR_TO_OFFSET(alloc, addr))
+
+/*
  * This implementation relies on two OS features that are common to most
  * systems in the UNIX lineage, including Linux and FreeBSD.
  *
@@ -96,8 +114,6 @@ struct allocator {
 	int		a_fd;			/* On-disk file descriptor */
 
 	uint64_t	a_count;		/* Number of records stored */
-	record_ix_t	a_first_on_disk;	/* Split point, LCM-aligned */
-
 	void		*a_base_addr;		/* Start of memory segment */
 	size_t		a_pagesize;		/* System page size */
 	size_t		a_vm_allocated;		/* Total VM space reserved */
@@ -139,23 +155,23 @@ size_t lcm(size_t a, size_t b)
  * added.
  */
 allocator_t *
-allocator_init(size_t record_size, size_t max_memory, int fd)
+allocator_init(size_t record_size, size_t mem_size, int fd)
 {
 	VERIFY3U(record_size, >, 0);
-	if (fd < 0 && max_memory <= 0) {
+	if (fd < 0 && mem_size <= 0) {
 		errx(1, "allocator_init requires either a file or max_memory");
 	}
 
 	size_t rsize_rounded = P2ROUNDUP(record_size, RECORD_ALIGN);
-	size_t pagesize = (size_t)sysconf(_SC_PAGESIZE);
-	size_t pages = (size_t)sysconf(_SC_PHYS_PAGES);
+	ssize_t pagesize = (ssize_t)sysconf(_SC_PAGESIZE);
+	ssize_t pages = (ssize_t)sysconf(_SC_PHYS_PAGES);
 
 	if (pagesize < 0 || pages < 0) {
 		return NULL;
 	}
 
 	size_t vm_allocation = 4 * pagesize * pages;
-	size_t granularity = P2ROUNDUP((size_t) 2 << 20, pagesize);
+	size_t granularity = 1 << 20;  /* 1MB */
 
 	void *base = mmap(NULL, vm_allocation, PROT_NONE,
 	    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -163,16 +179,13 @@ allocator_init(size_t record_size, size_t max_memory, int fd)
 		return NULL;
 	}
 
-	size_t mem = P2ROUNDUP(max_memory, lcm(pagesize, rsize_rounded));
-	record_ix_t first_on_disk = mem / rsize_rounded;
-
+	size_t mem = MEM_ROUNDUP(mem_size, pagesize, rsize_rounded);
 	allocator_t *alloc = safe_calloc(sizeof (allocator_t));
 	*alloc = (allocator_t){
 		.a_record_size = record_size,
 		.a_record_size_rounded = rsize_rounded,
-		.a_max_memory = maxmem_rounded,
+		.a_max_memory = mem,
 		.a_fd = fd,
-		.a_first_on_disk = first_on_disk,
 		.a_base_addr = base,
 		.a_pagesize = pagesize,
 		.a_vm_allocated = vm_allocation,
@@ -182,59 +195,69 @@ allocator_init(size_t record_size, size_t max_memory, int fd)
 	return (alloc);
 }
 
-		/*
-		 * Both old max_memory and new max_memory are at both page
-		 * and record boundaries.
-		 *
-		 * 1) clamp to existing record range
-		 * 2) calc covered record range
-		 * 3) expand frontier
-		 * 4) read from disk
-		 * 5) set first_on_disk
-		 */
-
 static void
 expand_max_memory(allocator_t *alloc, size_t new_size)
 {
-	record_ix_t new_fod = new_size / alloc->a_record_size_rounded;
-	record_ix_t last_to_copy = MIN(alloc->a_count, new_fod) - 1;
-
-	if (alloc->a_count > alloc->a_first_on_disk) {
-		record_ix_t copy_tail = MIN(alloc->a_count, new_fod);
-		size_t copy_bytes = (copy_tail - alloc->a_first_on_disk) *
-		    alloc->a_record_size_rounded;
-		off_t start_offset = alloc->a_first_on_disk *
-		    alloc->a_record_size_rounded;
-		void *start_addr = alloc->a_base_addr +
-		    alloc->a_first_on_disk * alloc->a_record_size_rounded;
-		safe_pread(alloc->a_fd, start_addr, copy_bytes, start_offset);
-		punch_hole(alloc->a_fd, start_offset, copy_bytes);
+	off_t first = alloc->a_max_memory;
+	off_t last = MIN(REC_TO_OFFSET(alloc, alloc->a_count), new_size) - 1;
+	ssize_t length = last - first;
+	if (length > 0) {
+		void *start_addr = OFFSET_TO_ADDR(alloc, first);
+		safe_pread(alloc->a_fd, start_addr, length, first);
+		punch_hole(alloc->a_fd, first, length);
 	}
-	alloc->a_first_on_disk = new_fod;
 	alloc->a_max_memory = new_size;
 }
 
-void
-allocator_set_max_memory(allocator_t *alloc, size_t max_memory)
+static void
+trim_max_memory(allocator_t *alloc, size_t new_size)
 {
-	size_t new_size = P2ROUNDUP(max_memory,
-	    lcm(alloc.a_pagesize, alloc.a_record_size_rounded));
-
-	if (new_size > alloc->a_max_memory) {
-		expand_max_memory(alloc, new_size);
-	} else if (new_size < alloc->a_max_memory) {
-		trim_max_memory(alloc, new_size);
+	off_t first_off = new_size;
+	off_t last_off = MIN(alloc->a_max_memory,
+	    REC_TO_OFFSET(alloc, alloc->a_count)) - 1;
+	ssize_t length = last_off - first_off;
+	if (length > 0) {
+		void *start_addr = OFFSET_TO_ADDR(first_off);
+		safe_pwrite(alloc->a_fd, start_addr, length, first_off);
 	}
+	alloc->a_max_memory = new_size;
+	shrink_frontier(alloc);
+}
 
-
-	max_memory = round_memory_up(max_memory, alloc->a_record_size);
-	if (max_memory < alloc->a_max_memory) {
-		if (alloc->a_count >= alloc->a_first_on_disk) {
-
-		} else {
-
+/*
+ * Since memory and disk segments share offset addresses, we only need to do
+ * one copy from memory to disk or vice versa to change the split point.
+ * Note that because of memory allocation rounding, this may be a no-op even
+ * if new_size != current size.
+ */
+void
+allocator_set_max_memory(allocator_t *alloc, size_t new_size)
+{
+	size_t new_size = MEM_ROUNDUP(new_size, alloc->a_pagesize,
+	    alloc->a_record_size_rounded);
+	off_t last_off_used = REC_TO_OFFSET(alloc, alloc->a_count) - 1;
+	if (alloc->a_fd < 0 && new_size < last_off_used + 1)
+		errx(1, "resize of allocator would lose data");
+	if (alloc->a_fd >= 0 && new_size > alloc->a_max_memory) {
+		off_t first_byte = alloc->a_max_memory;
+		off_t last_byte = MIN(last_off_used, new_size - 1);
+		ssize_t len = last_byte - first_byte;
+		if (len > 0) {
+			void *start_addr = OFFSET_TO_ADDR(alloc, first_byte);
+			safe_pread(alloc->a_fd, start_addr, len, first_byte);
+			punch_hole(alloc->a_fd, first_byte, len);
+		}
+	} else if (alloc->a_fd >= 0 && new_size < alloc->a_max_memory) {
+		off_t first_byte = new_size;
+		off_t last_byte = MIN(last_off_used, alloc->a_max_memory - 1);
+		ssize_t len = last_byte - first_byte;
+		if (len > 0) {
+			void *start_addr = OFFSET_TO_ADDR(alloc, first_byte);
+			safe_pwrite(alloc->a_fd, start_addr, len, first_byte);
+			shrink_frontier(alloc);
 		}
 	}
+	alloc->a_max_memory = new_size;
 }
 
 static void
@@ -277,9 +300,8 @@ allocator_skip(allocator_t *alloc) {
 static void *
 reify_memory_for_record(allocator_t *alloc, record_ix_t record)
 {
-	void *first_byte = alloc->a_base_addr +
-	    record * alloc->a_record_size_rounded;
-	void *last_byte = first_byte + alloc->a_record_size_rounded - 1;
+	void *last_byte = REC_TO_ADDR(alloc, record) +
+	    alloc->a_record_size_rounded - 1;
 	while (last_byte >= alloc->a_vm_frontier) {
 		void *new_frontier = alloc->a_vm_frontier
 		    + alloc->a_frontier_granularity;
@@ -293,7 +315,21 @@ reify_memory_for_record(allocator_t *alloc, record_ix_t record)
 	return (first_byte);
 }
 
-static record_location_t
+static void
+shrink_frontier(allocator_t *alloc)
+{
+	off_t last_byte_in_use = MIN(alloc->a_max_memory,
+	    REC_TO_OFFSET(alloc, alloc->a_count)) - 1;
+	void *last_addr = OFFSET_TO_ADDR(alloc, last_byte_in_use);
+	void *new_frontier = P2ROUNDUP(last_addr, alloc->a_pagesize);
+	off_t frontier_off = ADDR_TO_OFFSET(alloc, new_frontier);
+	ssize_t length = alloc->a_vm_allocated - frontier_off;
+	if (mprotect(new_frontier, length, PROT_NONE) != 0)
+		err(1, "mprotect failed");
+	alloc->a_vm_frontier = new_frontier;
+}
+
+static inline record_location_t
 locate_record(allocator_t *alloc, record_ix_t record)
 {
 	VERIFY(alloc != NULL && record >= 0);
@@ -304,6 +340,8 @@ locate_record(allocator_t *alloc, record_ix_t record)
 		return (loc);
 	} else if (record < alloc->a_first_on_disk) {
 		alloc->a_io_ops_mem++;
+		void *addr = alloc->a_base_addr +
+		    record * alloc->a_record_size_rounded;
 		void *addr = reify_memory_for_record(alloc, record);
 		record_location_t loc = { B_FALSE, .l_addr = addr };
 		return (loc);
