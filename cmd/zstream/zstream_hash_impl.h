@@ -33,7 +33,6 @@ extern "C" {
 
 #define ITER_BUCKET(lh, bucket) {					\
 		.ei_lh = lh,						\
-		.ei_alloc = lh->lh_bucket_alloc,			\
 		.ei_bucket_ix = bucket,					\
 		.ei_entry_ix = -1					\
 	}
@@ -53,14 +52,14 @@ typedef struct {
 /* Internal iterator for bucket entries */
 typedef struct {
 	linear_hash_t	*ei_lh;
-	allocator_t	*ei_alloc;
-	record_ix_t	ei_bucket_ix;	/* -1 == overflow not yet assigned */
-	record_ix_t	ei_entry_ix;	/* -1 == bucket not yet retrieved */
-	bucket_t	ei_bucket;	/* Working copy of allocator version */
-	boolean_t	ei_dirty;	/* Needs writeback */
+	record_ix_t	ei_bucket_ix;	/* Index of bucket within allocator */
+	int		ei_entry_ix;	/* Ix within bucket; -1 == not read */
+	bucket_t	ei_bucket;	/* Working copy of bucket */
+	boolean_t	ei_in_overflow;	/* Which allocator: main or overflow? */
+	boolean_t	ei_dirty;	/* Needs writeback? */
 } entry_iterator_t;
 
-/* Iterator for retrieving records by hash */
+/* User-facing iterator for retrieving records by hash */
 typedef struct lh_iterator {
 	uint64_t		lhi_hash;
 	entry_iterator_t	lhi_entry_iterator;
@@ -84,8 +83,8 @@ typedef struct {
 struct linear_hash {
 	size_t		lh_record_size;
 	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
-	record_ix_t	lh_split_pointer;    	/* Next bucket to split */
-	boolean_t	lh_validate;		/* Validation per op (slow) */
+	record_ix_t	lh_split_pointer;	/* Next bucket to split */
+	boolean_t	lh_validate;		/* Debug: check per op (slow) */
 	uint64_t	lh_max_memory;
 	int     	lh_next_memory_check;	/* # of splits before check */
 	int       	lh_next_iterator;
