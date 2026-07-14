@@ -74,26 +74,26 @@
  * disk have common addressing, they can be rebalanced with a single read or
  * write when the memory budget changes.
  *
- * If the backing file's filesystem does not support holes (unlikely!), the
+ * If the backing file's filesystem does not support holes (unlikely), the
  * code is still correct. However, actual disk space consumption will be
  * higher.
  *
- * - The second feature is the use of PROT_NONE for virtual pages. PROT_NONE
- * pages are neither readable nor writable nor executable, so OSes largely
- * ignore their existence outside of address-map maintenance. They do not
- * consume physical memory, TLB entries, or swap space. Because of that,
- * allocators can request a preposterously ambitious VM allocation up front,
- * and they never need to change their address space.
+ * - The second feature is the use of PROT_NONE for virtual pages. You can't
+ * do anything with these pages, so OSes largely ignore their existence
+ * aside from maintaining the address map. They do not consume physical
+ * memory, TLB entries, or swap space. Because of that, allocators can
+ * request a preposterously large VM allocation up front, and they never
+ * need to change their address space.
  *
  * As the allocator needs more pages to actually work with, it incrementally
  * changes their protection from PROT_NONE to PROT_READ | PROT_WRITE, at
  * which point they acquire swap reservations and the other normal trappings
  * of memory. If the memory budget is reduced, the trailing pages are
- * transferred to disk and their protection is reset to PROT_NONE. That
+ * transferred to disk and their protection is reset to PROT_NONE, which
  * makes the kernel free them immediately.
  *
  * A more general point is that file I/O occurs only through reads and
- * writes to buffers. OS-level file descriptors are used, so the only
+ * writes to buffers. Only OS-level file descriptors are used, so the only
  * cacheing is that of the filesystem page cache.
  */
 
@@ -114,14 +114,6 @@ struct allocator {
 	uint64_t	a_io_ops_mem;		/* Number of reads and writes */
 	uint64_t	a_io_ops_disk;
 };
-
-typedef struct {
-	boolean_t	l_on_disk;
-	union {
-		off_t	l_off;		/* Valid when l_on_disk */
-		void	*l_addr;	/* Valid otherwise */
-	};
-} record_location_t;
 
 /*
  * Least common multiple - Euclid's algorithm
@@ -206,8 +198,8 @@ shrink_frontier(allocator_t *alloc)
 /*
  * Since memory and disk segments share offset addresses, we only need to do
  * one copy from memory to disk or vice versa to change the split point.
- * Note that because of memory allocation rounding, this may be a no-op even
- * if new_size != current size.
+ * Note that because of memory allocation rounding, this function may be a
+ * no-op even if new_size != current size.
  */
 void
 allocator_set_max_memory(allocator_t *alloc, size_t new_size)
@@ -239,34 +231,6 @@ allocator_set_max_memory(allocator_t *alloc, size_t new_size)
 	alloc->a_max_memory = new_size;
 }
 
-static void
-free_memory(allocator_t *alloc) {
-	if (alloc->a_base_addr) {
-		munmap(alloc->a_base_addr, alloc->a_max_memory);
-	}
-	alloc->a_base_addr = NULL;
-}
-
-void
-allocator_get_stats(allocator_t *alloc, allocator_stats_t *stats) {
-	assert(alloc && stats);
-	stats->as_num_ops = alloc->a_io_ops;
-	stats->as_num_records = alloc->a_count;
-	stats->as_mem_used = alloc->a_using_disk ?
-		0 : (alloc->a_count * alloc->a_record_size);
-}
-
-record_ix_t
-allocator_append(allocator_t *alloc, const void *data) {
-	return allocator_store(alloc, alloc->a_count, data);
-}
-
-record_ix_t
-allocator_skip(allocator_t *alloc) {
-	VERIFY(alloc != NULL);
-	return (alloc->a_count++);
-}
-
 /*
  * Memory pages starting at a_vm_frontier are initially PROT_NONE, so they
  * don't really exist and can't be written to or read. If a record we want
@@ -294,22 +258,6 @@ reify_memory_for_record(allocator_t *alloc, record_ix_t record)
 }
 
 void
-allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
-{
-	VERIFY(buff != NULL);
-	if (REC_ON_DISK(alloc, record)) {
-		if (alloc->a_fd < 0)
-			errx(1, "no file for allocator record %llu", record);
-		off_t loc = REC_TO_OFFSET(alloc, record);
-		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, loc);
-	} else {
-		reify_memory_for_record(alloc, record);
-		memcpy(REC_TO_ADDR(alloc, record), buff, alloc->a_record_size);
-	}
-	alloc->a_count = MAX(alloc->a_count, record);
-}
-
-void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 {
 	VERIFY(buff != NULL);
@@ -318,20 +266,71 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 			errx(1, "no file for allocator record %llu", record);
 		off_t loc = REC_TO_OFFSET(alloc, record);
 		safe_pread(alloc->a_fd, buff, alloc->a_record_size, loc);
+		alloc->a_io_ops_disk++;
 	} else {
 		reify_memory_for_record(alloc, record);
 		memcpy(buff, REC_TO_ADDR(alloc, record), alloc->a_record_size);
+		alloc->a_io_ops_mem++;
 	}
 }
 
 void
-allocator_destroy(allocator_t *alloc) {
-	assert(alloc);
-	if (!alloc->a_using_disk) {
-		free_memory(alloc);
+allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
+{
+	VERIFY(buff != NULL);
+	if (REC_ON_DISK(alloc, record)) {
+		if (alloc->a_fd < 0)
+			errx(1, "no file for allocator record %llu", record);
+		off_t loc = REC_TO_OFFSET(alloc, record);
+		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, loc);
+		alloc->a_io_ops_disk++;
+	} else {
+		reify_memory_for_record(alloc, record);
+		memcpy(REC_TO_ADDR(alloc, record), buff, alloc->a_record_size);
+		alloc->a_io_ops_mem++;
 	}
-	if (alloc->a_file) {
-		fclose(alloc->a_file);
+	alloc->a_count = MAX(alloc->a_count, record);
+}
+
+record_ix_t
+allocator_append(allocator_t *alloc, const void *data) {
+	record_ix_t rec = alloc->a_count;
+	allocator_store(alloc, loc, data);
+	return (loc);
+}
+
+record_ix_t
+allocator_skip(allocator_t *alloc) {
+	VERIFY(alloc != NULL);
+	return (alloc->a_count++);
+}
+
+allocator_stats_t
+allocator_get_stats(allocator_t *alloc) {
+	VERIFY(alloc != NULL && stats != NULL);
+	allocator_stats_t stats = {
+		.as_io_ops_mem = alloc->a_io_ops_mem,
+		.as_io_ops_disk = alloc->a_io_ops_disk,
+		.as_mem_used = alloc->a_vm_frontier - alloc->a_base_addr,
+		.as_num_records = alloc->a_count
+	}
+	if (alloc->a_fd >= 0) {
+		off_t last_byte = REC_TO_OFFSET(alloc, alloc->a_count) +
+		    alloc->a_record_size_rounded - 1;
+		if (last_byte > alloc->a_max_memory) {
+			stats.as_disk_used = last_byte - alloc->a_max_memory;
+		}
+	}
+	return (stats);
+}
+
+void
+allocator_destroy(allocator_t *alloc) {
+	VERIFY(alloc != NULL);
+	munmap(alloc->a_base_addr, alloc->a_vm_allocated);
+	if (alloc->a_fd >= 0) {
+		if (close(alloc->a_fd) != 0)
+			warn("unable to close allocator backing file");
 	}
 	free(alloc);
 }
