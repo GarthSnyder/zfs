@@ -29,13 +29,25 @@ extern "C" {
 #include <stddef.h>
 
 /*
- * This module implements a linear hash table with 64-bit hash keys. It runs
- * on top of allocator_t, which allows the hash table to expand indefinitely
- * as long as disk storage remains available.
+ * This code implements linear hashing with 64-bit hash keys. It runs on top
+ * of allocator_t, which allows the hash table to expand indefinitely as
+ * long as disk storage remains available.
  *
- * API clients are required neither to memory-manage iterators nor to pursue
- * iterations to completion. In return, callers must limit themselves to
- * MAX_LH_ITERATORS concurrent iterators.
+ * For more details on linear hashing, see the Wikipedia article or the
+ * comments in zstream_hash.c. Briefly, the table grows roughly linearly as
+ * items are inserted. When an occupancy threshold is crossed, one bucket is
+ * split into two. This incremental growth is ideal for tables that we'd
+ * really like to keep in memory but that might eventually get too big to
+ * keep there. As more disk storage is used, the performance of the hash
+ * table declines smoothly with the number of entries.
+ *
+ * API clients are not required to memory-manage iterators, nor are they
+ * obligated to pursue iterations to completion. In return, callers must
+ * limit themselves to MAX_LH_ITERATORS concurrent iterators.
+ *
+ * Hash keys are 64-bit values, and you must supply them yourself. If you
+ * want to use longer hash keys, give the linear hash 64-bit digests and
+ * check returned records against the full hash value.
  */
 
 #define MAX_LH_ITERATORS 8
@@ -47,53 +59,30 @@ struct lh_iterator;
 typedef struct lh_iterator lh_iterator_t;
 
 /*
- * Initialize a memory-based or convertible linear hash table.
- *
- * @param record_size Size of each data record in bytes
- * @param max_memory Maximum memory for storage
- * @param cache_dir Directory in which to store convertible files
- * @return malloc'ed linear allocator or aborts
+ * The cache_dir should be a place where memory can meaningfully spill over
+ * to disk, which rules out /tmp on most systems because it's often
+ * implemented as a glorified ramdisk. The default is /var/tmp.
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
 
-/*
- * Insert a data record with the given hash value.
- *
- * @param lh Hash table instance
- * @param hash 64-bit hash value
- * @param data Buffer containing data record
- */
 void
 lh_insert(linear_hash_t *lh, uint64_t hash, const void* data);
 
 /*
  * Set up retrieval for all data records with a given hash value.
  * Use lh_retrieve_next() to iterate through matching records.
- *
- * @param lh Hash table instance
- * @param hash Hash value to search for
- * @param iter Iterator to initialize
- * @return iterator pointer, aborts on error
  */
 lh_iterator_t *
 lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash);
 
 /*
- * Get next data record matching the hash in the iterator.
- *
- * @param iter Iterator from lh_retrieve_setup
- * @param buffer Buffer to receive next record (>= record_size)
- * @return true if buffer is valid, false if no more records
+ * Get the next data record matching the hash. If the return value is
+ * B_FALSE, there are no more records and the data buffer is invalid.
  */
 boolean_t
 lh_retrieve_next(lh_iterator_t *iter, void *buffer);
 
-/*
- * Destroy hash table and free all resources.
- *
- * @param lh Hash table instance (may be NULL)
- */
 void
 lh_destroy(linear_hash_t *lh);
 
