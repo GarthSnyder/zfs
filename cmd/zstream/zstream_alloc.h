@@ -55,10 +55,12 @@ struct allocator;
 typedef struct allocator allocator_t;
 
 typedef struct {
+	allocator_t	*as_allocator;	/* Simplifies things for clients */
 	uint64_t 	as_io_ops_mem;	/* Number of stores and retrieves */
 	uint64_t 	as_io_ops_disk;
 	size_t	 	as_mem_used;	/* Current memory use */
 	size_t		as_disk_used;	/* Current disk use */
+	size_t		as_max_memory;
 	uint64_t	as_num_records;
 } allocator_stats_t;
 
