@@ -23,6 +23,9 @@
 #include "zstream_hash_stats.h"
 #include "zstream_hash_debug.h"
 
+/*
+ * Returns B_TRUE if valid and B_FALSE if not
+ */
 boolean_t
 lh_validate(linear_hash_t *lh) {
 	uint64_t total_entries = 0;
@@ -32,15 +35,14 @@ lh_validate(linear_hash_t *lh) {
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t full_entries = 0;
 		uint64_t empty_entries = 0;
-		while (entry_iterator_next(&iter, B_FALSE)) {
-			bucket_entry_t *entry = &iter.ei_bucket.b_entries[iter.ei_entry_ix];
+		boolean_t warned = B_FALSE;
+		bucket_entry_t *entry;
+		while (entry = entry_iterator_next(&iter, B_FALSE)) {
 			if (entry->be_record) {
-				if (empty_entries) {
-					fprintf(stderr, "validate: bucket %lu has "
-						"uncompacted entries.\nEntry %ld is the "
-						"first after an empty entry.\n", i, 
-						iter.ei_entry_ix);
-					return B_FALSE;
+				if (empty_entries != 0 && !warned) {
+					warnx("bucket %llu has uncompacted "
+					    "entries", i);
+					warned = B_TRUE;
 				}
 				full_entries++;
 			} else {

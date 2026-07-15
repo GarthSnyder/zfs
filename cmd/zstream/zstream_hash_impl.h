@@ -37,6 +37,11 @@ extern "C" {
 		.ei_entry_ix = -1					\
 	}
 
+#define	ALLOC_FOR(iter) ((iter)->ei_in_overflow ? \
+	    (iter)->ei_lh->lh_overflow_alloc : (iter)->ei_lh->lh_bucket_alloc)
+
+#define	BUCKET_ENTRY(ei) (&(ei)->ei_bucket.b_entries[(ei)->ei_entry_ix])
+
 /* Entry in a bucket: hash value + locator to data */
 typedef struct {
 	uint64_t  	be_hash;
@@ -96,7 +101,11 @@ struct linear_hash {
 	allocator_t	*lh_overflow_alloc;	/* Overflow buckets */
 };
 
-typedef long long unsigned int llu;
+uint64_t
+bucket_for_hash(linear_hash_t *lh, uint64_t hash);
+
+bucket_entry_t *
+entry_iterator_next(entry_iterator_t *iter, boolean_t extend);
 
 #ifdef __cplusplus
 }

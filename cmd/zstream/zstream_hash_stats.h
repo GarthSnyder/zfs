@@ -36,7 +36,7 @@ extern "C" {
  * MAX_BUCKET_CHAINS is a reporting/stats limitation, not an implementation
  * limitation. There is no actual limit on the length of bucket chains.
  */
-#define MAX_BUCKET_CHAIN 16
+#define MAX_BUCKET_CHAINS 16
 
 typedef struct {
 	uint64_t	bs_num_chains;
@@ -53,7 +53,7 @@ typedef struct {
 } op_stats_t;
 
 typedef struct lh_report {
-	bucket_stats_t	lr_chains_by_length[MAX_BUCKET_CHAIN];
+	bucket_stats_t	lr_chains_by_length[MAX_BUCKET_CHAINS];
 	uint64_t	lr_total_entries;
 	uint64_t	lr_total_chains;
 	uint64_t	lr_bytes_in_data;
