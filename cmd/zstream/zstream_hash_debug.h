@@ -36,7 +36,7 @@ extern "C" {
 
 #define END_VALIDATION(lh)						\
 	if (lh->lh_validate && !lh_validate(lh) && started_ok) {	\
-		fprintf(stderr, "%s broke the hash table\n", __func__);	\
+		warnx("%s broke the hash table", __func__);		\
 	}
 
 boolean_t
