@@ -31,11 +31,6 @@
 #define INITIAL_HASH_SUFFIX_LENGTH 10
 #define INSERTIONS_BETWEEN_MEM_CHECKS 4096
 
-#define	ALLOC_FOR(iter) ((iter)->ei_in_overflow ? \
-	    (iter)->ei_lh->lh_overflow_alloc : (iter)->ei_lh->lh_bucket_alloc)
-
-#define	BUCKET_ENTRY(ei) (&(ei)->ei_bucket.b_entries[(ei)->ei_entry_ix])
-
 /*
  * A slightly more detailed description of linear hashing:
  *
@@ -118,7 +113,7 @@
  * have been upgraded. The split pointer is reset to zero and the suffix
  * length increases.
  */
-static inline uint64_t
+inline uint64_t
 bucket_for_hash(linear_hash_t *lh, uint64_t hash)
 {
 	uint64_t mask = (1ULL << (lh->lh_hash_suffix_length)) - 1;
@@ -153,7 +148,7 @@ save_bucket(entry_iterator_t *iter) {
  * Returns a pointer to the now-current bucket entry if the state of the
  * iterator is valid, NULL if there are no more entries to enumerate.
  */
-bucket_entry_t *
+inline bucket_entry_t *
 entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 {
 	if (iter->ei_entry_ix < 0) {
@@ -169,6 +164,7 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 		} else if (!extend) {
 			return (NULL);
 		} else {
+			/* Add overflow bucket */
 			record_ix_t record =
 			    allocator_skip(iter->ei_lh->lh_overflow_alloc);
 			iter->ei_bucket.b_overflow = record;
@@ -188,19 +184,19 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 }
 
 /*
- * Split a bucket, rehashing all entries according to the one-higher suffix
- * length. Since only one bit is added, existing entries either stay where
- * they are or go to one alternate bucket. We do this partition in two
- * passes for clarity and reliability: the first ejects relocated entries
- * and the second consolidates entries now that some may have been removed.
+ * Split the bucket pointed to by the split pointer, rehashing all entries
+ * according to the one-higher suffix length. Since only one bit is added,
+ * existing entries either stay where they are or go to one alternate
+ * bucket.
  *
- * During phase one, the source bucket has both a read iterator and a write
- * iterator. This is fine because each iterator has its own copy of the
- * bucket and the read iterator will always precede the write iterator.
+ * During the partition pass, the source bucket has both a read iterator and
+ * a write iterator. This is fine because each iterator has its own copy of
+ * the bucket and the read iterator will always precede the write iterator.
  *
- * It is an invariant that at steady state, bucket entries must be filled
- * linearly. The first entry with a record number of 0 marks the end of all
- * entries.
+ * At steady state, bucket entries are packed at the front of buckets and
+ * all inactive entries are zeroed out. The first entry with a record number
+ * of 0 marks the end of entries. After partitioning, we have to zero out
+ * the tail of the source bucket.
  */
 static void
 split_bucket(linear_hash_t *lh)
@@ -227,9 +223,8 @@ split_bucket(linear_hash_t *lh)
 		    bucket_for_hash(lh, sbe->be_hash) == bucket_ix;
 		entry_iterator_t *dest = stays ? &stay : &move;
 		bucket_entry_t *dbe = entry_iterator_next(dest, B_TRUE);
-		if (dbe->be_hash != sbe->be_hash ||
-			dbe->be_record != sbe->be_record)
-		{
+		/* Don't mark dirty unless modified */
+		if (memcmp(sbe, dbe, sizeof (bucket_entry_t)) != 0) {
 			*dbe = *sbe;
 			dest->ei_dirty = B_TRUE;
 		}
