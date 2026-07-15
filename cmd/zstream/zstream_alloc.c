@@ -100,7 +100,7 @@
 struct allocator {
 
 	size_t		a_record_size;
-	size_t		a_record_size_rounded;	/* Multiple of 8 */
+	size_t		a_record_size_rounded;	/* Multiple of RECORD_ALIGN */
 	size_t		a_max_memory;
 	int		a_fd;			/* On-disk file descriptor */
 
@@ -309,9 +309,11 @@ allocator_stats_t
 allocator_get_stats(allocator_t *alloc) {
 	VERIFY(alloc != NULL && stats != NULL);
 	allocator_stats_t stats = {
+		.as_allocator = alloc,
 		.as_io_ops_mem = alloc->a_io_ops_mem,
 		.as_io_ops_disk = alloc->a_io_ops_disk,
 		.as_mem_used = alloc->a_vm_frontier - alloc->a_base_addr,
+		.as_max_memory = alloc->a_max_memory,
 		.as_num_records = alloc->a_count
 	}
 	if (alloc->a_fd >= 0) {
