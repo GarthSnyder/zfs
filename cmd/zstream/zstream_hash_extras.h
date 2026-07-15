@@ -21,6 +21,7 @@
 #ifndef _ZSTREAM_HASH_EXTRAS_H
 #define _ZSTREAM_HASH_EXTRAS_H
 
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -39,14 +40,15 @@ extern "C" {
 	}
 
 /*
- * MAX_BUCKET_CHAINS is a reporting/stats limitation, not an implementation
+ * MAX_BUCKET_CHAIN is a reporting/stats limitation, not an implementation
  * limitation. There is no limit on the actual length of bucket chains.
  */
-#define	MAX_BUCKET_CHAINS 16
+#define	MAX_BUCKET_CHAIN 16
 
 typedef struct {
-	uint64_t	os_count;	/* Inserts, splits, etc. */
-	uint64_t	os_num_io_ops;	/* Total # of reads/writes */
+	uint64_t	os_count;		/* Inserts, splits, etc. */
+	uint64_t	os_ops_mem;		/* Memory ops portion */
+	uint64_t	os_ops_disk;		/* Disk portion */
 } op_stats_t;
 
 typedef struct {
@@ -57,8 +59,8 @@ typedef struct {
 
 typedef struct {
 	op_stats_t	*ot_stat_bin;
-	uint64_t	ot_start_ops;
-	uint64_t	ot_latest_ops;
+	op_stats_t	ot_start_ops;
+	op_stats_t	ot_latest_ops;
 } ops_tracker_t;
 
 typedef struct {
@@ -71,25 +73,26 @@ typedef struct {
 } bucket_stats_t;
 
 typedef struct lh_report {
-	bucket_stats_t	lr_chains_by_length[MAX_BUCKET_CHAINS];
+	bucket_stats_t	lr_chains_by_length[MAX_BUCKET_CHAIN];
 	uint64_t	lr_total_entries;
+	uint64_t	lr_top_level_entries;
 	uint64_t	lr_total_chains;
 	uint64_t	lr_bytes_in_data;
 	uint64_t	lr_bytes_in_buckets;
 	op_stats_t	lr_splits;
 	op_stats_t	lr_inserts;
 	op_stats_t	lr_retrieves;
-	double		lr_occupancy;        /* Entries / number of chains */
-	double		lr_overall_occupancy;    /* Full slots / Total slots */
+	double		lr_occupancy;		/* Top levels / # of chains */
+	double		lr_overall_occupancy;	/* Full slots / Total slots */
 } lh_report_t;
 
-boolean_t
+bucket_entry_t *
 entry_iterator_next(entry_iterator_t *iter, boolean_t extend);
 
 boolean_t
 lh_validate(linear_hash_t *lh);
 
-uint64_t
+op_stats_t
 total_io_ops(linear_hash_t *lh);
 
 void
