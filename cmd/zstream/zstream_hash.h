@@ -48,6 +48,14 @@ extern "C" {
  * Hash keys are 64-bit values, and you must supply them yourself. If you
  * want to use longer hash keys, give the linear hash 64-bit digests and
  * check returned records against the full hash value.
+ *
+ * This header file contains the struct definitions and #defines needed to
+ * compile the core linear hash implementation found in zstream_hash.c.
+ *
+ * To enable validation and gathering of detailed statistics, uncomment the
+ * following definition:
+ *
+ * #define LH_STATS_AND_VALIDATION
  */
 
 #define MAX_LH_ITERATORS 8

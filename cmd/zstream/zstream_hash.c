@@ -30,6 +30,7 @@
 #define MAX_OCCUPANCY 0.75
 #define INITIAL_HASH_SUFFIX_LENGTH 10
 #define INSERTIONS_BETWEEN_MEM_CHECKS 4096
+#define MEMORY_MARGIN (1ULL << 28)		/* 256MB */
 
 /*
  * A slightly more detailed description of linear hashing:
@@ -101,6 +102,9 @@
  * converted to disk storage while the main bucket array is partially in
  * memory and partially on disk.
  */
+
+static int		next_iterator = 0;
+static lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
 
 /*
  * Calculate the destination bucket for a given hash value.
@@ -201,9 +205,10 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 static void
 split_bucket(linear_hash_t *lh)
 {
+#ifdef LH_STATS_AND_VALIDATION
 	START_VALIDATION(lh);
 	begin_ops_tracking(lh, &lh->lh_stats.lhs_splits);
-
+#endif
 	record_ix_t bucket_ix = lh->lh_split_pointer;
 	record_ix_t buddy_ix = bucket_ix | (1ULL << lh->lh_hash_suffix_length);
 
@@ -215,20 +220,29 @@ split_bucket(linear_hash_t *lh)
 	lh->lh_split_pointer++;
 
 	/* Partition */
+	uint64_t pre_num_top_level = 0;
+	uint64_t post_num_top_level = 0;
 	bucket_entry_t *sbe;
 	while (sbe = entry_iterator_next(&source, B_FALSE)) {
 		if (sbe->be_record == 0)
 			break;
+		else if (!source.ei_in_overflow)
+			pre_num_top_level++;
 		boolean_t stays =
 		    bucket_for_hash(lh, sbe->be_hash) == bucket_ix;
 		entry_iterator_t *dest = stays ? &stay : &move;
 		bucket_entry_t *dbe = entry_iterator_next(dest, B_TRUE);
+		if (!dest->ei_in_overflow)
+			post_num_top_level++;
 		/* Don't mark dirty unless modified */
 		if (memcmp(sbe, dbe, sizeof (bucket_entry_t)) != 0) {
 			*dbe = *sbe;
 			dest->ei_dirty = B_TRUE;
 		}
 	}
+
+	lh->lh_num_top_level_entries -= pre_num_top_level;
+	lh->lh_num_top_level_entries += post_num_top_level;
 
 	/* Zero out the rest of the source bucket */
 	bucket_entry_t *entry;
@@ -248,44 +262,59 @@ split_bucket(linear_hash_t *lh)
 		lh->lh_split_pointer = 0;
 	}
 
+#ifdef LH_STATS_AND_VALIDATION
 	complete_ops_tracking(lh);
 	END_VALIDATION(lh);
+#endif
 }
 
-static void
+static inline void
 check_split(linear_hash_t *lh)
 {
-	/* FIXME */
-	double occupancy = (double)lh->lh_stats.lhs_num_entries /
+	double occupancy = (double)lh->lh_num_top_level_entries /
 		((1ULL << lh->lh_hash_suffix_length) * ENTRIES_PER_BUCKET);
 	if (occupancy > MAX_OCCUPANCY) {
 		split_bucket(lh);
 	}
 }
 
-/* FIXME */
+/*
+ * Free up memory if we're over budget. If we free, we reclaim MEMORY_MARGIN
+ * more bytes than is strictly necessary to give ourselves some operating
+ * room until the next memory check. We want to free in relatively large
+ * chunks, not in small increments.
+ *
+ * Memory clawbacks are prioritized by allocator. The data allocator is the
+ * first hit, followed by the overflow allocator and the bucket allocator.
+ *
+ * Depending on the state of things, we may need to reclaim memory from more
+ * than one allocator.
+ */
 static void
 check_memory_use(linear_hash_t *lh)
 {
-	allocator_stats_t bucket, over, data;
+	allocator_stats_t bucket, overflow, data;
 	allocator_get_stats(lh->lh_bucket_alloc, &bucket);
-	allocator_get_stats(lh->lh_overflow_alloc, &over);
+	allocator_get_stats(lh->lh_overflow_alloc, &overflow);
 	allocator_get_stats(lh->lh_data_alloc, &data);
-	size_t total_mem = bucket.as_mem_used + over.as_mem_used +
-		data.as_mem_used;
-	if (total_mem > lh->lh_stats.lhs_mem_highwater)
-		lh->lh_stats.lhs_mem_highwater = total_mem;
-	if (total_mem > lh->lh_max_memory) {
-		allocator_t *allocator_to_convert;
-		if (data.as_mem_used) {
-			allocator_to_convert = lh->lh_data_alloc;
-		} else if (over.as_mem_used) {
-			allocator_to_convert = lh->lh_overflow_alloc;
+
+check:	size_t total_used = bucket.as_mem_used + overflow.as_mem_used +
+	    data.as_mem_used;
+	ssize_t overage = (ssize_t)total_used - (ssize_t)lh->lh_max_memory;
+	if (overage > 0) {
+		allocator_stats_t *squeezee;
+		if (data.as_max_memory) {
+			squeezee = data;
+		} else if (overflow.as_max_memory) {
+			squeezee = overflow;
 		} else {
-			allocator_to_convert = lh->lh_bucket_alloc;
+			squeezee = bucket;
 		}
-		CHECKED("converting allocator to disk storage",
-			allocator_convert_to_disk(allocator_to_convert));
+		size_t new_limit = MAX(0, (ssize_t)squeezee->as_mem_used -
+		    (overage + MEMORY_MARGIN));
+		allocator_set_max_memory(squeezee->as_allocator, new_limit);
+		allocator_get_stats(squeezee->as_allocator, squeezee);
+		goto check;
 	}
 }
 
@@ -300,9 +329,8 @@ create_temp_file(const char *dir, char *pathbuff) {
 		if (unlink(pathbuff) < 0)
 			err(1, "unlink of %s failed", pathbuff);
 		return (fd);
-	} else {
-		err(1, "unable to create file %s", pathbuff);
 	}
+	err(1, "unable to create file %s", pathbuff);
 }
 
 linear_hash_t *
@@ -350,8 +378,10 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 {
 	VERIFY(lh != NULL && data != NULL);
 
+#ifdef LH_STATS_AND_VALIDATION
 	START_VALIDATION(lh);
 	begin_ops_tracking(lh, &lh->lh_stats.lhs_inserts);
+#endif
 
 	record_ix_t record = allocator_append(lh->lh_data_alloc, data);
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
@@ -366,9 +396,15 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 		}
 	}
 	lh->lh_stats.lhs_num_entries++;
+	if (!iter.ei_in_overflow) {
+		lh->lh_num_top_level_entries++;
+	}
 
+#ifdef LH_STATS_AND_VALIDATION
 	complete_ops_tracking(lh);
 	END_VALIDATION(lh);
+#endif
+
 	check_split(lh);
 
 	lh->lh_next_memory_check--;
@@ -382,10 +418,13 @@ lh_iterator_t *
 lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 {
 	ASSERT(lh != NULL);
-	begin_ops_tracking(lh, &lh->lh_stats.lhs_retrieves);
 
-	int which_iterator = lh->lh_next_iterator++ % MAX_LH_ITERATORS;
-	lh_iterator_t *iter = &lh->lh_iterators[which_iterator];
+#ifdef LH_STATS_AND_VALIDATION
+	begin_ops_tracking(lh, &lh->lh_stats.lhs_retrieves);
+#endif
+
+	int which_iterator = next_iterator++ % MAX_LH_ITERATORS;
+	lh_iterator_t *iter = &lh_iterators[which_iterator];
 	record_ix_t bucket = bucket_for_hash(lh, hash);
 	*iter = (lh_iterator_t){
 		.lhi_hash = hash,
@@ -395,22 +434,25 @@ lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 }
 
 boolean_t
-lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer) {
+lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
+{
 	entry_iterator_t *ei = &lh_iter->lhi_entry_iterator;
 	bucket_entry_t *entry;
 	while (entry = entry_iterator_next(ei, B_FALSE)) {
-		if (entry->be_record == 0) {
-			complete_ops_tracking(ei->ei_lh);
-			return (B_FALSE);
-		}
+		if (entry->be_record == 0)
+			break;
 		if (entry->be_hash == lh_iter->lhi_hash) {
 			allocator_retrieve(ei->ei_lh->lh_data_alloc,
 			    entry->be_record, buffer);
+#ifdef LH_STATS_AND_VALIDATION
 			update_ops_tracking(ei->ei_lh);
+#endif
 			return (B_TRUE);
 		}
 	}
+#ifdef LH_STATS_AND_VALIDATION
 	complete_ops_tracking(ei->ei_lh);
+#endif
 	return (B_FALSE);
 }
 

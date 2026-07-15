@@ -23,10 +23,9 @@ zstream_SOURCES = \
 	%D%/zstream_fletcher4.h \
 	%D%/zstream_hash.c \
 	%D%/zstream_hash.h \
-	%D%/zstream_hash_debug.c \
-	%D%/zstream_hash_debug.h \
+	%D%/zstream_hash_extras.c \
+	%D%/zstream_hash_extras.h \
 	%D%/zstream_hash_impl.h \
-	%D%/zstream_hash_stats.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
 	%D%/zstream_modules.h \
