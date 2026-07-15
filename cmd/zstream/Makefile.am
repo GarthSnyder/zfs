@@ -9,8 +9,6 @@ zstream_SOURCES = \
 	%D%/zstream.h \
 	%D%/zstream_alloc.c \
 	%D%/zstream_alloc.h \
-	%D%/zstream_blake3.c \
-	%D%/zstream_blake3.h \
 	%D%/zstream_byteswap.c \
 	%D%/zstream_byteswap.h \
 	%D%/zstream_chain.c \

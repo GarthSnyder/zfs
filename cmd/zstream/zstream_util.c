@@ -88,37 +88,37 @@ safe_calloc(size_t size)
 void
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
 {
-	ssize_t n;
 	size_t done = 0;
 
-	while (done < len) {
-		ssize_t n = pwrite(fd, buf + done, len - done, offset + done);
+	while (done < count) {
+		ssize_t n = pwrite(fd, buf + done, count - done, offset + done);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue; /* zero progress this call, retry */
 			err(1, "pwrite64() failed");
 		}
 		if (n == 0)
-			errx(1, "pwrite of %llu bytes failed", count);
+			errx(1, "pwrite of %llu bytes failed",
+			    (u_longlong_t)count);
 		done += (size_t)n;
 	}
 }
 
 void
-safe_pread(int fd, const void *buf, size_t count, off64_t offset)
+safe_pread(int fd, void *buf, size_t count, off64_t offset)
 {
-	ssize_t n;
 	size_t done = 0;
 
-	while (done < len) {
-		ssize_t n = pread(fd, buf + done, len - done, offset + done);
+	while (done < count) {
+		ssize_t n = pread(fd, buf + done, count - done, offset + done);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue; /* zero progress this call, retry */
 			err(1, "pread failed");
 		}
 		if (n == 0)
-			errx(1, "pread of %llu bytes failed", count);
+			errx(1, "pread of %llu bytes failed",
+			    (u_longlong_t)count);
 		done += (size_t)n;
 	}
 }
@@ -278,7 +278,7 @@ pthread_register_self(void)
  * (EOPNOTSUPP if this platform or filesystem has no way to do it). Failure
  * is harmless; file contents outside the given region are never affected.
  */
-static int
+int
 punch_hole(int fd, off_t offset, off_t length)
 {
 	if (offset < 0 || length <= 0) {

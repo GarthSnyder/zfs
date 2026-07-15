@@ -53,7 +53,7 @@ void
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
 
 void
-safe_pread(int fd, const void *buf, size_t count, off64_t offset);
+safe_pread(int fd, void *buf, size_t count, off64_t offset);
 
 extern char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
@@ -111,7 +111,7 @@ pthread_register_self(void);
  * (EOPNOTSUPP if this platform or filesystem has no way to do it). Failure
  * is harmless; file contents outside the given region are never affected.
  */
-static int
+int
 punch_hole(int fd, off_t offset, off_t length);
 
 #ifdef __cplusplus

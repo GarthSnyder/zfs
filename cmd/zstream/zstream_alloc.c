@@ -56,8 +56,8 @@
 #define	ADDR_TO_REC(alloc, addr) OFFSET_TO_REC(alloc, \
 	    ADDR_TO_OFFSET(alloc, addr))
 
-#define REC_ON_DISK(alloc, rec) (REC_TO_ADDR(alloc, rec) >= \
-	    (alloc)->a_max_memory);
+#define RECORD_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
+	    (alloc)->a_max_memory)
 
 /*
  * This implementation relies on two OS features that are common to most
@@ -118,7 +118,8 @@ struct allocator {
 /*
  * Least common multiple - Euclid's algorithm
  */
-size_t lcm(size_t a, size_t b)
+static size_t
+lcm(size_t a, size_t b)
 {
 	size_t a_orig = a;
 	size_t b_orig = b;
@@ -204,7 +205,7 @@ shrink_frontier(allocator_t *alloc)
 void
 allocator_set_max_memory(allocator_t *alloc, size_t new_size)
 {
-	size_t new_size = MEM_ROUNDUP(new_size, alloc->a_pagesize,
+	new_size = MEM_ROUNDUP(new_size, alloc->a_pagesize,
 	    alloc->a_record_size_rounded);
 	off_t last_off_used = REC_TO_OFFSET(alloc, alloc->a_count) - 1;
 	if (alloc->a_fd < 0 && new_size < last_off_used + 1)
@@ -261,9 +262,10 @@ void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 {
 	VERIFY(buff != NULL);
-	if (REC_ON_DISK(alloc, record)) {
+	if (RECORD_ON_DISK(alloc, record)) {
 		if (alloc->a_fd < 0)
-			errx(1, "no file for allocator record %llu", record);
+			errx(1, "no file for allocator record %llu",
+			    (u_longlong_t)record);
 		off_t loc = REC_TO_OFFSET(alloc, record);
 		safe_pread(alloc->a_fd, buff, alloc->a_record_size, loc);
 		alloc->a_io_ops_disk++;
@@ -278,9 +280,10 @@ void
 allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
 	VERIFY(buff != NULL);
-	if (REC_ON_DISK(alloc, record)) {
+	if (RECORD_ON_DISK(alloc, record)) {
 		if (alloc->a_fd < 0)
-			errx(1, "no file for allocator record %llu", record);
+			errx(1, "no file for allocator record %llu",
+			    (u_longlong_t)record);
 		off_t loc = REC_TO_OFFSET(alloc, record);
 		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, loc);
 		alloc->a_io_ops_disk++;
@@ -294,7 +297,7 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 
 record_ix_t
 allocator_append(allocator_t *alloc, const void *data) {
-	record_ix_t rec = alloc->a_count;
+	record_ix_t loc = alloc->a_count;
 	allocator_store(alloc, loc, data);
 	return (loc);
 }
@@ -307,7 +310,7 @@ allocator_skip(allocator_t *alloc) {
 
 allocator_stats_t
 allocator_get_stats(allocator_t *alloc) {
-	VERIFY(alloc != NULL && stats != NULL);
+	VERIFY(alloc != NULL);
 	allocator_stats_t stats = {
 		.as_allocator = alloc,
 		.as_io_ops_mem = alloc->a_io_ops_mem,
@@ -315,7 +318,7 @@ allocator_get_stats(allocator_t *alloc) {
 		.as_mem_used = alloc->a_vm_frontier - alloc->a_base_addr,
 		.as_max_memory = alloc->a_max_memory,
 		.as_num_records = alloc->a_count
-	}
+	};
 	if (alloc->a_fd >= 0) {
 		off_t last_byte = REC_TO_OFFSET(alloc, alloc->a_count) +
 		    alloc->a_record_size_rounded - 1;

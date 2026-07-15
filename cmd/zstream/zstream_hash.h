@@ -30,13 +30,14 @@ extern "C" {
 
 /*
  * This code implements linear hashing with 64-bit hash keys. It runs on top
- * of allocator_t, which allows the hash table to expand indefinitely as
- * long as disk storage remains available.
+ * of allocator_t, which allows a structured approach to memory management
+ * and allows the hash table to expand indefinitely as long as disk storage
+ * remains available.
  *
  * For more details on linear hashing, see the Wikipedia article or the
- * comments in zstream_hash.c. Briefly, the table grows roughly linearly as
- * items are inserted. When an occupancy threshold is crossed, one bucket is
- * split into two. This incremental growth is ideal for tables that we'd
+ * comments in zstream_hash.c. Briefly, the table grows (roughly) linearly
+ * as items are inserted. When an occupancy threshold is crossed, one bucket
+ * is split into two. This incremental growth is ideal for tables that we'd
  * really like to keep in memory but that might eventually get too big to
  * keep there. As more disk storage is used, the performance of the hash
  * table declines smoothly with the number of entries.
@@ -52,12 +53,13 @@ extern "C" {
  * This header file contains the struct definitions and #defines needed to
  * compile the core linear hash implementation found in zstream_hash.c.
  *
- * To enable validation and gathering of detailed statistics, uncomment the
- * following definition:
+ * To enable validation and statistical profiling, add the following
+ * definition:
  *
  * #define LH_STATS_AND_VALIDATION
  */
 
+#define LH_STATS_AND_VALIDATION
 #define MAX_LH_ITERATORS 8
 
 struct linear_hash;
@@ -69,7 +71,7 @@ typedef struct lh_iterator lh_iterator_t;
 /*
  * The cache_dir should be a place where memory can meaningfully spill over
  * to disk, which rules out /tmp on most systems because it's often
- * implemented as a glorified ramdisk. The default is /var/tmp.
+ * implemented as a ramdisk. The default is /var/tmp.
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t max_memory, const char *cache_dir);

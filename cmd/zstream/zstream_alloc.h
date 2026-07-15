@@ -21,7 +21,6 @@
 #ifndef _ZSTREAM_ALLOC_H
 #define _ZSTREAM_ALLOC_H
 
-#include <cstddef>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -87,7 +86,7 @@ allocator_init(size_t record_size, size_t mem_size, int backing_fd);
  * You can also use this function to convert a disk-only allocator to a
  * dual-backed allocator.
  */
-int
+void
 allocator_set_max_memory(allocator_t *alloc, size_t new_size);
 
 void
