@@ -17,20 +17,18 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+#include <err.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "zstream_alloc.h"
-#include "zstream_hash.h"
-#include "zstream_hash_debug.h"
 #include "zstream_hash_impl.h"
-#include "zstream_hash_stats.h"
 #include "zstream_util.h"
 
-#define MAX_OCCUPANCY 0.75
-#define INITIAL_HASH_SUFFIX_LENGTH 10
-#define INSERTIONS_BETWEEN_MEM_CHECKS 4096
-#define MEMORY_MARGIN (1ULL << 28)		/* 256MB */
+#define	MAX_OCCUPANCY 0.75
+#define	INITIAL_HASH_SUFFIX_LENGTH 10
+#define	INSERTIONS_BETWEEN_MEM_CHECKS 4096
+#define	MEMORY_MARGIN (1ULL << 28) /* 256MB */
 
 /*
  * A slightly more detailed description of linear hashing:
@@ -87,20 +85,18 @@
  * buckets are in memory, then 90% of lookups will happen at memory speed.
  *
  * This implementation uses open hashing (overflow buckets) and is
- * insert-only. You can't remove entries from the table, and the table never
- * contracts. (Linear hashing supports those operations, but they're
- * probably not useful here and are unimplemented.)
+ * insert-only. (Linear hashing allows deletions, but they're probably
+ * not useful here and are unimplemented.)
  *
  * Each hash table has three allocator_t's underneath it: one for the data
  * being stored, one for hash buckets, and one for overflow buckets.
  *
- * When total memory use reaches a designated threshold (40% of RAM by
- * default), the allocators are asked to yield some of their memory. The
- * first priority for eviction is the data allocator, followed by the
- * overflow allocator and then the regular bucket allocator. Under extreme
- * pressure, you can expect to see the data and overflow buckets fully
- * converted to disk storage while the main bucket array is partially in
- * memory and partially on disk.
+ * When total memory use reaches a designated threshold, the allocators are
+ * asked to yield some of their memory. The first priority for eviction is
+ * the data allocator, followed by the overflow allocator and then the
+ * regular bucket allocator. Under extreme pressure, you can expect to see
+ * the data and overflow buckets fully converted to disk storage while the
+ * main bucket array is partially in memory and partially on disk.
  */
 
 static int		next_iterator = 0;
@@ -148,9 +144,6 @@ save_bucket(entry_iterator_t *iter) {
  * entry_iterator struct and returns a pointer to the current bucket entry.
  * Returns NULL when there are no more entries, or, alternately, extends the
  * bucket chain indefinitely.
- *
- * Returns a pointer to the now-current bucket entry if the state of the
- * iterator is valid, NULL if there are no more entries to enumerate.
  */
 inline bucket_entry_t *
 entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
@@ -178,7 +171,7 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 				.ei_bucket_ix = record,
 				.ei_in_overflow = B_TRUE,
 				.ei_dirty = B_TRUE,
-			}
+			};
 			return (BUCKET_ENTRY(iter));
 		}
 	} else {
@@ -223,7 +216,7 @@ split_bucket(linear_hash_t *lh)
 	uint64_t pre_num_top_level = 0;
 	uint64_t post_num_top_level = 0;
 	bucket_entry_t *sbe;
-	while (sbe = entry_iterator_next(&source, B_FALSE)) {
+	while ((sbe = entry_iterator_next(&source, B_FALSE))) {
 		if (sbe->be_record == 0)
 			break;
 		else if (!source.ei_in_overflow)
@@ -241,12 +234,13 @@ split_bucket(linear_hash_t *lh)
 		}
 	}
 
+	/* Maintain top-level entry account used to determine occupancy */
 	lh->lh_num_top_level_entries -= pre_num_top_level;
 	lh->lh_num_top_level_entries += post_num_top_level;
 
 	/* Zero out the rest of the source bucket */
 	bucket_entry_t *entry;
-	while (entry = entry_iterator_next(&stay, B_FALSE)) {
+	while ((entry = entry_iterator_next(&stay, B_FALSE))) {
 		if (entry->be_record) {
 			*entry = (bucket_entry_t){0};
 			stay.ei_dirty = B_TRUE;
@@ -288,32 +282,31 @@ check_split(linear_hash_t *lh)
  * first hit, followed by the overflow allocator and the bucket allocator.
  *
  * Depending on the state of things, we may need to reclaim memory from more
- * than one allocator.
+ * than one allocator, hence the loop.
  */
 static void
 check_memory_use(linear_hash_t *lh)
 {
-	allocator_stats_t bucket, overflow, data;
-	allocator_get_stats(lh->lh_bucket_alloc, &bucket);
-	allocator_get_stats(lh->lh_overflow_alloc, &overflow);
-	allocator_get_stats(lh->lh_data_alloc, &data);
+	allocator_stats_t bucket = allocator_get_stats(lh->lh_bucket_alloc);
+	allocator_stats_t overflow = allocator_get_stats(lh->lh_overflow_alloc);
+	allocator_stats_t data = allocator_get_stats(lh->lh_data_alloc);
 
 check:	size_t total_used = bucket.as_mem_used + overflow.as_mem_used +
 	    data.as_mem_used;
 	ssize_t overage = (ssize_t)total_used - (ssize_t)lh->lh_max_memory;
 	if (overage > 0) {
 		allocator_stats_t *squeezee;
-		if (data.as_max_memory) {
-			squeezee = data;
-		} else if (overflow.as_max_memory) {
-			squeezee = overflow;
+		if (data.as_max_memory != 0) {
+			squeezee = &data;
+		} else if (overflow.as_max_memory != 0) {
+			squeezee = &overflow;
 		} else {
-			squeezee = bucket;
+			squeezee = &bucket;
 		}
 		size_t new_limit = MAX(0, (ssize_t)squeezee->as_mem_used -
 		    (overage + MEMORY_MARGIN));
 		allocator_set_max_memory(squeezee->as_allocator, new_limit);
-		allocator_get_stats(squeezee->as_allocator, squeezee);
+		*squeezee = allocator_get_stats(squeezee->as_allocator);
 		goto check;
 	}
 }
@@ -337,7 +330,6 @@ linear_hash_t *
 lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 {
 	VERIFY(record_size > 0);
-	size_t bkt = sizeof (bucket_t);
 	char path[1024];
 	int fd;
 
@@ -355,15 +347,12 @@ lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 	fd = create_temp_file(cache_dir, path);
 	lh->lh_data_alloc = allocator_init(record_size, max_mem, fd);
 	fd = create_temp_file(cache_dir, path);
-	lh->lh_bucket_alloc = allocator_init(bkt, max_mem, fd);
+	lh->lh_bucket_alloc = allocator_init(sizeof (bucket_t), max_mem, fd);
 	fd = create_temp_file(cache_dir, path);
-	lh->lh_overflow_alloc = allocator_init(bkt, max_mem, fd);
+	lh->lh_overflow_alloc = allocator_init(sizeof (bucket_t), max_mem, fd);
 
-	if (!lh->lh_data_alloc || !lh->lh_bucket_alloc ||
-		!lh->lh_overflow_alloc)
-	{
+	if (!lh->lh_data_alloc|| !lh->lh_bucket_alloc || !lh->lh_overflow_alloc)
 		errx(1, "unable to initialize linear_hash_t allocators");
-	}
 	/*
 	 * Skip first overflow and data buckets to allow 0 to indicate
 	 * empty or end-of-chain.
@@ -387,15 +376,15 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
 
 	bucket_entry_t *entry;
-	while (entry = entry_iterator_next(&iter, B_TRUE)) {
-		if (!entry->be_record) {
+	while ((entry = entry_iterator_next(&iter, B_TRUE))) {
+		if (entry->be_record == 0) {
 			*entry = (bucket_entry_t){ hash, record };
 			iter.ei_dirty = B_TRUE;
 			save_bucket(&iter);
 			break;
 		}
 	}
-	lh->lh_stats.lhs_num_entries++;
+	lh->lh_num_entries++;
 	if (!iter.ei_in_overflow) {
 		lh->lh_num_top_level_entries++;
 	}
@@ -428,7 +417,7 @@ lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 	record_ix_t bucket = bucket_for_hash(lh, hash);
 	*iter = (lh_iterator_t){
 		.lhi_hash = hash,
-		.lhi_entry_iterator = ITER_BUCKET(lh, bucket);
+		.lhi_entry_iterator = ITER_BUCKET(lh, bucket)
 	};
 	return (iter);
 }
@@ -438,7 +427,7 @@ lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 {
 	entry_iterator_t *ei = &lh_iter->lhi_entry_iterator;
 	bucket_entry_t *entry;
-	while (entry = entry_iterator_next(ei, B_FALSE)) {
+	while ((entry = entry_iterator_next(ei, B_FALSE))) {
 		if (entry->be_record == 0)
 			break;
 		if (entry->be_hash == lh_iter->lhi_hash) {
@@ -459,9 +448,11 @@ lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 void
 lh_destroy(linear_hash_t *lh) {
 	VERIFY(lh != NULL);
+#ifdef LH_STATS_AND_VALIDATION
 	if (lh->lh_validate) {
 		lh_validate(lh);
 	}
+#endif
 	if (lh->lh_data_alloc) 	{ allocator_destroy(lh->lh_data_alloc); }
 	if (lh->lh_bucket_alloc) { allocator_destroy(lh->lh_bucket_alloc); }
 	if (lh->lh_overflow_alloc) { allocator_destroy(lh->lh_overflow_alloc); }
