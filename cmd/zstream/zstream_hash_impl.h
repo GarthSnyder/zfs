@@ -34,36 +34,43 @@ extern "C" {
 #include "zstream_alloc.h"
 #include "zstream_hash.h"
 
-#ifdef LH_STATS_AND_VALIDATION
-#include "zstream_hash_extras.h"
-#endif
-
 #define ENTRIES_PER_BUCKET 6
 
-#define ITER_BUCKET(lh, bucket) {					\
+#define ITER_BUCKET(lh, bucket) (entry_iterator_t){			\
 		.ei_lh = lh,						\
 		.ei_bucket_ix = bucket,					\
 		.ei_entry_ix = -1					\
 	}
 
+/*
+ * Determine the allocator for the given entry_iterator. The current bucket
+ * struct might be a primary bucket or an overflow bucket, and the allocator
+ * corresponds to that.
+ */
 #define	ALLOC_FOR(iter) ((iter)->ei_in_overflow ? \
 	    (iter)->ei_lh->lh_overflow_alloc : (iter)->ei_lh->lh_bucket_alloc)
 
 #define	BUCKET_ENTRY(ei) (&(ei)->ei_bucket.b_entries[(ei)->ei_entry_ix])
 
-/* Entry in a bucket: hash value + locator to data */
+/*
+ * Entry in a bucket: hash value + locator to data
+ */
 typedef struct {
 	uint64_t  	be_hash;
 	record_ix_t 	be_record;  /* index of actual data */
 } bucket_entry_t;
 
-/* Bucket structure: fixed array of entries + overflow pointer */
+/*
+ * Bucket structure: fixed array of entries + overflow pointer
+ */
 typedef struct {
 	bucket_entry_t	b_entries[ENTRIES_PER_BUCKET];
 	record_ix_t	b_overflow;  /* 0 if no overflow */
 } bucket_t;
 
-/* Internal iterator for bucket entries */
+/*
+ * Internal iterator for bucket entries
+ */
 typedef struct {
 	linear_hash_t	*ei_lh;
 	record_ix_t	ei_bucket_ix;	/* Index of bucket within allocator */
@@ -73,13 +80,17 @@ typedef struct {
 	boolean_t	ei_dirty;	/* Needs writeback? */
 } entry_iterator_t;
 
-/* User-facing iterator for retrieving records by hash */
+/*
+ * User-facing iterator for retrieving records by hash
+ */
 typedef struct lh_iterator {
 	uint64_t		lhi_hash;
 	entry_iterator_t	lhi_entry_iterator;
 } lh_iterator_t;
 
-/* Hash table structure */
+/*
+ * The actual hash table struct
+ */
 struct linear_hash {
 
 	size_t		lh_record_size;		/* Params */
@@ -93,7 +104,7 @@ struct linear_hash {
 	record_ix_t	lh_split_pointer;	/* Next bucket to split */
 	int     	lh_next_memory_check;	/* # of splits before check */
 	uint64_t	lh_num_entries;
-	uint64_t	lh_top_level_entries;
+	uint64_t	lh_num_top_level_entries;
 
 #ifdef LH_STATS_AND_VALIDATION
 	boolean_t	lh_validate;		/* Debug: check per op (slow) */
