@@ -18,6 +18,12 @@
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+/*
+ * This file contains the #defines and struct definitions for the basic
+ * linear hash table. They're here (instead of in zstream_hash.c) so that
+ * linear_hash_extras.[ch] can access them.
+ */
+
 #ifndef _ZSTREAM_HASH_IMPL_H
 #define _ZSTREAM_HASH_IMPL_H
 
@@ -27,7 +33,10 @@ extern "C" {
 
 #include "zstream_alloc.h"
 #include "zstream_hash.h"
-#include "zstream_hash_stats.h"
+
+#ifdef LH_STATS_AND_VALIDATION
+#include "zstream_hash_extras.h"
+#endif
 
 #define ENTRIES_PER_BUCKET 6
 
@@ -70,35 +79,27 @@ typedef struct lh_iterator {
 	entry_iterator_t	lhi_entry_iterator;
 } lh_iterator_t;
 
-typedef struct {
-	op_stats_t	*ot_stat_bin;
-	uint64_t	ot_start_ops;
-	uint64_t	ot_latest_ops;
-} ops_tracker_t;
-
-typedef struct {
-	uint64_t	lhs_num_entries;	/* Total entries in table */
-	uint64_t	lhs_mem_highwater;	/* Most memory used by allocs */
-	op_stats_t	lhs_inserts;		/* Inserts from caller */
-	op_stats_t	lhs_retrieves;		/* Retrieves from caller */
-	op_stats_t	lhs_splits;		/* Splits, internal */
-} lh_stats_t;
-
 /* Hash table structure */
 struct linear_hash {
-	size_t		lh_record_size;
-	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
-	record_ix_t	lh_split_pointer;	/* Next bucket to split */
-	boolean_t	lh_validate;		/* Debug: check per op (slow) */
+
+	size_t		lh_record_size;		/* Params */
 	uint64_t	lh_max_memory;
-	int     	lh_next_memory_check;	/* # of splits before check */
-	int       	lh_next_iterator;
-	lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
-	lh_stats_t	lh_stats;
-	ops_tracker_t	lh_ops_tracker;
+
 	allocator_t	*lh_data_alloc;		/* Data records */
 	allocator_t	*lh_bucket_alloc;	/* Main buckets */
 	allocator_t	*lh_overflow_alloc;	/* Overflow buckets */
+
+	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
+	record_ix_t	lh_split_pointer;	/* Next bucket to split */
+	int     	lh_next_memory_check;	/* # of splits before check */
+	uint64_t	lh_num_entries;
+	uint64_t	lh_top_level_entries;
+
+#ifdef LH_STATS_AND_VALIDATION
+	boolean_t	lh_validate;		/* Debug: check per op (slow) */
+	lh_stats_t	lh_stats;
+	ops_tracker_t	lh_ops_tracker;
+#endif
 };
 
 uint64_t
