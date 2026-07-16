@@ -22,7 +22,6 @@ zstream_SOURCES = \
 	%D%/zstream_hash.c \
 	%D%/zstream_hash.h \
 	%D%/zstream_hash_extras.c \
-	%D%/zstream_hash_extras.h \
 	%D%/zstream_hash_impl.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \

@@ -212,9 +212,10 @@ split_bucket(linear_hash_t *lh)
 	/* Increment split pointer so bucket_for_hash uses extended length */
 	lh->lh_split_pointer++;
 
-	/* Partition */
 	uint64_t pre_num_top_level = 0;
 	uint64_t post_num_top_level = 0;
+
+	/* Partition */
 	bucket_entry_t *sbe;
 	while ((sbe = entry_iterator_next(&source, B_FALSE))) {
 		if (sbe->be_record == 0)
@@ -237,6 +238,7 @@ split_bucket(linear_hash_t *lh)
 	/* Maintain top-level entry account used to determine occupancy */
 	lh->lh_num_top_level_entries -= pre_num_top_level;
 	lh->lh_num_top_level_entries += post_num_top_level;
+	lh->lh_num_buckets++;
 
 	/* Zero out the rest of the source bucket */
 	bucket_entry_t *entry;
@@ -266,7 +268,7 @@ static inline void
 check_split(linear_hash_t *lh)
 {
 	double occupancy = (double)lh->lh_num_top_level_entries /
-		((1ULL << lh->lh_hash_suffix_length) * ENTRIES_PER_BUCKET);
+		(lh->lh_num_buckets * ENTRIES_PER_BUCKET);
 	if (occupancy > MAX_OCCUPANCY) {
 		split_bucket(lh);
 	}
@@ -281,7 +283,7 @@ check_split(linear_hash_t *lh)
  * Memory clawbacks are prioritized by allocator. The data allocator is the
  * first hit, followed by the overflow allocator and the bucket allocator.
  *
- * Depending on the state of things, we may need to reclaim memory from more
+ * Depending on state, we may need to reclaim memory from more
  * than one allocator, hence the loop.
  */
 static void
@@ -339,7 +341,8 @@ lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 	*lh = (linear_hash_t){
 		.lh_record_size = record_size,
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
-		.lh_max_memory = max_mem
+		.lh_max_memory = max_mem,
+		.lh_num_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH
 	};
 
 	if (strlen(cache_dir) > sizeof(path) - 32)

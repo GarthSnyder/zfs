@@ -21,7 +21,6 @@
 #include <err.h>
 #include <string.h>
 #include "zstream_hash_impl.h"
-#include "zstream_hash_extras.h"
 
 #ifdef LH_STATS_AND_VALIDATION
 
@@ -30,18 +29,22 @@
  * not valid.
  */
 boolean_t
-lh_validate(linear_hash_t *lh) {
+lh_validate(linear_hash_t *lh)
+{
 	uint64_t total_entries = 0;
 	uint64_t total_top_level_entries = 0;
 	boolean_t warned = B_FALSE;
 	allocator_stats_t bucket_stats =
 	    allocator_get_stats(lh->lh_bucket_alloc);
+
 	for (uint64_t i = 0; i < bucket_stats.as_num_records; i++) {
+
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t full_entries = 0;
 		uint64_t empty_entries = 0;
 		uint64_t top_level_entries = 0;
 		bucket_entry_t *entry;
+
 		while ((entry = entry_iterator_next(&iter, B_FALSE))) {
 			if (entry->be_record) {
 				if (empty_entries != 0) {
@@ -66,6 +69,7 @@ lh_validate(linear_hash_t *lh) {
 				empty_entries++;
 			}
 		}
+
 		total_entries += full_entries;
 		total_top_level_entries += top_level_entries;
 	}
@@ -91,18 +95,19 @@ lh_get_stats(linear_hash_t *lh, lh_report_t *stats)
 	VERIFY(lh != NULL && stats != NULL);
 	memset(stats, 0, sizeof (*stats));
 
-	allocator_stats_t bucket_stats = allocator_get_stats(lh->lh_bucket_alloc);
-	allocator_stats_t overflow_stats = allocator_get_stats(lh->lh_overflow_alloc);
-	allocator_stats_t data_stats = allocator_get_stats(lh->lh_data_alloc);
-	stats->lr_bytes_in_data = data_stats.as_num_records *
-	    lh->lh_record_size;
+	allocator_stats_t bucket = allocator_get_stats(lh->lh_bucket_alloc);
+	allocator_stats_t overflow = allocator_get_stats(lh->lh_overflow_alloc);
+	allocator_stats_t data = allocator_get_stats(lh->lh_data_alloc);
+	stats->lr_bytes_in_data = data.as_num_records * lh->lh_record_size;
 	stats->lr_bytes_in_buckets = sizeof (bucket_t) *
-	    (bucket_stats.as_num_records + overflow_stats.as_num_records);
+	    (bucket.as_num_records + overflow.as_num_records);
 
-	for (uint64_t i = 0; i < bucket_stats.as_num_records; i++) {
+	for (uint64_t i = 0; i < bucket.as_num_records; i++) {
+
 		entry_iterator_t iter = ITER_BUCKET(lh, i);
 		uint64_t num_entries = 0;
 		uint64_t num_filled = 0;
+
 		bucket_entry_t *entry;
 		while ((entry = entry_iterator_next(&iter, B_FALSE))) {
 			num_entries++;
@@ -149,11 +154,13 @@ lh_get_stats(linear_hash_t *lh, lh_report_t *stats)
 }
 
 void
-lh_print_stats(linear_hash_t *lh) {
+lh_print_stats(linear_hash_t *lh)
+{
 	lh_report_t stats;
 	lh_get_stats(lh, &stats);
-	fprintf(stderr, "%lu entries in %lu bucket chains (occupancy %.0f%%):\n",
-	    stats.lr_total_entries, stats.lr_total_chains, 100 * stats.lr_occupancy);
+	fprintf(stderr, "%lu entries in %lu chains (occupancy %.0f%%):\n",
+	    stats.lr_total_entries, stats.lr_total_chains,
+	    100 * stats.lr_occupancy);
 	for (int i = 0; i < MAX_BUCKET_CHAIN; i++) {
 		bucket_stats_t *cs = &stats.lr_chains_by_length[i];
 		if (cs->bs_num_chains) {
@@ -175,21 +182,26 @@ lh_print_stats(linear_hash_t *lh) {
 			}
 		}
 	}
+	uint64_t insert_ops = stats.lr_inserts.os_ops_mem +
+	    stats.lr_inserts.os_ops_disk;
+	uint64_t retrieve_ops = stats.lr_retrieves.os_ops_mem +
+	    stats.lr_retrieves.os_ops_disk;
+	uint64_t split_ops = stats.lr_splits.os_ops_mem +
+	    stats.lr_splits.os_ops_disk;
 	fprintf(stderr, "%lu inserts with %lu total I/O ops, %.2f ops/insert\n",
-	    stats.lr_inserts.os_count, stats.lr_inserts.os_num_io_ops,
-	    (double)stats.lr_inserts.os_num_io_ops / stats.lr_inserts.os_count);
+	    stats.lr_inserts.os_count, insert_ops,
+	    (double)insert_ops / stats.lr_inserts.os_count);
 	fprintf(stderr, "%lu retrieve chains with %lu total I/O ops, %.2f "
 	    "ops/retrieve\n", stats.lr_retrieves.os_count,
-	    stats.lr_retrieves.os_num_io_ops,
-	    (double)stats.lr_retrieves.os_num_io_ops /
-	    stats.lr_retrieves.os_count);
+	    retrieve_ops, (double)retrieve_ops / stats.lr_retrieves.os_count);
 	fprintf(stderr, "%lu splits with %lu total I/O ops, %.2f ops/split\n",
-	    stats.lr_splits.os_count, stats.lr_splits.os_num_io_ops,
-	    (double)stats.lr_splits.os_num_io_ops /stats.lr_splits.os_count);
+	    stats.lr_splits.os_count, split_ops,
+	    (double)split_ops / stats.lr_splits.os_count);
 }
 
 op_stats_t
-total_io_ops(linear_hash_t *lh) {
+total_io_ops(linear_hash_t *lh)
+{
 	allocator_stats_t data = allocator_get_stats(lh->lh_data_alloc);
 	allocator_stats_t bucket = allocator_get_stats(lh->lh_bucket_alloc);
 	allocator_stats_t over = allocator_get_stats(lh->lh_overflow_alloc);
@@ -222,14 +234,16 @@ begin_ops_tracking(linear_hash_t *lh, op_stats_t *bin)
 }
 
 void
-update_ops_tracking(linear_hash_t *lh){
+update_ops_tracking(linear_hash_t *lh)
+{
 	if (lh->lh_ops_tracker.ot_stat_bin) {
 		lh->lh_ops_tracker.ot_latest_ops = total_io_ops(lh);
 	}
 }
 
 void
-complete_ops_tracking(linear_hash_t *lh) {
+complete_ops_tracking(linear_hash_t *lh)
+{
 	ops_tracker_t *tracker = &lh->lh_ops_tracker;
 	if (tracker->ot_stat_bin) {
 		update_ops_tracking(lh);
