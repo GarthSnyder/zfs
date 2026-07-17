@@ -164,8 +164,11 @@ zstream_queue_set_num_threads(uint_t n)
 {
 	if (pool_initialized) {
 		errx(1, "thread pool size must be set before creating queues");
+	} else if (n == 0) {
+		errx(1, "number of threads must be at least 1");
 	} else if (n < MIN_THREADS) {
-		errx(1, "number of threads must be at least %d", MIN_THREADS);
+		warnx("fewer than %d threads may hurt performance, setting "
+		    "anyway...", MIN_THREADS);
 	} else if (n > 256) {
 		warnx("num_threads = %u seems suspiciously high, setting "
 		    "anyway...", n);
@@ -207,8 +210,8 @@ thread_pool_spinup(void)
 #else
 		pool.tp_num_threads = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
+		pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	}
-	pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	pool.tp_threads = safe_malloc(sizeof (pthread_t) * pool.tp_num_threads);
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		char buff[32];
