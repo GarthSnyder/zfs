@@ -624,7 +624,7 @@ tags = ['functional', 'xattr']
 
 [tests/functional/zstream]
 tests = ['zstream_dump_001_pos', 'zstream_dump_002_pos',
-    'zstream_redup_001_pos']
+    'zstream_redup_001_pos', 'zstream_selftest_001_pos']
 tags = ['functional', 'zstream']
 
 [tests/functional/zvol/zvol_ENOSPC]
