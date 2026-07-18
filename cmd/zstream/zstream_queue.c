@@ -164,8 +164,11 @@ zstream_queue_set_num_threads(uint_t n)
 {
 	if (pool_initialized) {
 		errx(1, "thread pool size must be set before creating queues");
+	} else if (n == 0) {
+		errx(1, "number of threads must be at least 1");
 	} else if (n < MIN_THREADS) {
-		errx(1, "number of threads must be at least %d", MIN_THREADS);
+		warnx("fewer than %d threads may hurt performance, setting "
+		    "anyway...", MIN_THREADS);
 	} else if (n > 256) {
 		warnx("num_threads = %u seems suspiciously high, setting "
 		    "anyway...", n);
@@ -207,8 +210,8 @@ thread_pool_spinup(void)
 #else
 		pool.tp_num_threads = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
+		pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	}
-	pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	pool.tp_threads = safe_malloc(sizeof (pthread_t) * pool.tp_num_threads);
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		char buff[32];
@@ -280,12 +283,11 @@ zstream_queue_create(zq_params_t *params)
 	zstream_queue_t *queue = safe_malloc(sizeof (zstream_queue_t));
 	pool.tp_queues[pool.tp_num_queues] = queue;
 
-	zstream_queue_t new_queue = {
-	    .zq_params = *params,
-	    .zq_slots = safe_malloc(params->qp_queue_length *
-		((sizeof (queue_slot_t)) + params->qp_item_size))
+	*queue = (zstream_queue_t){
+		.zq_params = *params,
+		.zq_slots = safe_malloc(params->qp_queue_length *
+		    ((sizeof (queue_slot_t)) + params->qp_item_size))
 	};
-	*queue = new_queue;
 	/*
 	 * Queue slots and item storage are allocated in one block, so we
 	 * need to manually wire each slot to its item buffer.
@@ -579,6 +581,7 @@ queue_worker(void *dummy)
 	queue_slot_t *batch[MAX_BATCH];
 	int count;
 
+	pthread_register_self();
 	while (B_TRUE) {
 		count = assign_queue_and_get_work(&queue, batch);
 		if (count) {
@@ -748,6 +751,8 @@ cpu_and_queue_monitor(void *dummy)
 	char buff[1024];
 	boolean_t interrupt = B_FALSE;
 	FILE *fp;
+
+	pthread_register_self();
 
 	/* Wait a few seconds for things to settle into steady state */
 	usleep(3 * 1000 * 1000);
