@@ -47,7 +47,7 @@
 #include "zstream_selftest.h"
 
 /*
- * Generous per-test deadline. A test that hits this limit is almost
+ * Watchdog timeout in seconds. A test that hits this limit is almost
  * certainly deadlocked, and the watchdog converts the hang into a test
  * failure instead of a stuck test run.
  */
@@ -55,7 +55,7 @@
 
 typedef struct {
 	const char		*sm_name;
-	const selftest_case_t	*sm_cases;
+	const test_case_t	*sm_cases;
 } selftest_module_t;
 
 static const selftest_module_t modules[] = {
@@ -67,7 +67,6 @@ static const selftest_module_t modules[] = {
 uint64_t selftest_seed;
 
 static const char *current_test = "(startup)";
-static size_t current_test_len = 9;
 
 static void
 selftest_usage(void)
@@ -84,24 +83,7 @@ selftest_usage(void)
 	for (int i = 0; i < NUM_MODULES; i++)
 		(void) fprintf(stderr, " %s", modules[i].sm_name);
 	(void) fprintf(stderr, "\n");
-	exit(2);
-}
-
-int
-selftest_count_threads(void)
-{
-	DIR *dir = opendir("/proc/self/task");
-	if (dir == NULL)
-		return (-1);
-
-	int count = 0;
-	struct dirent *de;
-	while ((de = readdir(dir)) != NULL) {
-		if (de->d_name[0] != '.')
-			count++;
-	}
-	(void) closedir(dir);
-	return (count);
+	exit(1);
 }
 
 static const selftest_module_t *
@@ -123,9 +105,9 @@ list_tests(const selftest_module_t *module)
 		if (module != NULL && module != &modules[i])
 			continue;
 		(void) printf("%s:\n", modules[i].sm_name);
-		for (const selftest_case_t *tc = modules[i].sm_cases;
-		    tc->sc_name != NULL; tc++) {
-			(void) printf("\t%s\n", tc->sc_name);
+		for (const test_case_t *tc = modules[i].sm_cases;
+		    tc->tc_name != NULL; tc++) {
+			(void) printf("\t%s\n", tc->tc_name);
 		}
 	}
 }
@@ -139,7 +121,7 @@ watchdog_fire(int sig)
 	(void) sig;
 	const char msg[] = "\nselftest: watchdog timeout in ";
 	if (write(STDERR_FILENO, msg, sizeof (msg) - 1) < 0 ||
-	    write(STDERR_FILENO, current_test, current_test_len) < 0 ||
+	    write(STDERR_FILENO, current_test, strlen(current_test)) < 0 ||
 	    write(STDERR_FILENO, "\n", 1) < 0) {
 		_exit(1);
 	}
@@ -147,24 +129,23 @@ watchdog_fire(int sig)
 }
 
 static void
-run_case(const selftest_case_t *tc)
+run_case(const test_case_t *tc)
 {
-	(void) printf("Running %-20s ... ", tc->sc_name);
+	(void) printf("Running %-20s ... ", tc->tc_name);
 	(void) fflush(stdout);
-	current_test = tc->sc_name;
-	current_test_len = strlen(tc->sc_name);
+	current_test = tc->tc_name;
 	(void) alarm(SELFTEST_TIMEOUT_SECS);
-	tc->sc_func();
+	tc->tc_func();
 	(void) alarm(0);
 	(void) printf("OK\n");
 }
 
-static const selftest_case_t *
+static const test_case_t *
 find_case(const selftest_module_t *module, const char *name)
 {
-	for (const selftest_case_t *tc = module->sm_cases;
-	    tc->sc_name != NULL; tc++) {
-		if (strcmp(name, tc->sc_name) == 0)
+	for (const test_case_t *tc = module->sm_cases;
+	    tc->tc_name != NULL; tc++) {
+		if (strcmp(name, tc->tc_name) == 0)
 			return (tc);
 	}
 	errx(2, "module '%s' has no test named '%s' (try -l)",
@@ -220,7 +201,7 @@ zstream_do_selftest(int argc, char *argv[])
 
 	const selftest_module_t *module = find_module(argv[0]);
 
-	/* Modules under test rely on libspl services (e.g. random_*) */
+	/* Needed for random_get_pseudo_bytes() */
 	libspl_init();
 
 	if (!have_seed)
@@ -238,8 +219,8 @@ zstream_do_selftest(int argc, char *argv[])
 
 	int count = 0;
 	if (argc == 1) {
-		for (const selftest_case_t *tc = module->sm_cases;
-		    tc->sc_name != NULL; tc++) {
+		for (const test_case_t *tc = module->sm_cases;
+		    tc->tc_name != NULL; tc++) {
 			run_case(tc);
 			count++;
 		}

@@ -18,25 +18,29 @@
  */
 
 /*
- * Selftests for the zstream_queue work queue API.
+ * Selftests for the zstream_queue multithreaded FIFO queue API.
  *
  * All tests are built on one generic workload runner. A workload is
  * described by a qtest_config_t: some number of producer threads each
  * enqueue a stream of self-describing items with randomized costs,
  * payloads, and processing delays, while one consumer thread per queue
- * dequeues and verifies. Several workloads can run concurrently on
- * separate queues to exercise the shared thread pool.
+ * dequeues and verifies. Several workloads can run concurrently on separate
+ * queues to exercise the shared thread pool.
  *
  * Every item carries enough information to be verified independently:
  *
- * - (producer, seq) identify the item; the consumer checks that each
- *   producer's items arrive in exactly the order they were enqueued.
- * - qi_check is a hash of (seed, producer, seq). The process function
- *   verifies it and then XORs in TRANSFORM_MAGIC; the consumer checks
- *   that the transform happened exactly when cost > 0.
+ * - The tuple (qi_producer, qi_seq) identifies each item; the consumer
+ *   checks that each producer's items arrive in the same order they
+ *   were enqueued.
+ *
+ * - qi_check is a hash of (qi_seed, qi_producer, qi_seq). The processing
+ *   function verifies it and then XORs in TRANSFORM_MAGIC. The consumer
+ *   checks that the transform happened iff cost > 0.
+ *
  * - qi_pattern[] is filled from qi_check and verified both by the process
  *   function and the consumer, to catch any corruption of the shallow
  *   copies in and out of the ring buffer.
+ *
  * - qi_process_count counts invocations of the process function, which
  *   must be exactly one for cost > 0 items and zero for cost == 0 items.
  *
@@ -60,11 +64,12 @@
 #define	TRANSFORM_MAGIC	0xf00dfeedbeefcafeULL
 
 /*
- * Chance (per mille) that an item with a delay distribution gets an
- * extra-long "outlier" delay, to force wildly out-of-order completion.
+ * Number of times per 1000 processing function invocations to use an
+ * extra-long "outlier" processing delay to force overtly out-of-order
+ * completion.
  */
-#define	LONG_DELAY_PERMILLE	3
-#define	LONG_DELAY_MULTIPLIER	20
+#define	LONG_DELAYS_PER_THOUSAND	3
+#define	LONG_DELAY_MULTIPLIER		20
 
 typedef struct {
 	uint32_t	qi_producer;
@@ -77,13 +82,13 @@ typedef struct {
 } qtest_item_t;
 
 typedef struct {
-	uint32_t	qc_producers;
-	uint64_t	qc_items;		/* items per producer */
+	uint32_t	qc_producers;		/* Number of producersl */
+	uint64_t	qc_items;		/* Items per producer */
 	size_t		qc_queue_length;
 	size_t		qc_batch_budget;
-	size_t		qc_pattern_len;		/* extra payload bytes */
+	size_t		qc_pattern_len;		/* Extra payload bytes */
 	uint32_t	qc_zero_cost_pct;	/* % of items fast-tracked */
-	size_t		qc_max_cost;		/* nonzero costs are 1..max */
+	size_t		qc_max_cost;		/* Nonzero costs are 1..max */
 	uint32_t	qc_delay_pct;		/* % of items slept on */
 	uint32_t	qc_max_delay_us;
 	uint32_t	qc_producer_stall_pct;	/* % chance producer naps */
@@ -96,8 +101,8 @@ typedef struct {
 	const qtest_config_t	*qr_cfg;
 	zstream_queue_t		*qr_queue;
 	uint32_t		qr_producers_left;
-	uint64_t		qr_expect_processed;	/* atomic */
-	uint64_t		qr_processed;		/* atomic */
+	uint64_t		qr_expect_processed;	/* Atomic */
+	uint64_t		qr_processed;		/* Atomic */
 	uint64_t		qr_dequeued;
 } qtest_run_t;
 
@@ -125,8 +130,8 @@ verify_pattern(const uint8_t *pattern, size_t len, uint64_t check,
     const char *who)
 {
 	for (size_t i = 0; i < len; i++) {
-		uint8_t expect = (uint8_t)(check >> ((i & 7) << 3)) ^
-		    (uint8_t)i;
+		uint8_t expect =
+		    (uint8_t)(check >> ((i & 7) << 3)) ^ (uint8_t)i;
 		if (pattern[i] != expect) {
 			errx(1, "%s: payload corrupted at byte %zu "
 			    "(0x%02x != 0x%02x)", who, i, pattern[i], expect);
@@ -147,7 +152,7 @@ qtest_process(queue_item_t *v, void *context)
 	qtest_run_t *run = context;
 	qtest_item_t *item = v;
 
-	/* Cost-0 items must never reach the process function */
+	/* Cost-0 items should never reach the process function */
 	VERIFY3U(item->qi_cost, >, 0);
 	VERIFY3U(item->qi_check, ==,
 	    item_check_value(item->qi_producer, item->qi_seq));
@@ -162,6 +167,9 @@ qtest_process(queue_item_t *v, void *context)
 	atomic_add_64(&run->qr_processed, 1);
 }
 
+/*
+ * Pthreads worker function for enqueuers
+ */
 static void *
 qtest_producer(void *arg)
 {
@@ -170,16 +178,20 @@ qtest_producer(void *arg)
 	const qtest_config_t *cfg = run->qr_cfg;
 	uint64_t local_expect = 0;
 	selftest_rng_t rng;
+	uint8_t item_buffer[sizeof (qtest_item_t) + cfg->qc_pattern_len];
+	qtest_item_t *item = (qtest_item_t *)item_buffer;
 
+	pthread_register_self();
 	selftest_rng_init(&rng, cfg->qc_rng_stream + 1000 + pa->qp_id);
-	qtest_item_t *item =
-	    safe_calloc(sizeof (qtest_item_t) + cfg->qc_pattern_len);
 
 	for (uint64_t seq = 0; seq < cfg->qc_items; seq++) {
-		item->qi_producer = pa->qp_id;
-		item->qi_seq = seq;
-		item->qi_process_count = 0;
-		item->qi_check = item_check_value(pa->qp_id, seq);
+
+		*item = (qtest_item_t){
+			.qi_producer = pa->qp_id,
+			.qi_seq = seq,
+			.qi_process_count = 0,
+			.qi_check = item_check_value(pa->qp_id, seq)
+		};
 		fill_pattern(item->qi_pattern, cfg->qc_pattern_len,
 		    item->qi_check);
 
@@ -191,10 +203,9 @@ qtest_producer(void *arg)
 			local_expect++;
 		}
 
-		item->qi_delay_us = 0;
 		if (item->qi_cost > 0 && cfg->qc_max_delay_us > 0) {
 			if (selftest_rng_below(&rng, 1000) <
-			    LONG_DELAY_PERMILLE) {
+			    LONG_DELAYS_PER_THOUSAND) {
 				item->qi_delay_us = cfg->qc_max_delay_us *
 				    LONG_DELAY_MULTIPLIER;
 			} else if (selftest_rng_below(&rng, 100) <
@@ -211,7 +222,6 @@ qtest_producer(void *arg)
 
 		zstream_enqueue(run->qr_queue, item);
 	}
-	free(item);
 
 	atomic_add_64(&run->qr_expect_processed, local_expect);
 	if (atomic_add_32_nv(&run->qr_producers_left, -1) == 0)
@@ -219,18 +229,22 @@ qtest_producer(void *arg)
 	return (NULL);
 }
 
+/*
+ * Pthreads worker function for dequeuers
+ */
 static void *
 qtest_consumer(void *arg)
 {
 	qtest_run_t *run = arg;
 	const qtest_config_t *cfg = run->qr_cfg;
 	selftest_rng_t rng;
+	uint64_t expected_seq[cfg->qc_producers];
+	uint8_t item_buffer[sizeof (qtest_item_t) + cfg->qc_pattern_len];
+	qtest_item_t *item = (qtest_item_t *)item_buffer;
 
+	pthread_register_self();
+	bzero(expected_seq, sizeof(expected_seq));
 	selftest_rng_init(&rng, cfg->qc_rng_stream + 999);
-	uint64_t *expected_seq =
-	    safe_calloc(cfg->qc_producers * sizeof (uint64_t));
-	qtest_item_t *item =
-	    safe_malloc(sizeof (qtest_item_t) + cfg->qc_pattern_len);
 
 	while (zstream_dequeue(run->qr_queue, item)) {
 		VERIFY3U(item->qi_producer, <, cfg->qc_producers);
@@ -266,8 +280,6 @@ qtest_consumer(void *arg)
 	VERIFY3U(run->qr_dequeued, ==,
 	    (uint64_t)cfg->qc_producers * cfg->qc_items);
 
-	free(item);
-	free(expected_seq);
 	return (NULL);
 }
 
@@ -280,16 +292,17 @@ qtest_consumer(void *arg)
 static void
 run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 {
-	qtest_run_t *runs = safe_calloc(ncfg * sizeof (qtest_run_t));
-	pthread_t *consumers = safe_calloc(ncfg * sizeof (pthread_t));
+	qtest_run_t runs[ncfg];
+	pthread_t consumers[ncfg];
 	uint32_t total_producers = 0;
 
 	for (int i = 0; i < ncfg; i++)
 		total_producers += cfgs[i].qc_producers;
-	pthread_t *producers =
-	    safe_calloc(total_producers * sizeof (pthread_t));
-	qtest_producer_arg_t *pargs =
-	    safe_calloc(total_producers * sizeof (qtest_producer_arg_t));
+
+	pthread_t producers[total_producers];
+	qtest_producer_arg_t pargs[total_producers];
+	bzero(runs, sizeof(runs));
+	bzero(pargs, sizeof(pargs));
 
 	for (int i = 0; i < ncfg; i++) {
 		runs[i].qr_cfg = &cfgs[i];
@@ -325,11 +338,6 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 
 	for (int i = 0; i < ncfg; i++)
 		VERIFY3U(runs[i].qr_processed, ==, runs[i].qr_expect_processed);
-
-	free(pargs);
-	free(producers);
-	free(consumers);
-	free(runs);
 }
 
 static void
@@ -357,11 +365,10 @@ queue_basic(void)
 }
 
 /*
- * The centerpiece: a long randomized stream with heavy-tailed processing
- * delays, a large fraction of fast-tracked items, costs that exceed the
- * batch budget, and a consumer that periodically stalls so the queue
- * backs up and enqueue blocks on Q_FULL. The ring indices wrap many
- * hundreds of times.
+ * A long, randomized stream with heavy-tailed processing delays, a large
+ * fraction of fast-tracked items, costs that exceed the batch budget, and a
+ * consumer that periodically stalls so the queue backs up and enqueue
+ * blocks on Q_FULL. The ring indices wrap hundreds of times.
  */
 static void
 queue_torture(void)
@@ -389,7 +396,7 @@ queue_torture(void)
  * zero-length payloads.
  */
 static void
-queue_edges(void)
+queue_edge_cases(void)
 {
 	static const size_t lengths[] =
 	    { 1, 2, MAX_BATCH - 1, MAX_BATCH, MAX_BATCH + 1, 64 };
@@ -496,27 +503,26 @@ queue_multi_queue(void)
 }
 
 static void
-expect_spindown(int baseline)
+expect_spindown(uint32_t baseline)
 {
-	if (baseline <= 0)
-		return;
 	/*
 	 * thread_pool_spindown() joins its workers synchronously, but give
 	 * the kernel a moment to retire task entries before declaring
 	 * failure.
 	 */
 	for (int i = 0; i < 500; i++) {
-		if (selftest_count_threads() == baseline)
+		if (num_pthreads == baseline)
 			return;
 		(void) usleep(2000);
 	}
 	errx(1, "thread pool failed to spin down (%d threads, expected %d)",
-	    selftest_count_threads(), baseline);
+	    num_pthreads, baseline);
 }
 
 static void *
 run_queue_workload_thread(void *arg)
 {
+	pthread_register_self();
 	run_queue_workload(arg);
 	return (NULL);
 }
@@ -525,12 +531,12 @@ run_queue_workload_thread(void *arg)
  * Spin the thread pool up and down repeatedly. After every drain the
  * process must be back to its baseline thread count. The second phase
  * races a fresh zstream_queue_create() against the previous queue's
- * spin-down to exercise the create-vs-spindown locking dance.
+ * spin-down to exercise the create-vs-spindown locking.
  */
 static void
 queue_cycles(void)
 {
-	int baseline = selftest_count_threads();
+	uint32_t baseline = num_pthreads;
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 400,
@@ -578,8 +584,8 @@ queue_stress(void)
 	selftest_rng_init(&rng, 900);
 
 	for (int iter = 0; iter < 8; iter++) {
-		int nqueues = 1 + selftest_rng_below(&rng, 4);
-		qtest_config_t cfgs[4];
+		int nqueues = 1 + selftest_rng_below(&rng, 8);
+		qtest_config_t cfgs[8];
 
 		for (int i = 0; i < nqueues; i++) {
 			uint32_t producers = 1 + selftest_rng_below(&rng, 4);
@@ -617,14 +623,14 @@ queue_stress(void)
 	}
 }
 
-const selftest_case_t selftest_queue_cases[] = {
-	{ "queue_basic",	queue_basic },
-	{ "queue_edges",	queue_edges },
-	{ "queue_zero_cost",	queue_zero_cost },
-	{ "queue_torture",	queue_torture },
-	{ "queue_multi_producer", queue_multi_producer },
-	{ "queue_multi_queue",	queue_multi_queue },
-	{ "queue_cycles",	queue_cycles },
-	{ "queue_stress",	queue_stress },
-	{ NULL,			NULL },
+const test_case_t selftest_queue_cases[] = {
+	{ "queue_basic",		queue_basic },
+	{ "queue_edge_cases",		queue_edge_cases },
+	{ "queue_zero_cost",		queue_zero_cost },
+	{ "queue_torture",		queue_torture },
+	{ "queue_multi_producer",	queue_multi_producer },
+	{ "queue_multi_queue",		queue_multi_queue },
+	{ "queue_cycles",		queue_cycles },
+	{ "queue_stress",		queue_stress },
+	{ NULL,				NULL },
 };

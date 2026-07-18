@@ -33,20 +33,21 @@ extern "C" {
  * zstream_selftest.c handles argument parsing, test selection, seeding of
  * pseudo-random number generators, watchdog timeouts, and status output.
  *
- * Test cases report failure by calling errx() or by tripping a VERIFY;
- * either way, the process exits nonzero and the functional-test wrapper
- * records a failure. A test case that returns has passed.
+ * Test cases report failure by exiting with a nonzero exit code. Any test
+ * case that returns has passed.
  */
 
+typedef void test_function_f(void);
+
 typedef struct {
-	const char	*sc_name;
-	void		(*sc_func)(void);
-} selftest_case_t;
+	const char	*tc_name;
+	test_function_f	*tc_func;
+} test_case_t;
 
 /*
  * Modules with test cases to offer. Each array ends with a NULL sc_name.
  */
-extern const selftest_case_t selftest_queue_cases[];
+extern const test_case_t selftest_queue_cases[];
 
 /*
  * The seed for this run, set by the harness before any test runs. Printed
