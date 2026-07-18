@@ -582,6 +582,7 @@ queue_worker(void *dummy)
 	queue_slot_t *batch[MAX_BATCH];
 	int count;
 
+	pthread_register_self();
 	while (B_TRUE) {
 		count = assign_queue_and_get_work(&queue, batch);
 		if (count) {
@@ -751,6 +752,8 @@ cpu_and_queue_monitor(void *dummy)
 	char buff[1024];
 	boolean_t interrupt = B_FALSE;
 	FILE *fp;
+
+	pthread_register_self();
 
 	/* Wait a few seconds for things to settle into steady state */
 	usleep(3 * 1000 * 1000);
