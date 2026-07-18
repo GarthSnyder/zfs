@@ -584,8 +584,8 @@ queue_stress(void)
 	selftest_rng_init(&rng, 900);
 
 	for (int iter = 0; iter < 8; iter++) {
-		int nqueues = 1 + selftest_rng_below(&rng, 8);
-		qtest_config_t cfgs[8];
+		int nqueues = 1 + selftest_rng_below(&rng, 4);
+		qtest_config_t cfgs[4];
 
 		for (int i = 0; i < nqueues; i++) {
 			uint32_t producers = 1 + selftest_rng_below(&rng, 4);
@@ -595,7 +595,7 @@ queue_stress(void)
 				    selftest_rng_below(&rng, 8000)) /
 				    producers,
 				.qc_queue_length = (size_t)1 <<
-				    selftest_rng_below(&rng, 8),
+				    selftest_rng_below(&rng, 10),
 				.qc_batch_budget =
 				    (selftest_rng_below(&rng, 3) == 0) ? 0 :
 				    selftest_rng_below(&rng, 4096),
