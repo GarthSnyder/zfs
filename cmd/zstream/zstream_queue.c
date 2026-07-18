@@ -92,7 +92,7 @@
  * Several operations require multiple locks. In these cases, a standardized
  * locking order is used to avoid deadlocks:
  *
- *   enqueue -> pool -> queue -> create
+ *   create -> enqueue -> pool -> queue
  *
  * Several operations merit additional comments about locking. These are
  * marked with a "locking note" in the comments preceding the relevant
@@ -238,20 +238,29 @@ thread_pool_spinup(void)
  *
  * Even though the two mutexes are locked by different threads, it is still
  * one composite operation for which the locking order is pool -> enqueue.
- * That's incompatible with the standard locking order of enqueue -> pool ->
- * queue -> create, so continuing to hold the pool mutex risks deadlock.
+ * That's incompatible with the standard locking order of create -> enqueue
+ * -> pool -> queue, so continuing to hold the pool mutex risks deadlock.
  *
- * If we are here, that means there are no existing queues, so we needn't
- * worry about operations being attempted on queues. The one potential
- * conflict is with zstream_queue_create(). That's the reason for the
- * seemingly redundant "create" mutex. It lets us prevent the creation of
- * new queues while simultaneously dropping the pool lock.
+ * Instead, we lock the create mutex, which gates the creation of new
+ * queues. We have to check if a queue creation got sneaked in while we were
+ * holding no locks, but if it did, we simply leave the existing thread pool
+ * alone and return.
  */
 static void
 thread_pool_spindown(void)
 {
-	pthread_mutex_lock(&pool.tp_create_mutex);
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
+	pthread_mutex_lock(&pool.tp_create_mutex);
+
+	if (pool.tp_num_queues > 0) {
+		/*
+		 * A queue was created while we were switching locks. No
+		 * matter, we can simply keep the existing thread pool.
+		 */
+		pthread_mutex_lock(&pool.tp_pool_mutex);
+		pthread_mutex_unlock(&pool.tp_create_mutex);
+		return;
+	}
 
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		VERIFY3S(pthread_cancel(pool.tp_threads[i]), ==, 0);
@@ -273,8 +282,8 @@ zstream_queue_t *
 zstream_queue_create(zq_params_t *params)
 {
 	pthread_once(&once_control, thread_pool_init);
-	pthread_mutex_lock(&pool.tp_pool_mutex);
 	pthread_mutex_lock(&pool.tp_create_mutex);
+	pthread_mutex_lock(&pool.tp_pool_mutex);
 	VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
 
 	if (!pool.tp_num_threads) {
@@ -283,12 +292,11 @@ zstream_queue_create(zq_params_t *params)
 	zstream_queue_t *queue = safe_malloc(sizeof (zstream_queue_t));
 	pool.tp_queues[pool.tp_num_queues] = queue;
 
-	zstream_queue_t new_queue = {
-	    .zq_params = *params,
-	    .zq_slots = safe_malloc(params->qp_queue_length *
-		((sizeof (queue_slot_t)) + params->qp_item_size))
+	*queue = (zstream_queue_t){
+		.zq_params = *params,
+		.zq_slots = safe_malloc(params->qp_queue_length *
+		    ((sizeof (queue_slot_t)) + params->qp_item_size))
 	};
-	*queue = new_queue;
 	/*
 	 * Queue slots and item storage are allocated in one block, so we
 	 * need to manually wire each slot to its item buffer.
@@ -307,8 +315,8 @@ zstream_queue_create(zq_params_t *params)
 
 	pool.tp_num_queues++;
 
-	pthread_mutex_unlock(&pool.tp_create_mutex);
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
+	pthread_mutex_unlock(&pool.tp_create_mutex);
 
 	return (queue);
 }
@@ -506,8 +514,8 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 
 /*
  * Threads are assigned to a queue on each loop so they can be shifted
- * dynamically to follow available work. Idle threads will typically
- * be awaiting the "enqueued" condition within this function.
+ * dynamically to follow available work. Idle threads will typically be
+ * awaiting the "enqueued" condition within this function.
  *
  * Locking note: this function has complex locking behavior. At first we
  * must hold both the enqueue mutex (to be sure new work doesn't get sneaked
@@ -522,12 +530,12 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * This sequence dictates the lock acquisition ordering for all of
  * zstream_queue:
  *
- *   enqueue -> pool -> queue -> create
+ * create -> enqueue -> pool -> queue
  *
  * If everyone follows that order, deadlocks can't occur. Unfortunately,
  * thread_pool_spindown() would like to acquire two of these locks in the
- * wrong order, so it uses a separate work-around. See the comments for that
- * function.
+ * wrong order, so it uses a separate work-around (the create mutex). See
+ * the comments for that function.
  */
 static int
 assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
