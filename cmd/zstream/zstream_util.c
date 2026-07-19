@@ -29,8 +29,10 @@
  */
 
 #include <assert.h>
+#include <atomic.h>
 #include <err.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
