@@ -285,10 +285,11 @@ zstream_queue_create(zq_params_t *params)
 	zstream_queue_t *queue = safe_malloc(sizeof (zstream_queue_t));
 	pool.tp_queues[pool.tp_num_queues] = queue;
 
+	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size, 8);
 	*queue = (zstream_queue_t){
 		.zq_params = *params,
 		.zq_slots = safe_malloc(params->qp_queue_length *
-		    ((sizeof (queue_slot_t)) + params->qp_item_size))
+		    ((sizeof (queue_slot_t)) + qpis_rounded))
 	};
 	/*
 	 * Queue slots and item storage are allocated in one block, so we
@@ -298,7 +299,7 @@ zstream_queue_create(zq_params_t *params)
 	queue_slot_t *slot = &queue->zq_slots[0];
 	for (int i = 0; i < params->qp_queue_length; i++) {
 		slot->qs_item = item;
-		item += queue->zq_params.qp_item_size;
+		item += qpis_rounded;
 		slot++;
 	}
 
