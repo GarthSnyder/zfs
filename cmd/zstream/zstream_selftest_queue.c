@@ -189,12 +189,13 @@ qtest_producer(void *arg)
 
 	for (uint64_t seq = 0; seq < cfg->qc_items; seq++) {
 
-		*item = (qtest_item_t){
+		qtest_item_t item_xfer = {
 			.qi_producer = pa->qp_id,
 			.qi_seq = seq,
 			.qi_process_count = 0,
 			.qi_check = item_check_value(pa->qp_id, seq)
 		};
+		*item = item_xfer;
 		fill_pattern(item->qi_pattern, cfg->qc_pattern_len,
 		    item->qi_check);
 
@@ -247,7 +248,7 @@ qtest_consumer(void *arg)
 	qtest_item_t *item = (qtest_item_t *)item_buffer;
 
 	pthread_register_self();
-	bzero(expected_seq, sizeof(expected_seq));
+	bzero(expected_seq, sizeof (expected_seq));
 	selftest_rng_init(&rng, cfg->qc_rng_stream + 999);
 
 	while (zstream_dequeue(run->qr_queue, item)) {
@@ -305,8 +306,8 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 
 	pthread_t producers[total_producers];
 	qtest_producer_arg_t pargs[total_producers];
-	bzero(runs, sizeof(runs));
-	bzero(pargs, sizeof(pargs));
+	bzero(runs, sizeof (runs));
+	bzero(pargs, sizeof (pargs));
 
 	for (int i = 0; i < ncfg; i++) {
 		runs[i].qr_cfg = &cfgs[i];

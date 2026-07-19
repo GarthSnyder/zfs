@@ -286,11 +286,12 @@ zstream_queue_create(zq_params_t *params)
 	pool.tp_queues[pool.tp_num_queues] = queue;
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size, 8);
-	*queue = (zstream_queue_t){
+	zstream_queue_t new_queue = {
 		.zq_params = *params,
 		.zq_slots = safe_malloc(params->qp_queue_length *
 		    ((sizeof (queue_slot_t)) + qpis_rounded))
 	};
+	*queue = new_queue;
 	/*
 	 * Queue slots and item storage are allocated in one block, so we
 	 * need to manually wire each slot to its item buffer.
