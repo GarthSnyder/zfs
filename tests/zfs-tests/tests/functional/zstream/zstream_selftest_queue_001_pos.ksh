@@ -29,9 +29,9 @@
 
 verify_runnable "both"
 
-log_assert "zstream selftest unit tests all pass"
+log_assert "zstream self-tests for zstream_queue all pass"
 
 log_must zstream selftest queue
 log_must zstream selftest -t 1 queue
 
-log_pass "zstream selftest unit tests all pass"
+log_pass "zstream self-tests for zstream_queue all pass"
