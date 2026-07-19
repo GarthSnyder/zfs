@@ -52,6 +52,7 @@
 #include <atomic.h>
 #include <err.h>
 #include <pthread.h>
+#include <stdalign.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -140,17 +141,18 @@ verify_pattern(const uint8_t *pattern, size_t len, uint64_t check,
 }
 
 static size_t
-qtest_cost(queue_item_t *v, void *context)
+qtest_cost(void *item_in, void *context)
 {
 	(void) context;
-	return (((qtest_item_t *)v)->qi_cost);
+	qtest_item_t *item = item_in;
+	return (item->qi_cost);
 }
 
 static void
-qtest_process(queue_item_t *v, void *context)
+qtest_process(void *item_in, void *context)
 {
 	qtest_run_t *run = context;
-	qtest_item_t *item = v;
+	qtest_item_t *item = item_in;
 
 	/* Cost-0 items should never reach the process function */
 	VERIFY3U(item->qi_cost, >, 0);
@@ -178,7 +180,8 @@ qtest_producer(void *arg)
 	const qtest_config_t *cfg = run->qr_cfg;
 	uint64_t local_expect = 0;
 	selftest_rng_t rng;
-	uint8_t item_buffer[sizeof (qtest_item_t) + cfg->qc_pattern_len];
+	alignas(uint64_t) uint8_t item_buffer[sizeof (qtest_item_t) +
+	    cfg->qc_pattern_len];
 	qtest_item_t *item = (qtest_item_t *)item_buffer;
 
 	pthread_register_self();
@@ -239,7 +242,8 @@ qtest_consumer(void *arg)
 	const qtest_config_t *cfg = run->qr_cfg;
 	selftest_rng_t rng;
 	uint64_t expected_seq[cfg->qc_producers];
-	uint8_t item_buffer[sizeof (qtest_item_t) + cfg->qc_pattern_len];
+	alignas(uint64_t) uint8_t item_buffer[sizeof (qtest_item_t) +
+	    cfg->qc_pattern_len];
 	qtest_item_t *item = (qtest_item_t *)item_buffer;
 
 	pthread_register_self();
