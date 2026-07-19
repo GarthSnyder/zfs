@@ -167,8 +167,8 @@ zstream_queue_set_num_threads(uint_t n)
 	} else if (n == 0) {
 		errx(1, "number of threads must be at least 1");
 	} else if (n < MIN_THREADS) {
-		warnx("fewer than %d threads may hurt performance, setting "
-		    "anyway...", MIN_THREADS);
+		warnx("using only %u threads my limit performance, setting "
+		    "anyway...", n);
 	} else if (n > 256) {
 		warnx("num_threads = %u seems suspiciously high, setting "
 		    "anyway...", n);
@@ -246,6 +246,9 @@ thread_pool_spinup(void)
  * conflict is with zstream_queue_create(). That's the reason for the
  * seemingly redundant "create" mutex. It lets us prevent the creation of
  * new queues while simultaneously dropping the pool lock.
+ *
+ * This function must be called with the pool mutex held, and it returns
+ * with the pool mutex unlocked.
  */
 static void
 thread_pool_spindown(void)
@@ -261,7 +264,6 @@ thread_pool_spindown(void)
 	pool.tp_threads = NULL;
 	pool.tp_num_threads = 0;
 
-	pthread_mutex_lock(&pool.tp_pool_mutex);
 	pthread_mutex_unlock(&pool.tp_create_mutex);
 }
 
@@ -685,15 +687,15 @@ zstream_queue_destroy(zstream_queue_t *queue)
 	pool.tp_num_queues--;
 
 	if (pool.tp_num_queues == 0) {
-		thread_pool_spindown();  /* Unlocks pool mutex while running */
+		thread_pool_spindown();  /* Unlocks pool mutex */
 	} else {
 		/* Gaps are not allowed in the tp_queues array */
 		zstream_queue_t **qscan = &pool.tp_queues[0];
 		int i = pool.tp_num_queues;
 		while (*qscan != queue) { qscan++; i--; }
 		memmove(qscan, qscan + 1, i * sizeof (*qscan));
+		pthread_mutex_unlock(&pool.tp_pool_mutex);
 	}
-	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
 /*
