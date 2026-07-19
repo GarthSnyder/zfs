@@ -248,7 +248,7 @@ qtest_consumer(void *arg)
 	qtest_item_t *item = (qtest_item_t *)item_buffer;
 
 	pthread_register_self();
-	bzero(expected_seq, sizeof (expected_seq));
+	memset(expected_seq, 0, sizeof (expected_seq));
 	selftest_rng_init(&rng, cfg->qc_rng_stream + 999);
 
 	while (zstream_dequeue(run->qr_queue, item)) {
@@ -306,8 +306,8 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 
 	pthread_t producers[total_producers];
 	qtest_producer_arg_t pargs[total_producers];
-	bzero(runs, sizeof (runs));
-	bzero(pargs, sizeof (pargs));
+	memset(runs, 0, sizeof (runs));
+	memset(pargs, 0, sizeof (pargs));
 
 	for (int i = 0; i < ncfg; i++) {
 		runs[i].qr_cfg = &cfgs[i];
