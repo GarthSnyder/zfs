@@ -29,8 +29,10 @@
  */
 
 #include <assert.h>
+#include <atomic.h>
 #include <err.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +67,30 @@ safe_calloc(size_t size)
 		errx(1, "failed to allocate %zu bytes, aborting...", size);
 	}
 	return (rv);
+}
+
+void
+safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+	int error = pthread_sigmask(how, set, oldset);
+	if (error != 0) {
+		errno = error;
+		err(1, "pthread_sigmask failed");
+	}
+}
+
+pthread_t
+safe_create_thread(thread_f *body, void *body_arg, const char *name,
+    boolean_t detach)
+{
+	pthread_t tid;
+	if (pthread_create(&tid, NULL, body, body_arg) != 0)
+		err(1, "pthread_create for %s failed", name);
+	if (pthread_setname_np(tid, name) != 0)
+		err(1, "could not set name of %s thread", name);
+	if (detach && pthread_detach(tid) != 0)
+		err(1, "failed to detach %s thread", name);
+	return (tid);
 }
 
 char *

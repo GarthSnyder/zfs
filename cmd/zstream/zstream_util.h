@@ -25,8 +25,11 @@
 extern "C" {
 #endif
 
+#include <pthread.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
@@ -36,17 +39,27 @@ typedef struct {
 	int			cs_level;
 } compression_spec_t;
 
+typedef void *
+thread_f(void *);
+
 /*
  * The safe_ versions of the functions below terminate the process if the
  * operation doesn't succeed instead of returning an error.
  */
-extern void *
+void *
 safe_malloc(size_t size);
 
-extern void *
+void *
 safe_calloc(size_t n);
 
-extern char *
+void
+safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+
+pthread_t
+safe_create_thread(thread_f *body, void *body_arg, const char *name,
+    boolean_t detach);
+
+char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 
 /*

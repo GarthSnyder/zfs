@@ -31,6 +31,7 @@
 #include <sys/stdtypes.h>
 #include <unistd.h>
 
+#include "zstream.h"
 #include "zstream_queue.h"
 #include "zstream_util.h"
 
@@ -212,12 +213,9 @@ thread_pool_spinup(void)
 		pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
 	}
 	for (int i = 0; i < pool.tp_num_threads; i++) {
-		char buff[32];
-		pthread_t thread;
-		int ret = pthread_create(&thread, NULL, queue_worker, NULL);
-		VERIFY3S(ret, ==, 0);
-		snprintf(buff, sizeof (buff), "queue-%d", i);
-		pthread_setname_np(thread, buff);
+		char name[32];
+		snprintf(name, sizeof (name), "queue-%d", i);
+		safe_pthread_create(queue_worker, NULL, name, B_TRUE);
 	}
 #ifdef MONITOR_QUEUES
 	start_monitor_thread();
@@ -761,9 +759,8 @@ start_monitor_thread(void)
 	pthread_t monitor;
 
 	if (!started) {
-		pthread_create(&monitor, NULL, cpu_and_queue_monitor, NULL);
-		pthread_setname_np(monitor, "monitor-0");
-		pthread_detach(monitor);
+		safe_pthread_create(cpu_and_queue_monitor, NULL,
+		    "monitor", B_TRUE);
 		started = B_TRUE;
 	}
 }
