@@ -32,11 +32,8 @@
 #include <atomic.h>
 #include <err.h>
 #include <errno.h>
-<<<<<<< HEAD
 #include <pthread.h>
-=======
 #include <fcntl.h>
->>>>>>> 7117bf3110 (Expansion done?)
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,14 +53,12 @@
 
 #include "zstream_util.h"
 
-<<<<<<< HEAD
 static pthread_key_t thread_count_key;
 uint32_t num_pthreads = 0;
-=======
+
 #if defined(__linux__)
 #include <linux/falloc.h>
 #endif
->>>>>>> 7117bf3110 (Expansion done?)
 
 void *
 safe_malloc(size_t size)
@@ -236,7 +231,6 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 	return (outbuff);
 }
 
-<<<<<<< HEAD
 static void
 thread_destroyed(void *arg)
 {
