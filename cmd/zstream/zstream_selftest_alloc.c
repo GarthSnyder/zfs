@@ -18,20 +18,19 @@
  */
 
 /*
- * Selftests for the zstream_alloc record-store API.
+ * Selftests for the zstream_alloc.[ch] record-store API.
  *
- * All tests are built on a shadow-model harness. A shadow_t wraps an
- * allocator_t together with a full record of what each record index should
- * contain: a deterministic pattern derived from a tag (for stored records),
- * zeros (for never-written records), or "unspecified" (for records claimed
- * with allocator_skip()). After any sequence of operations, the entire
- * allocator can be swept and compared against the model byte for byte.
+ * All tests are built on a shadow-model harness. A shadow_allocator_t wraps
+ * an allocator_t together with a full record of what each record index
+ * should contain: a deterministic pattern derived from a tag (for stored
+ * records) or zeros (for never-written records). After any sequence of
+ * operations, the entire allocator can be swept and compared against the
+ * model byte for byte.
  *
  * The most delicate allocator operation is allocator_set_max_memory(),
  * which moves the split point between the memory-resident and disk-resident
- * portions of the record space. The tests here move the split across every
- * boundary we could think of - and then re-verify all content, since a
- * botched transfer shows up as exactly one wrong byte somewhere.
+ * portions of the record space. The tests here move the split across
+ * edge-case meaningful boundary and then re-verify all content.
  */
 
 #include <err.h>
@@ -50,12 +49,11 @@
 typedef enum {
 	REC_EMPTY = 0,		/* Never written; must read as zeros */
 	REC_KNOWN,		/* Stored; content derived from sr_tags[] */
-	REC_UNSPECIFIED,	/* Skipped; content is not defined */
-} rec_state_t;
+} record_state_t;
 
 typedef struct {
 	allocator_t	*sh_alloc;
-	int		sh_fd;		/* Backing fd, or -1; owned by alloc */
+	int		sh_fd;		/* Backing fd, or -1 = owned by alloc */
 	size_t		sh_record_size;
 	uint64_t	sh_capacity;	/* Model size, in records */
 	uint64_t	sh_count;	/* Expected as_num_records */
@@ -64,7 +62,7 @@ typedef struct {
 	uint8_t		*sh_state;
 	uint8_t		*sh_buf;	/* Scratch: retrieved record */
 	uint8_t		*sh_expect;	/* Scratch: expected record */
-} shadow_t;
+} shadow_allocator_t;
 
 /*
  * Deterministic record content: a function of the tag alone, so the model
@@ -91,26 +89,30 @@ all_zero(const uint8_t *buf, size_t len)
 	return (B_TRUE);
 }
 
-static shadow_t *
+static shadow_allocator_t *
 shadow_init(size_t record_size, size_t mem_size, boolean_t disk_backed,
     uint64_t capacity)
 {
-	shadow_t *sh = safe_calloc(sizeof (shadow_t));
-	sh->sh_record_size = record_size;
-	sh->sh_capacity = capacity;
-	sh->sh_next_tag = 1;
-	sh->sh_tags = safe_calloc(capacity * sizeof (uint64_t));
-	sh->sh_state = safe_calloc(capacity);
-	sh->sh_buf = safe_malloc(record_size);
-	sh->sh_expect = safe_malloc(record_size);
-	sh->sh_fd = disk_backed ? selftest_create_tempfile() : -1;
-	sh->sh_alloc = allocator_init(record_size, mem_size, sh->sh_fd);
-	VERIFY(sh->sh_alloc != NULL);
-	return (sh);
+	int fd = disk_backed ? selftest_create_tempfile() : -1;
+	shadow_allocator_t sh = {
+		.sh_alloc = allocator_init(record_size, mem_size, fd),
+		.sh_fd = fd,
+		.sh_record_size = record_size,
+		.sh_capacity = capacity,
+		.sh_next_tag = 1,
+		.sh_tags = safe_calloc(capacity * sizeof (uint64_t)),
+		.sh_state = safe_calloc(capacity),
+		.sh_buf = safe_malloc(record_size),
+		.sh_expect = safe_malloc(record_size)
+	};
+	VERIFY(sh.sh_alloc != NULL);
+	shadow_allocator_t *shadow = safe_malloc(sizeof (shadow_allocator_t));
+	*shadow = sh;
+	return (shadow);
 }
 
 static void
-shadow_fini(shadow_t *sh)
+shadow_fini(shadow_allocator_t *sh)
 {
 	allocator_destroy(sh->sh_alloc);	/* Closes sh_fd */
 	free(sh->sh_tags);
@@ -121,7 +123,7 @@ shadow_fini(shadow_t *sh)
 }
 
 static void
-shadow_store(shadow_t *sh, uint64_t ix)
+shadow_store(shadow_allocator_t *sh, uint64_t ix)
 {
 	VERIFY3U(ix, <, sh->sh_capacity);
 	uint64_t tag = sh->sh_next_tag++;
@@ -133,7 +135,7 @@ shadow_store(shadow_t *sh, uint64_t ix)
 }
 
 static void
-shadow_append(shadow_t *sh)
+shadow_append(shadow_allocator_t *sh)
 {
 	VERIFY3U(sh->sh_count, <, sh->sh_capacity);
 	uint64_t tag = sh->sh_next_tag++;
@@ -146,26 +148,24 @@ shadow_append(shadow_t *sh)
 }
 
 static void
-shadow_skip(shadow_t *sh)
+shadow_skip(shadow_allocator_t *sh)
 {
 	VERIFY3U(sh->sh_count, <, sh->sh_capacity);
 	record_ix_t ix = allocator_skip(sh->sh_alloc);
 	VERIFY3U(ix, ==, sh->sh_count);
-	sh->sh_state[ix] = REC_UNSPECIFIED;
+	sh->sh_state[ix] = REC_EMPTY;
 	sh->sh_count++;
 }
 
 static void
-shadow_verify(shadow_t *sh, uint64_t ix)
+shadow_verify(shadow_allocator_t *sh, uint64_t ix)
 {
 	VERIFY3U(ix, <, sh->sh_capacity);
-	if (sh->sh_state[ix] == REC_UNSPECIFIED)
-		return;
 	allocator_retrieve(sh->sh_alloc, ix, sh->sh_buf);
 	if (sh->sh_state[ix] == REC_KNOWN) {
 		fill_record(sh->sh_expect, sh->sh_record_size, sh->sh_tags[ix]);
-		if (memcmp(sh->sh_buf, sh->sh_expect,
-		    sh->sh_record_size) != 0) {
+		int ret = memcmp(sh->sh_buf, sh->sh_expect, sh->sh_record_size);
+		if (ret != 0) {
 			errx(1, "record %ju corrupted", (uintmax_t)ix);
 		}
 	} else if (!all_zero(sh->sh_buf, sh->sh_record_size)) {
@@ -180,7 +180,7 @@ shadow_verify(shadow_t *sh, uint64_t ix)
  * readable) a few probes beyond the end, which must read as zeros.
  */
 static void
-shadow_verify_all(shadow_t *sh)
+shadow_verify_all(shadow_allocator_t *sh)
 {
 	allocator_stats_t stats = allocator_get_stats(sh->sh_alloc);
 	VERIFY3U(stats.as_num_records, ==, sh->sh_count);
@@ -247,7 +247,7 @@ alloc_basic(void)
 			break;
 		}
 
-		shadow_t *sh = shadow_init(rsize, mem, disk, cap);
+		shadow_allocator_t *sh = shadow_init(rsize, mem, disk, cap);
 
 		for (int i = 0; i < 200; i++)
 			shadow_append(sh);
@@ -297,7 +297,7 @@ alloc_record_sizes(void)
 		size_t rounded = P2ROUNDUP(rsize, 8);
 		uint64_t cap = 3 * (unit / rounded) + 17;
 
-		shadow_t *sh = shadow_init(rsize, unit, B_TRUE, cap);
+		shadow_allocator_t *sh = shadow_init(rsize, unit, B_TRUE, cap);
 		while (sh->sh_count < cap)
 			shadow_append(sh);
 		shadow_verify_all(sh);
@@ -313,11 +313,10 @@ alloc_record_sizes(void)
 }
 
 /*
- * The centerpiece: sweep the memory/disk split point across the whole
- * record space and back, hitting exact boundaries and both sides of every
- * boundary, verifying full content after each move. Then do a randomized
- * walk with interleaved mutations so the split moves through *changing*
- * data.
+ * Sweep the memory/disk split point across the whole record space and back,
+ * hitting exact boundaries and both sides of every boundary, verifying full
+ * content after each move. Then do a randomized walk with interleaved
+ * mutations so the split moves through *changing* data.
  */
 static void
 alloc_split_sweep(void)
@@ -327,7 +326,7 @@ alloc_split_sweep(void)
 	const int max_units = 10;
 	const uint64_t cap = 8 * (unit / P2ROUNDUP(rsize, 8));
 
-	shadow_t *sh = shadow_init(rsize, 4 * unit, B_TRUE, cap);
+	shadow_allocator_t *sh = shadow_init(rsize, 4 * unit, B_TRUE, cap);
 	while (sh->sh_count < cap)
 		shadow_append(sh);
 	shadow_verify_all(sh);
@@ -376,7 +375,7 @@ alloc_boundaries(void)
 
 	/* Resizing an empty allocator in every direction */
 	{
-		shadow_t *sh = shadow_init(rsize, unit, B_TRUE, 64);
+		shadow_allocator_t *sh = shadow_init(rsize, unit, B_TRUE, 64);
 		allocator_set_max_memory(sh->sh_alloc, 4 * unit);
 		allocator_set_max_memory(sh->sh_alloc, 0);
 		allocator_set_max_memory(sh->sh_alloc, unit);
@@ -387,7 +386,7 @@ alloc_boundaries(void)
 
 	/* A single record chased up and down by the split point */
 	{
-		shadow_t *sh = shadow_init(rsize, unit, B_TRUE, 64);
+		shadow_allocator_t *sh = shadow_init(rsize, unit, B_TRUE, 64);
 		shadow_append(sh);
 		allocator_set_max_memory(sh->sh_alloc, 0);
 		shadow_verify_all(sh);
@@ -403,7 +402,7 @@ alloc_boundaries(void)
 	 * on the far side of the split.
 	 */
 	{
-		shadow_t *sh = shadow_init(rsize, unit, B_TRUE,
+		shadow_allocator_t *sh = shadow_init(rsize, unit, B_TRUE,
 		    recs_per_unit * 4);
 		while (sh->sh_count < recs_per_unit)
 			shadow_append(sh);
@@ -426,7 +425,7 @@ alloc_boundaries(void)
 	 * split contains untouched (never-reified) pages.
 	 */
 	{
-		shadow_t *sh = shadow_init(rsize, 0, B_TRUE,
+		shadow_allocator_t *sh = shadow_init(rsize, 0, B_TRUE,
 		    recs_per_unit * 8);
 		shadow_store(sh, recs_per_unit * 6);	/* Disk-side */
 		shadow_verify_all(sh);
@@ -441,7 +440,7 @@ alloc_boundaries(void)
 
 	/* Disk-only -> dual -> disk-only cycles with fresh data each stop */
 	{
-		shadow_t *sh = shadow_init(rsize, 0, B_TRUE, 512);
+		shadow_allocator_t *sh = shadow_init(rsize, 0, B_TRUE, 512);
 		selftest_rng_t rng;
 		selftest_rng_init(&rng, 43);
 		for (int cycle = 0; cycle < 6; cycle++) {
@@ -456,7 +455,7 @@ alloc_boundaries(void)
 
 	/* Budget far beyond the highest record ever written */
 	{
-		shadow_t *sh = shadow_init(rsize, 0, B_TRUE, 64);
+		shadow_allocator_t *sh = shadow_init(rsize, 0, B_TRUE, 64);
 		shadow_append(sh);
 		allocator_set_max_memory(sh->sh_alloc, 64 * unit);
 		shadow_verify_all(sh);
@@ -478,8 +477,8 @@ alloc_lifecycle(void)
 	(void) close(probe);
 
 	for (int i = 0; i < 50; i++) {
-		shadow_t *sh = shadow_init(64, i % 2 ? 0 : 1 << 16, B_TRUE,
-		    256);
+		shadow_allocator_t *sh = shadow_init(64, (i % 2) ? 0 : 1 << 16,
+		    B_TRUE, 256);
 		for (int j = 0; j < 50; j++)
 			shadow_append(sh);
 		shadow_verify_all(sh);
@@ -594,7 +593,7 @@ alloc_holes(void)
 		}
 	}
 
-	shadow_t *sh = shadow_init(rsize, 1 << 20, B_TRUE, cap);
+	shadow_allocator_t *sh = shadow_init(rsize, 1 << 20, B_TRUE, cap);
 	while (sh->sh_count < cap)
 		shadow_append(sh);
 	shadow_verify_all(sh);
@@ -653,7 +652,8 @@ alloc_memory_release(void)
 	const uint64_t cap = 8192;		/* 32MB of records */
 	const size_t data_bytes = cap * rsize;
 
-	shadow_t *sh = shadow_init(rsize, data_bytes, B_TRUE, cap + 8);
+	shadow_allocator_t *sh =
+	    shadow_init(rsize, data_bytes, B_TRUE, cap + 8);
 	while (sh->sh_count < cap)
 		shadow_append(sh);
 	shadow_verify_all(sh);
@@ -695,7 +695,7 @@ alloc_io_stats(void)
 {
 	const size_t rsize = 8192;
 
-	shadow_t *sh = shadow_init(rsize, rsize, B_TRUE, 16);
+	shadow_allocator_t *sh = shadow_init(rsize, rsize, B_TRUE, 16);
 	shadow_store(sh, 0);			/* Memory side */
 	shadow_store(sh, 1);			/* Disk side */
 	allocator_stats_t stats = allocator_get_stats(sh->sh_alloc);
@@ -734,7 +734,7 @@ alloc_stress(void)
 		size_t budget = disk ?
 		    selftest_rng_below(&rng, max_budget) : max_budget;
 
-		shadow_t *sh = shadow_init(rsize, budget, disk, cap);
+		shadow_allocator_t *sh = shadow_init(rsize, budget, disk, cap);
 
 		for (int op = 0; op < 4000; op++) {
 			uint64_t k = selftest_rng_below(&rng, 100);
