@@ -60,6 +60,8 @@ typedef struct {
 
 static const selftest_module_t modules[] = {
 	{ "queue", selftest_queue_cases },
+	{ "allocator", selftest_alloc_cases },
+	{ "hash", selftest_hash_cases },
 };
 
 #define	NUM_MODULES	(sizeof (modules) / sizeof (modules[0]))
@@ -67,6 +69,30 @@ static const selftest_module_t modules[] = {
 uint64_t selftest_seed;
 
 static const char *current_test = "(startup)";
+
+const char *
+selftest_scratch_dir(void)
+{
+	const char *dir = getenv("ZSTREAM_SELFTEST_DIR");
+	return (dir != NULL && dir[0] != '\0' ? dir : "/var/tmp");
+}
+
+int
+selftest_create_tempfile(void)
+{
+	char path[1024];
+
+	if (snprintf(path, sizeof (path), "%s/zstream-selftest-XXXXXX",
+	    selftest_scratch_dir()) >= (int)sizeof (path))
+		errx(1, "scratch dir path too long");
+	int fd = mkstemp(path);
+	if (fd < 0)
+		err(1, "unable to create temp file in %s",
+		    selftest_scratch_dir());
+	if (unlink(path) != 0)
+		err(1, "unlink of %s failed", path);
+	return (fd);
+}
 
 static void
 selftest_usage(void)

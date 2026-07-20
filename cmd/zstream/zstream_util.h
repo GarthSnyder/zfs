@@ -55,6 +55,13 @@ safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
 void
 safe_pread(int fd, void *buf, size_t count, off64_t offset);
 
+/*
+ * Like safe_pread(), except that reading past end-of-file is not an error:
+ * any portion of the buffer that lies beyond EOF is filled with zeros.
+ */
+void
+safe_pread_zero(int fd, void *buf, size_t count, off64_t offset);
+
 extern char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 

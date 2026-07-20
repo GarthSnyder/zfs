@@ -118,6 +118,26 @@ safe_pread(int fd, void *buf, size_t count, off64_t offset)
 	}
 }
 
+void
+safe_pread_zero(int fd, void *buf, size_t count, off64_t offset)
+{
+	size_t done = 0;
+
+	while (done < count) {
+		ssize_t n = pread(fd, buf + done, count - done, offset + done);
+		if (n < 0) {
+			if (errno == EINTR)
+				continue; /* zero progress this call, retry */
+			err(1, "pread failed");
+		}
+		if (n == 0) {
+			memset(buf + done, 0, count - done);
+			return;
+		}
+		done += (size_t)n;
+	}
+}
+
 char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size)
 {

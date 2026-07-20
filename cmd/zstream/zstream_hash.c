@@ -27,8 +27,16 @@
 
 #define	MAX_OCCUPANCY 0.75
 #define	INITIAL_HASH_SUFFIX_LENGTH 10
-#define	INSERTIONS_BETWEEN_MEM_CHECKS 4096
-#define	MEMORY_MARGIN (1ULL << 28) /* 256MB */
+
+/*
+ * Memory-management pacing. These are variables rather than #defines so
+ * that tests (and eventually callers) can tune them; see the declarations
+ * in zstream_hash_impl.h. The margin should be sized so that a table
+ * under sustained memory pressure performs a reasonable number of
+ * clawbacks (a few dozen) over its lifetime rather than thrashing.
+ */
+size_t lh_memory_margin = 1ULL << 26;		/* 64MB */
+int lh_mem_check_interval = 4096;		/* insertions per check */
 
 /*
  * A slightly more detailed description of linear hashing:
@@ -165,6 +173,7 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 			record_ix_t record =
 			    allocator_skip(iter->ei_lh->lh_overflow_alloc);
 			iter->ei_bucket.b_overflow = record;
+			iter->ei_dirty = B_TRUE;	/* New link must land */
 			save_bucket(iter);
 			*iter = (entry_iterator_t){
 				.ei_lh = iter->ei_lh,
@@ -305,8 +314,14 @@ check:	size_t total_used = bucket.as_mem_used + overflow.as_mem_used +
 		} else {
 			squeezee = &bucket;
 		}
-		size_t new_limit = MAX(0, (ssize_t)squeezee->as_mem_used -
-		    (overage + MEMORY_MARGIN));
+		/*
+		 * Keep this arithmetic signed: the reclaim target can
+		 * easily go negative, and a mixed signed/unsigned
+		 * expression would wrap instead.
+		 */
+		ssize_t target = (ssize_t)squeezee->as_mem_used -
+		    overage - (ssize_t)lh_memory_margin;
+		size_t new_limit = target > 0 ? (size_t)target : 0;
 		allocator_set_max_memory(squeezee->as_allocator, new_limit);
 		*squeezee = allocator_get_stats(squeezee->as_allocator);
 		goto check;
@@ -401,7 +416,7 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 
 	lh->lh_next_memory_check--;
 	if (lh->lh_next_memory_check <= 0) {
-		lh->lh_next_memory_check = INSERTIONS_BETWEEN_MEM_CHECKS;
+		lh->lh_next_memory_check = lh_mem_check_interval;
 		check_memory_use(lh);
 	}
 }

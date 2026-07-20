@@ -48,6 +48,24 @@ typedef struct {
  * Modules with test cases to offer. Each array ends with a NULL tc_name.
  */
 extern const test_case_t selftest_queue_cases[];
+extern const test_case_t selftest_alloc_cases[];
+extern const test_case_t selftest_hash_cases[];
+
+/*
+ * Directory for disk-backed test scratch storage. Honors the
+ * ZSTREAM_SELFTEST_DIR environment variable (a lever for ZTS) and
+ * otherwise defaults to /var/tmp, which unlike /tmp is unlikely to be a
+ * ramdisk; memory-spillover tests are only meaningful on real storage.
+ */
+const char *
+selftest_scratch_dir(void);
+
+/*
+ * Create an unlinked temporary file in the scratch directory and return
+ * its file descriptor. Exits on failure.
+ */
+int
+selftest_create_tempfile(void);
 
 /*
  * The seed for this run, set by the harness before any test runs. Printed

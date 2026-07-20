@@ -40,10 +40,11 @@
 
 /*
  * Round to ensure memory/disk transition is at both a record boundary and a
- * page boundary.
+ * page boundary. The alignment is an lcm and thus not necessarily a power
+ * of two, so P2ROUNDUP cannot be used here.
  */
 #define MEM_ROUNDUP(size, pagesize, recsize) \
-	    P2ROUNDUP(size, lcm(pagesize, recsize))
+	    roundup_any(size, lcm(pagesize, recsize))
 
 #define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_record_size_rounded)
 #define OFFSET_TO_REC(alloc, off) ((off) / (alloc)->a_record_size_rounded)
@@ -89,8 +90,10 @@
  * changes their protection from PROT_NONE to PROT_READ | PROT_WRITE, at
  * which point they acquire swap reservations and the other normal trappings
  * of memory. If the memory budget is reduced, the trailing pages are
- * transferred to disk and their protection is reset to PROT_NONE, which
- * makes the kernel free them immediately.
+ * transferred to disk and then replaced with a fresh PROT_NONE anonymous
+ * mapping (MAP_FIXED). Remapping, unlike a bare mprotect(PROT_NONE), both
+ * returns the physical pages to the kernel immediately and guarantees that
+ * the region reads as zeros if it is later re-exposed.
  *
  * A more general point is that file I/O occurs only through reads and
  * writes to buffers. Only OS-level file descriptors are used, so the only
@@ -114,6 +117,15 @@ struct allocator {
 	uint64_t	a_io_ops_mem;		/* Number of reads and writes */
 	uint64_t	a_io_ops_disk;
 };
+
+/*
+ * Round up to an arbitrary (not necessarily power-of-2) multiple.
+ */
+static size_t
+roundup_any(size_t size, size_t align)
+{
+	return (((size + align - 1) / align) * align);
+}
 
 /*
  * Least common multiple - Euclid's algorithm
@@ -164,6 +176,7 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 	}
 
 	size_t mem = MEM_ROUNDUP(mem_size, pagesize, rsize_rounded);
+	VERIFY3U(mem, <=, vm_allocation);
 	allocator_t *alloc = safe_calloc(sizeof (allocator_t));
 	*alloc = (allocator_t){
 		.a_record_size = record_size,
@@ -180,20 +193,70 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 }
 
 /*
- * Shrink-fit memory page allocations to those that are actually in use. We
- * "free" memory pages by setting them to PROT_NONE. However, we always keep
- * the original allocation of VM address space.
+ * Shrink-fit memory page allocations to those that are actually in use,
+ * based on the current a_max_memory. We "free" memory pages by replacing
+ * them with a fresh PROT_NONE anonymous mapping, which returns the physical
+ * pages to the kernel and guarantees zero-fill if the region is ever
+ * re-exposed. (A bare mprotect(PROT_NONE) does neither; the kernel retains
+ * page contents.) The original allocation of VM address space is preserved.
  */
 static void
 shrink_frontier(allocator_t *alloc)
 {
-	off_t last_byte_in_use = MIN(alloc->a_max_memory,
-	    REC_TO_OFFSET(alloc, alloc->a_count)) - 1;
-	off_t frontier_off = P2ROUNDUP(last_byte_in_use, alloc->a_pagesize);
-	ssize_t length = alloc->a_vm_allocated - frontier_off;
-	alloc->a_vm_frontier = OFFSET_TO_ADDR(alloc, frontier_off);
-	if (mprotect(alloc->a_vm_frontier, length, PROT_NONE) != 0)
+	off_t bytes_in_use = MIN(alloc->a_max_memory,
+	    REC_TO_OFFSET(alloc, alloc->a_count));
+	off_t frontier_off = P2ROUNDUP(bytes_in_use, alloc->a_pagesize);
+	void *new_frontier = OFFSET_TO_ADDR(alloc, frontier_off);
+	if (new_frontier >= alloc->a_vm_frontier)
+		return;
+	size_t length = alloc->a_vm_frontier - new_frontier;
+	if (mmap(new_frontier, length, PROT_NONE,
+	    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+		err(1, "mmap (frontier shrink) failed");
+	alloc->a_vm_frontier = new_frontier;
+}
+
+/*
+ * Memory pages starting at a_vm_frontier are initially PROT_NONE, so they
+ * don't really exist and can't be written to or read. If a byte we want to
+ * access lies beyond the frontier, we need to move the frontier and mark
+ * the intervening pages as PROT_READ | PROT_WRITE. The frontier advances in
+ * multiples of a_frontier_granularity to keep mprotect calls infrequent.
+ *
+ * end_off is exclusive: reify everything below that offset.
+ */
+static void
+reify_memory_to(allocator_t *alloc, off_t end_off)
+{
+	void *end_addr = OFFSET_TO_ADDR(alloc, end_off);
+	if (end_addr <= alloc->a_vm_frontier)
+		return;
+	size_t needed = end_addr - alloc->a_vm_frontier;
+	size_t avail = MIN(alloc->a_vm_allocated, alloc->a_max_memory) -
+	    ADDR_TO_OFFSET(alloc, alloc->a_vm_frontier);
+	if (needed > avail)
+		errx(1, "allocator VM address space exhausted");
+	/*
+	 * Never advance the frontier past the memory budget; that keeps
+	 * as_mem_used from overstating actual memory consumption.
+	 */
+	size_t length = MIN(P2ROUNDUP(needed, alloc->a_frontier_granularity),
+	    avail);
+	if (mprotect(alloc->a_vm_frontier, length,
+	    PROT_READ | PROT_WRITE) != 0)
 		err(1, "mprotect failed");
+	alloc->a_vm_frontier += length;
+}
+
+/*
+ * The record number passed in must already have been checked to be sure it
+ * goes in memory rather than on disk.
+ */
+static void
+reify_memory_for_record(allocator_t *alloc, record_ix_t record)
+{
+	reify_memory_to(alloc, REC_TO_OFFSET(alloc, record) +
+	    alloc->a_record_size_rounded);
 }
 
 /*
@@ -201,60 +264,55 @@ shrink_frontier(allocator_t *alloc)
  * one copy from memory to disk or vice versa to change the split point.
  * Note that because of memory allocation rounding, this function may be a
  * no-op even if new_size != current size.
+ *
+ * When growing, the newly memory-resident region is read back from the
+ * file (zero-filling past EOF, since trailing records may never have been
+ * written) and the file region is then hole-punched: it now lies under the
+ * memory overlay and shouldn't consume disk space. The punch is best-effort;
+ * if it fails, the stale file data is hidden by the overlay and is
+ * rewritten from memory if the region ever transitions back to disk.
+ *
+ * When shrinking, only bytes below the VM frontier are written out. Bytes
+ * between the frontier and the old budget were never stored to and are
+ * logically zero, and the corresponding file region has never been written
+ * (or was punched), so it already reads back as zeros.
  */
 void
 allocator_set_max_memory(allocator_t *alloc, size_t new_size)
 {
 	new_size = MEM_ROUNDUP(new_size, alloc->a_pagesize,
 	    alloc->a_record_size_rounded);
-	off_t last_off_used = REC_TO_OFFSET(alloc, alloc->a_count) - 1;
-	if (alloc->a_fd < 0 && new_size < last_off_used + 1)
+	VERIFY3U(new_size, <=, alloc->a_vm_allocated);
+	off_t bytes_used = REC_TO_OFFSET(alloc, alloc->a_count);
+	if (alloc->a_fd < 0 && new_size < bytes_used)
 		errx(1, "resize of allocator would lose data");
 	if (alloc->a_fd >= 0 && new_size > alloc->a_max_memory) {
+		/* Growing: pull the region between old and new limits in */
 		off_t first_byte = alloc->a_max_memory;
-		off_t last_byte = MIN(last_off_used, new_size - 1);
-		ssize_t len = last_byte - first_byte;
+		off_t end_byte = MIN(bytes_used, (off_t)new_size);
+		ssize_t len = end_byte - first_byte;
+		alloc->a_max_memory = new_size;	/* before reify: it clamps */
 		if (len > 0) {
+			reify_memory_to(alloc, end_byte);
 			void *start_addr = OFFSET_TO_ADDR(alloc, first_byte);
-			safe_pread(alloc->a_fd, start_addr, len, first_byte);
-			punch_hole(alloc->a_fd, first_byte, len);
+			safe_pread_zero(alloc->a_fd, start_addr, len,
+			    first_byte);
+			(void) punch_hole(alloc->a_fd, first_byte, len);
 		}
-	} else if (alloc->a_fd >= 0 && new_size < alloc->a_max_memory) {
+	} else {
+		/* Shrinking: push the newly disk-resident region out */
 		off_t first_byte = new_size;
-		off_t last_byte = MIN(last_off_used, alloc->a_max_memory - 1);
-		ssize_t len = last_byte - first_byte;
-		if (len > 0) {
+		off_t frontier_off = ADDR_TO_OFFSET(alloc,
+		    alloc->a_vm_frontier);
+		off_t end_byte = MIN(bytes_used,
+		    MIN((off_t)alloc->a_max_memory, frontier_off));
+		ssize_t len = end_byte - first_byte;
+		if (alloc->a_fd >= 0 && len > 0) {
 			void *start_addr = OFFSET_TO_ADDR(alloc, first_byte);
 			safe_pwrite(alloc->a_fd, start_addr, len, first_byte);
-			shrink_frontier(alloc);
 		}
-	}
-	alloc->a_max_memory = new_size;
-}
-
-/*
- * Memory pages starting at a_vm_frontier are initially PROT_NONE, so they
- * don't really exist and can't be written to or read. If a record we want
- * to access lies beyond the frontier, we need to move the frontier and mark
- * the intervening pages as PROT_READ | PROT_WRITE.
- *
- * The record number passed in must already have been checked to be sure it
- * goes in memory rather than on disk.
- */
-static void
-reify_memory_for_record(allocator_t *alloc, record_ix_t record)
-{
-	void *last_byte = REC_TO_ADDR(alloc, record) +
-	    alloc->a_record_size_rounded - 1;
-	while (last_byte >= alloc->a_vm_frontier) {
-		void *new_frontier = alloc->a_vm_frontier
-		    + alloc->a_frontier_granularity;
-		int ret = mprotect(alloc->a_vm_frontier,
-		    new_frontier - alloc->a_vm_frontier,
-		    PROT_READ | PROT_WRITE);
-		if (ret != 0)
-			err(1, "mprotect failed");
-		alloc->a_vm_frontier = new_frontier;
+		alloc->a_max_memory = new_size;
+		shrink_frontier(alloc);
 	}
 }
 
@@ -266,8 +324,13 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 		if (alloc->a_fd < 0)
 			errx(1, "no file for allocator record %llu",
 			    (u_longlong_t)record);
+		/*
+		 * Never-written records must read as zeros, and the backing
+		 * file may be shorter than this record's offset, so reads
+		 * past EOF zero-fill rather than failing.
+		 */
 		off_t loc = REC_TO_OFFSET(alloc, record);
-		safe_pread(alloc->a_fd, buff, alloc->a_record_size, loc);
+		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, loc);
 		alloc->a_io_ops_disk++;
 	} else {
 		reify_memory_for_record(alloc, record);
@@ -292,7 +355,8 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 		memcpy(REC_TO_ADDR(alloc, record), buff, alloc->a_record_size);
 		alloc->a_io_ops_mem++;
 	}
-	alloc->a_count = MAX(alloc->a_count, record);
+	/* a_count is one past the highest record known to be written */
+	alloc->a_count = MAX(alloc->a_count, record + 1);
 }
 
 record_ix_t
@@ -320,10 +384,9 @@ allocator_get_stats(allocator_t *alloc) {
 		.as_num_records = alloc->a_count
 	};
 	if (alloc->a_fd >= 0) {
-		off_t last_byte = REC_TO_OFFSET(alloc, alloc->a_count) +
-		    alloc->a_record_size_rounded - 1;
-		if (last_byte > alloc->a_max_memory) {
-			stats.as_disk_used = last_byte - alloc->a_max_memory;
+		off_t bytes_used = REC_TO_OFFSET(alloc, alloc->a_count);
+		if (bytes_used > (off_t)alloc->a_max_memory) {
+			stats.as_disk_used = bytes_used - alloc->a_max_memory;
 		}
 	}
 	return (stats);
