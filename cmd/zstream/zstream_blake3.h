@@ -18,7 +18,7 @@
  */
 
 #ifndef _ZSTREAM_BLAKE3_H
-#define _ZSTREAM_BLAKE3_H
+#define	_ZSTREAM_BLAKE3_H
 
 #ifdef __cplusplus
 extern "C" {
