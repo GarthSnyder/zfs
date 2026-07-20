@@ -30,9 +30,9 @@
 
 /*
  * Memory-management pacing. These are variables rather than #defines so
- * that tests (and eventually callers) can tune them; see the declarations
- * in zstream_hash_impl.h. The margin should be sized so that a table
- * under sustained memory pressure performs a reasonable number of
+ * that tests (and eventually callers) can tweak them; see the declarations
+ * in zstream_hash_impl.h. The margin should be sized so that a table under
+ * sustained memory pressure performs a reasonable number of memory
  * clawbacks (a few dozen) over its lifetime rather than thrashing.
  */
 size_t lh_memory_margin = 1ULL << 26;		/* 64MB */
@@ -302,10 +302,13 @@ check_memory_use(linear_hash_t *lh)
 	allocator_stats_t overflow = allocator_get_stats(lh->lh_overflow_alloc);
 	allocator_stats_t data = allocator_get_stats(lh->lh_data_alloc);
 
-check:	size_t total_used = bucket.as_mem_used + overflow.as_mem_used +
-	    data.as_mem_used;
-	ssize_t overage = (ssize_t)total_used - (ssize_t)lh->lh_max_memory;
-	if (overage > 0) {
+	while (B_TRUE) {
+		size_t total_used = bucket.as_mem_used + overflow.as_mem_used +
+		    data.as_mem_used;
+		ssize_t overage =
+		    (ssize_t)total_used - (ssize_t)lh->lh_max_memory;
+		if (overage <= 0)
+			return;
 		allocator_stats_t *squeezee;
 		if (data.as_max_memory != 0) {
 			squeezee = &data;
@@ -314,17 +317,11 @@ check:	size_t total_used = bucket.as_mem_used + overflow.as_mem_used +
 		} else {
 			squeezee = &bucket;
 		}
-		/*
-		 * Keep this arithmetic signed: the reclaim target can
-		 * easily go negative, and a mixed signed/unsigned
-		 * expression would wrap instead.
-		 */
 		ssize_t target = (ssize_t)squeezee->as_mem_used -
 		    overage - (ssize_t)lh_memory_margin;
 		size_t new_limit = target > 0 ? (size_t)target : 0;
 		allocator_set_max_memory(squeezee->as_allocator, new_limit);
 		*squeezee = allocator_get_stats(squeezee->as_allocator);
-		goto check;
 	}
 }
 

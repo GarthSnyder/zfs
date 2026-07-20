@@ -49,9 +49,9 @@ typedef struct {
 } selftest_module_t;
 
 static const selftest_module_t modules[] = {
-	{ "queue", selftest_queue_cases },
-	{ "allocator", selftest_alloc_cases },
-	{ "hash", selftest_hash_cases },
+	{ "queue",	selftest_queue_cases },
+	{ "allocator",	selftest_alloc_cases },
+	{ "hash",	selftest_hash_cases  },
 };
 
 #define	NUM_MODULES	(sizeof (modules) / sizeof (modules[0]))
@@ -64,7 +64,7 @@ const char *
 selftest_scratch_dir(void)
 {
 	const char *dir = getenv("ZSTREAM_SELFTEST_DIR");
-	return (dir != NULL && dir[0] != '\0' ? dir : "/var/tmp");
+	return ((dir != NULL && dir[0] != '\0') ? dir : "/var/tmp");
 }
 
 int
