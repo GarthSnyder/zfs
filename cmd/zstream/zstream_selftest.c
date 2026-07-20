@@ -120,8 +120,12 @@ watchdog_fire(int sig)
 {
 	(void) sig;
 	const char msg[] = "\nselftest: watchdog timeout in ";
+	size_t len = 0;
+	while (current_test[len] != '\0') {
+		len++;
+	}
 	if (write(STDERR_FILENO, msg, sizeof (msg) - 1) < 0 ||
-	    write(STDERR_FILENO, current_test, strlen(current_test)) < 0 ||
+	    write(STDERR_FILENO, current_test, len) < 0 ||
 	    write(STDERR_FILENO, "\n", 1) < 0) {
 		_exit(1);
 	}

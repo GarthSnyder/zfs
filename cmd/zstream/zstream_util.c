@@ -199,14 +199,17 @@ thread_destroyed(void *arg)
 static void
 initialize_pthread_key(void)
 {
-	pthread_key_create(&thread_count_key, thread_destroyed);
+	if (pthread_key_create(&thread_count_key, thread_destroyed) != 0)
+		err(1, "pthread_key_create failed");
 }
 
 void
 pthread_register_self(void)
 {
+	static int sentinel;
 	static pthread_once_t init_pthread_tracking = PTHREAD_ONCE_INIT;
-	pthread_once(&init_pthread_tracking, initialize_pthread_key);
-	pthread_setspecific(thread_count_key, (void *)0xdeadbeef);
+	(void) pthread_once(&init_pthread_tracking, initialize_pthread_key);
+	if (pthread_setspecific(thread_count_key, (void *)&sentinel) != NULL)
+		err(1, "pthread_setspecific failed");
 	atomic_inc_32(&num_pthreads);
 }

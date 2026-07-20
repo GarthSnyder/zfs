@@ -83,7 +83,7 @@ typedef struct {
 } qtest_item_t;
 
 typedef struct {
-	uint32_t	qc_producers;		/* Number of producersl */
+	uint32_t	qc_producers;		/* Number of producers */
 	uint64_t	qc_items;		/* Items per producer */
 	size_t		qc_queue_length;
 	size_t		qc_batch_budget;

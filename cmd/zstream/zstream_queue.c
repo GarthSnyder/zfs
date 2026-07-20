@@ -167,7 +167,7 @@ zstream_queue_set_num_threads(uint_t n)
 	} else if (n == 0) {
 		errx(1, "number of threads must be at least 1");
 	} else if (n < MIN_THREADS) {
-		warnx("using only %u threads my limit performance, setting "
+		warnx("using only %u threads may limit performance, setting "
 		    "anyway...", n);
 	} else if (n > 256) {
 		warnx("num_threads = %u seems suspiciously high, setting "
