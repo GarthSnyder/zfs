@@ -18,25 +18,25 @@
  */
 
 /*
- * Selftests for the zstream_hash linear hash table.
+ * Selftests for linear_hash_t, defined in zstream_hash.c
  *
  * The verification strategy is multiset equality against a shadow model.
- * Every inserted record's payload begins with a unique tag, and the rest
- * of the payload is a deterministic pattern derived from that tag. The
- * model is simply the list of (hash, tag) pairs inserted. To verify a
- * table, entries are grouped by hash value and each group is retrieved:
- * every returned payload must be internally consistent and must match
- * exactly one not-yet-seen model entry, and the number of returned records
- * must equal the group size. Hashes never inserted must return nothing.
- * (Inserted keys always have bit 63 clear, which gives absent-probe tests
- * an inexhaustible supply of known-absent keys.)
+ * Every inserted record's payload begins with a unique tag, and the rest of
+ * the payload is a deterministic pattern derived from that tag. The model
+ * is simply the list of (hash, tag) pairs inserted. To verify a table,
+ * entries are grouped by hash value and each group is retrieved. Every
+ * returned payload must be internally consistent and must match exactly one
+ * not-yet-seen model entry, and the number of returned records must equal
+ * the group size. Hashes never inserted must return nothing. (Inserted keys
+ * always have bit 63 clear, which gives absent-probe tests an inexhaustible
+ * supply of known-absent keys.)
  *
  * Beyond store-and-retrieve correctness, the tests exercise the table's
- * supra-allocator memory management: with small budgets, margins, and
- * check intervals (see lh_memory_margin and lh_mem_check_interval), the
- * table must claw memory back from its three allocators in priority order
- * - data first, then overflow buckets, then main buckets - while remaining
- * fully correct and keeping total memory use bounded.
+ * supra-allocator memory management: with small budgets, margins, and check
+ * intervals (see lh_memory_margin and lh_mem_check_interval), the table
+ * must retrieve memory from its three allocators in priority order (data
+ * first, then overflow buckets, then main buckets) while remaining fully
+ * correct and keeping total memory use bounded.
  */
 
 #include <err.h>
@@ -111,7 +111,7 @@ verify_payload(const uint8_t *buf, size_t record_size)
  * bucket collisions).
  */
 static htest_entry_t *
-gen_entries(const htest_config_t *cfg, selftest_rng_t *rng)
+generate_entries(const htest_config_t *cfg, selftest_rng_t *rng)
 {
 	htest_entry_t *entries =
 	    safe_calloc(cfg->hc_count * sizeof (htest_entry_t));
@@ -143,7 +143,7 @@ gen_entries(const htest_config_t *cfg, selftest_rng_t *rng)
 }
 
 /*
- * Retrieve one previously inserted entry and make sure it's there. Used
+ * Retrieve one previously inserted entry at random. This function is used
  * to catch corruption early, in mid-workload, rather than only during the
  * final sweep.
  */
@@ -261,7 +261,7 @@ total_mem_used(linear_hash_t *lh)
 }
 
 /*
- * Structural sanity checks that hold for any linear hash table at rest.
+ * Structural sanity checks that hold for any linear hash table at rest
  */
 static void
 check_invariants(linear_hash_t *lh, uint64_t expected_entries)
@@ -294,7 +294,7 @@ run_hash_workload(const htest_config_t *cfg)
 
 	linear_hash_t *lh = lh_init(cfg->hc_record_size, cfg->hc_max_memory,
 	    selftest_scratch_dir());
-	htest_entry_t *entries = gen_entries(cfg, &rng);
+	htest_entry_t *entries = generate_entries(cfg, &rng);
 
 	insert_entries(lh, entries, cfg->hc_count, cfg->hc_spot_every, &rng);
 	check_invariants(lh, cfg->hc_count);
@@ -529,7 +529,7 @@ hash_memory_pressure(void)
 		.hc_record_size = record_size,
 		.hc_count = count,
 	};
-	htest_entry_t *entries = gen_entries(&gen_cfg, &rng);
+	htest_entry_t *entries = generate_entries(&gen_cfg, &rng);
 
 	/*
 	 * Insert in slices so total memory use can be sampled along the
@@ -597,7 +597,7 @@ hash_pressure_priority(void)
 		.hc_record_size = record_size,
 		.hc_count = count,
 	};
-	htest_entry_t *entries = gen_entries(&gen_cfg, &rng);
+	htest_entry_t *entries = generate_entries(&gen_cfg, &rng);
 	insert_entries(lh, entries, count, 1024, &rng);
 
 	allocator_stats_t data = allocator_get_stats(lh->lh_data_alloc);
@@ -650,7 +650,7 @@ hash_iterators(void)
 	};
 	linear_hash_t *lh = lh_init(cfg.hc_record_size, cfg.hc_max_memory,
 	    selftest_scratch_dir());
-	htest_entry_t *entries = gen_entries(&cfg, &rng);
+	htest_entry_t *entries = generate_entries(&cfg, &rng);
 	insert_entries(lh, entries, count, 0, &rng);
 
 	/* Pick the distinct keys and count the expected dups of each */
