@@ -135,10 +135,10 @@ lh_get_stats(linear_hash_t *lh, lh_report_t *stats)
 		stats->lr_total_entries += bs->bs_num_slots_filled;
 		stats->lr_total_chains += bs->bs_num_chains;
 		bs->bs_pct_empty =
-		    (double) bs->bs_num_empty_chains / bs->bs_num_chains;
-		bs->bs_occupancy = (double) bs->bs_num_slots_filled /
-			(i * bs->bs_num_chains * ENTRIES_PER_BUCKET);
-		bs->bs_nonempty_occupancy = (double) bs->bs_num_slots_filled /
+		    (double)bs->bs_num_empty_chains / bs->bs_num_chains;
+		bs->bs_occupancy = (double)bs->bs_num_slots_filled /
+		    (i * bs->bs_num_chains * ENTRIES_PER_BUCKET);
+		bs->bs_nonempty_occupancy = (double)bs->bs_num_slots_filled /
 		    (i * (bs->bs_num_chains - bs->bs_num_empty_chains) *
 		    ENTRIES_PER_BUCKET);
 	}
