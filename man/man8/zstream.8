@@ -48,6 +48,7 @@
 .Nm
 .Cm redup
 .Op Fl v
+.Op Fl d Ar tmpdir
 .Ar file
 .Nm
 .Cm token
@@ -252,6 +253,7 @@ instead.
 .Nm
 .Cm redup
 .Op Fl v
+.Op Fl d Ar tmpdir
 .Ar file
 .Xc
 It was formerly possible to create deduplicated send streams with the
@@ -279,6 +281,17 @@ earlier parts of the stream.
 .It Fl v
 Verbose.
 Prints a summary of reduplicated records.
+.It Fl d Ar tmpdir
+Sets the directory in which to store temporary files.
+With very large input streams,
+.Nm zstream Cm redup
+may be unable to hold all reduplication information in memory at once.
+In this event, it uses files in
+.Bl /var/tmp
+for backup storage.
+You can specify a different location with the
+.Op Fl d
+option.
 .El
 .It Xo
 .Nm
