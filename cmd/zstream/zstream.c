@@ -43,7 +43,7 @@ zstream_usage(void)
 	    "\n"
 	    "\tzstream token resume_token\n"
 	    "\n"
-	    "\tzstream redup [-v] FILE | ...\n");
+	    "\tzstream redup [-v] [-d tmpdir] FILE\n");
 	exit(1);
 }
 
