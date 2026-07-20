@@ -188,6 +188,17 @@ typedef struct lh_report {
 #endif  /* LH_STATS_AND_VALIDATION */
 
 /*
+ * Memory-management pacing knobs (defined in zstream_hash.c). Exposed
+ * primarily so tests can exercise memory-pressure behavior at small scales:
+ * lh_memory_margin is the extra memory reclaimed beyond the strict overage
+ * whenever a clawback occurs, and lh_mem_check_interval is the number of
+ * insertions between memory-budget checks. Changes affect subsequent
+ * operations on all tables.
+ */
+extern size_t lh_memory_margin;
+extern int lh_mem_check_interval;
+
+/*
  * Core routines from zstream_hash.c.
  */
 uint64_t
