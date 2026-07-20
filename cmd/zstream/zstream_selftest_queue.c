@@ -516,11 +516,11 @@ expect_spindown(uint32_t baseline)
 	 * failure.
 	 */
 	for (int i = 0; i < 500; i++) {
-		if (num_pthreads == baseline)
+		if (atomic_add_32_nv(&num_pthreads, 0) == baseline)
 			return;
 		(void) usleep(2000);
 	}
-	errx(1, "thread pool failed to spin down (%d threads, expected %d)",
+	errx(1, "thread pool failed to spin down (%u threads, expected %u)",
 	    num_pthreads, baseline);
 }
 

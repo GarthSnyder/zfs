@@ -209,7 +209,7 @@ pthread_register_self(void)
 	static int sentinel;
 	static pthread_once_t init_pthread_tracking = PTHREAD_ONCE_INIT;
 	(void) pthread_once(&init_pthread_tracking, initialize_pthread_key);
-	if (pthread_setspecific(thread_count_key, (void *)&sentinel) != NULL)
+	if (pthread_setspecific(thread_count_key, (void *)&sentinel) != 0)
 		err(1, "pthread_setspecific failed");
 	atomic_inc_32(&num_pthreads);
 }

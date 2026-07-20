@@ -218,6 +218,7 @@ zstream_do_selftest(int argc, char *argv[])
 		zstream_queue_set_num_threads(nthreads);
 
 	struct sigaction sa = { .sa_handler = watchdog_fire };
+ 	(void) sigemptyset(&sa.sa_mask);
 	if (sigaction(SIGALRM, &sa, NULL) != 0)
 		err(1, "failed to install watchdog signal handler");
 
@@ -236,5 +237,6 @@ zstream_do_selftest(int argc, char *argv[])
 	}
 	(void) printf("All %d %s selftest%s passed\n", count, module->sm_name,
 	    count == 1 ? "" : "s");
+	libspl_fini();
 	return (0);
 }
