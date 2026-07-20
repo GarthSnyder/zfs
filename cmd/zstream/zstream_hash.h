@@ -19,7 +19,7 @@
  */
 
 #ifndef _ZSTREAM_HASH_H
-#define _ZSTREAM_HASH_H
+#define	_ZSTREAM_HASH_H
 
 #ifdef	__cplusplus
 extern "C" {
@@ -59,8 +59,7 @@ extern "C" {
  * #define LH_STATS_AND_VALIDATION
  */
 
-#define LH_STATS_AND_VALIDATION
-#define MAX_LH_ITERATORS 8
+#define	MAX_LH_ITERATORS 8
 
 struct linear_hash;
 typedef struct linear_hash linear_hash_t;

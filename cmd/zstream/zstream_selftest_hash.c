@@ -299,8 +299,10 @@ run_hash_workload(const htest_config_t *cfg)
 	insert_entries(lh, entries, cfg->hc_count, cfg->hc_spot_every, &rng);
 	check_invariants(lh, cfg->hc_count);
 	verify_table(lh, entries, cfg->hc_count, &rng);
+#ifdef LH_STATS_AND_VALIDATION
 	if (cfg->hc_validate)
 		VERIFY(lh_validate(lh));
+#endif
 
 	free(entries);
 	lh_memory_margin = saved_margin;
@@ -358,7 +360,9 @@ hash_basic(void)
 	iter = lh_initiate_retrieve(lh, 1234);
 	VERIFY(!lh_retrieve_next(iter, buf));
 
+#ifdef LH_STATS_AND_VALIDATION
 	VERIFY(lh_validate(lh));
+#endif
 	lh_destroy(lh);
 }
 
@@ -430,8 +434,10 @@ hash_splits(void)
 	 * from 2^10 through 2^13: at least three full split cycles.
 	 */
 	VERIFY3U(lh->lh_hash_suffix_length, >=, 13);
+#ifdef LH_STATS_AND_VALIDATION
 	VERIFY3U(lh->lh_stats.lhs_splits.os_count, >,
 	    lh->lh_num_buckets - (1ULL << 10) - 1);
+#endif
 	lh_destroy(lh);
 }
 
@@ -478,7 +484,9 @@ hash_adversarial(void)
 	insert_entries(lh, entries, count, 512, &rng);
 	check_invariants(lh, count);
 	verify_table(lh, entries, count, &rng);
+#ifdef LH_STATS_AND_VALIDATION
 	VERIFY(lh_validate(lh));
+#endif
 	free(entries);
 	lh_destroy(lh);
 	lh_memory_margin = saved_margin;
@@ -562,7 +570,9 @@ hash_memory_pressure(void)
 
 	check_invariants(lh, count);
 	verify_table(lh, entries, count, &rng);
+#ifdef LH_STATS_AND_VALIDATION
 	VERIFY(lh_validate(lh));
+#endif
 
 	free(entries);
 	lh_destroy(lh);
@@ -619,7 +629,9 @@ hash_pressure_priority(void)
 
 	check_invariants(lh, count);
 	verify_table(lh, entries, count, &rng);
+#ifdef LH_STATS_AND_VALIDATION
 	VERIFY(lh_validate(lh));
+#endif
 
 	free(entries);
 	lh_destroy(lh);

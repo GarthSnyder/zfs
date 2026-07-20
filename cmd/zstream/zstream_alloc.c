@@ -43,21 +43,21 @@
  * page boundary. The alignment is an lcm and thus not necessarily a power
  * of two, so P2ROUNDUP cannot be used here.
  */
-#define MEM_ROUNDUP(size, pagesize, recsize) \
+#define	MEM_ROUNDUP(size, pagesize, recsize) \
 	    round_up(size, lcm(pagesize, recsize))
 
 #define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_record_size_rounded)
-#define OFFSET_TO_REC(alloc, off) ((off) / (alloc)->a_record_size_rounded)
+#define	OFFSET_TO_REC(alloc, off) ((off) / (alloc)->a_record_size_rounded)
 
-#define OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
-#define ADDR_TO_OFFSET(alloc, addr) ((addr) - (alloc)->a_base_addr)
+#define	OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
+#define	ADDR_TO_OFFSET(alloc, addr) ((addr) - (alloc)->a_base_addr)
 
 #define	REC_TO_ADDR(alloc, rec) OFFSET_TO_ADDR(alloc, \
 	    REC_TO_OFFSET(alloc, rec))
 #define	ADDR_TO_REC(alloc, addr) OFFSET_TO_REC(alloc, \
 	    ADDR_TO_OFFSET(alloc, addr))
 
-#define RECORD_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
+#define	RECORD_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
 	    (alloc)->a_max_memory)
 
 /*
@@ -142,7 +142,7 @@ lcm(size_t a, size_t b)
 		a = b;
 		b = r;
 	}
-	return (a_orig / a) * b_orig;
+	return ((a_orig / a) * b_orig);
 }
 
 /*
@@ -164,14 +164,14 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 	ssize_t pages = (ssize_t)sysconf(_SC_PHYS_PAGES);
 
 	if (pagesize < 0 || pages < 0) {
-		return NULL;
+		return (NULL);
 	}
 
 	size_t vm_allocation = 4 * pagesize * pages;
 	void *base = mmap(NULL, vm_allocation, PROT_NONE,
 	    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (base == MAP_FAILED) {
-		return NULL;
+		return (NULL);
 	}
 
 	size_t mem = MEM_ROUNDUP(mem_size, pagesize, rsize_rounded);
