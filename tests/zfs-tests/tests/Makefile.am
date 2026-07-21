@@ -2519,6 +2519,8 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/zstream/zstream_validate_001_neg.ksh \
 	functional/zstream/zstream_validate_002_neg.ksh \
 	functional/zstream/zstream_selftest_queue_001_pos.ksh \
+	functional/zstream/zstream_selftest_allocator_002_pos.ksh \
+	functional/zstream/zstream_selftest_hash_003_pos.ksh \
 	functional/zvol/zvol_cli/cleanup.ksh \
 	functional/zvol/zvol_cli/setup.ksh \
 	functional/zvol/zvol_cli/zvol_cli_001_pos.ksh \
