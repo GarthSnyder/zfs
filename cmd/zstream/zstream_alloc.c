@@ -33,16 +33,14 @@
 #include "zstream_alloc.h"
 #include "zstream_util.h"
 
-/*
- * Record sizes are rounded up to this power of 2 internally.
- */
-#define	RECORD_ALIGN 8
 
 /*
- * Round to ensure memory/disk transition is at both a record boundary and a
- * page boundary. The alignment is an lcm and thus not necessarily a power
- * of two, so P2ROUNDUP cannot be used here.
+ * Inputs to the record-size rounding calculation in allocator_init().
+ * See the discussion there for details.
  */
+#define	TARGET_GRANULARITY	(32 << 20)	/* 32MB */
+#define MAX_WASTE_PCT		50
+
 #define	MEM_ROUNDUP(size, pagesize, recsize) \
 	    round_up(size, lcm(pagesize, recsize))
 
@@ -57,7 +55,7 @@
 #define	ADDR_TO_REC(alloc, addr) OFFSET_TO_REC(alloc, \
 	    ADDR_TO_OFFSET(alloc, addr))
 
-#define	RECORD_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
+#define	RECORD_IS_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
 	    (alloc)->a_max_memory)
 
 /*
@@ -83,7 +81,7 @@
  *   do anything with these pages, so OSes largely ignore their existence
  *   aside from maintaining an address map entry for them. They do not
  *   consume physical memory, TLB entries, or swap space. Because of that,
- *   allocators can request a large, unified VM allocation up front and so
+ *   allocators can request a large, contiguous VM allocation up front and so
  *   never need to change their address space.
  *
  *   As the allocator needs more pages to work with, it incrementally changes
@@ -102,9 +100,8 @@
  */
 
 struct allocator {
-
 	size_t		a_record_size;
-	size_t		a_record_size_rounded;	/* Multiple of RECORD_ALIGN */
+	size_t		a_record_size_rounded;
 	size_t		a_max_memory;
 	int		a_fd;			/* On-disk file descriptor */
 
@@ -113,7 +110,7 @@ struct allocator {
 	size_t		a_pagesize;		/* System page size */
 	size_t		a_vm_allocated;		/* Total VM space reserved */
 	void		*a_vm_frontier;		/* Offset of 1st non-r/w byte */
-	size_t		a_frontier_granularity;	/* Frontier expansion, ~1MB */
+	size_t		a_frontier_granularity;	/* Frontier expansion */
 
 	uint64_t	a_io_ops_mem;		/* Number of reads and writes */
 	uint64_t	a_io_ops_disk;
@@ -145,12 +142,6 @@ lcm(size_t a, size_t b)
 	return ((a_orig / a) * b_orig);
 }
 
-/*
- * We always allocate a large chunk of VM address space, even if we're
- * starting with a max_memory of zero. It's free because it's PROT_NONE.
- * We'll gradually convert this address space into real pages as records are
- * added.
- */
 allocator_t *
 allocator_init(size_t record_size, size_t mem_size, int fd)
 {
@@ -159,15 +150,54 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 		errx(1, "allocator_init requires either a file or max_memory");
 	}
 
-	size_t rsize_rounded = P2ROUNDUP(record_size, RECORD_ALIGN);
 	ssize_t pagesize = (ssize_t)sysconf(_SC_PAGESIZE);
 	ssize_t pages = (ssize_t)sysconf(_SC_PHYS_PAGES);
-
 	if (pagesize < 0 || pages < 0) {
-		return (NULL);
+		err(1, "unable to read system page and memory sizes");
 	}
 
-	size_t vm_allocation = 4 * pagesize * pages;
+	/*
+	 * We want the memory-to-disk transition to occur at an address that
+	 * is both a page boundary and a record boundary. That way, every
+	 * record is either completely on disk or completely in memory.
+	 *
+	 * However, page sizes and record sizes can both vary widely, so we
+	 * need some idea of what allocation granularity we are trying to
+	 * achieve (TARGET_GRANULARITY). If the natural LCM of the record
+	 * size and page size is larger than this value, we can round up
+	 * record sizes, trading some storage efficiency for a lower LCM.
+	 *
+	 * Waste (storage lost by rounding up record sizes) grows
+	 * monotonically with increasing alignment multiple, so this
+	 * calculation is guaranteed to terminate.
+	 */
+	size_t granularity, rsize_rounded;
+	size_t align = 1;
+	/*
+	 * Waste grows monotonically with increasing alignment multiple, so
+	 * this calculation is guaranteed to terminate.
+	 */
+	while (B_TRUE) {
+		rsize_rounded = P2ROUNDUP(record_size, align);
+		size_t waste_bytes = rsize_rounded - record_size;
+		double waste_pct = (double)waste_bytes / rsize_rounded;
+		if (waste_pct > MAX_WASTE_PCT)
+			errx(1, "unable to find an efficient rounding for "
+			    "record_size = %llu, page_size = %llu",
+			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
+		granularity = lcm(pagesize, rsize_rounded);
+		if (granularity <= TARGET_GRANULARITY)
+			break;
+		align = align << 1;
+	}
+
+	/*
+	 * We always allocate a large chunk of VM address space (2X system
+	 * memory), even if we're starting with a max_memory of zero. The
+	 * allocation is free because it's PROT_NONE. We'll gradually
+	 * convert this address space into real pages as records are added.
+	 */
+	size_t vm_allocation = 2 * pagesize * pages;
 	void *base = mmap(NULL, vm_allocation, PROT_NONE,
 	    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (base == MAP_FAILED) {
@@ -177,7 +207,7 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 	size_t mem = MEM_ROUNDUP(mem_size, pagesize, rsize_rounded);
 	VERIFY3U(mem, <=, vm_allocation);
 	allocator_t *alloc = safe_calloc(sizeof (allocator_t));
-	*alloc = (allocator_t){
+	*alloc = (allocator_t) {
 		.a_record_size = record_size,
 		.a_record_size_rounded = rsize_rounded,
 		.a_max_memory = mem,
@@ -186,7 +216,7 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 		.a_pagesize = pagesize,
 		.a_vm_allocated = vm_allocation,
 		.a_vm_frontier = base,
-		.a_frontier_granularity = 1ULL << 20  /* 1MB */
+		.a_frontier_granularity = granularity
 	};
 	return (alloc);
 }
@@ -196,8 +226,9 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
  * based on the current a_max_memory. We "free" memory pages by replacing
  * them with a fresh PROT_NONE anonymous mapping, which returns the physical
  * pages to the kernel and guarantees zero-fill if the region is ever
- * re-exposed. (A bare mprotect(PROT_NONE) does neither; the kernel retains
- * page contents.) The original allocation of VM address space is preserved.
+ * re-exposed. (A bare mprotect(PROT_NONE) doesn't suffice; the kernel
+ * retains page contents.) The original allocation of VM address space is
+ * preserved.
  */
 static void
 shrink_frontier(allocator_t *alloc)
@@ -267,20 +298,21 @@ reify_memory_for_record(allocator_t *alloc, record_ix_t record)
 /*
  * Since memory and disk segments share offset addresses, we only need to do
  * one copy from memory to disk or vice versa to change the split point.
- * Note that because of memory allocation rounding, this function may be a
- * no-op even if new_size != current size.
+ * Because of memory allocation rounding, this function may be a no-op even
+ * if new_size != current size.
  *
  * When growing, the newly memory-resident region is read back from the file
  * (zero-filling past EOF, since trailing records may never have been
  * written) and the file region is then hole-punched: it now lies under the
- * memory overlay and shouldn't consume disk space. The punch is
+ * memory overlay and shouldn't consume disk space. The hole punch is
  * best-effort; if it fails, the stale file data is hidden by the overlay
  * and is rewritten from memory if the region ever transitions back to disk.
  *
- * When shrinking, only bytes below the VM frontier are written out. Bytes
- * between the frontier and the old memory budget were never written and are
- * logically zero. The corresponding file region has never been written (or
- * was punched), so it already reads back as zeros.
+ * When shrinking the memory-resident section, only bytes below the VM
+ * frontier are written out. Bytes between the frontier and the old memory
+ * budget were never written and are logically zero. The corresponding file
+ * region has never been written (or was punched), so it already reads back
+ * as zeros.
  */
 void
 allocator_set_max_memory(allocator_t *alloc, size_t new_size)
@@ -325,7 +357,7 @@ void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 {
 	VERIFY(buff != NULL);
-	if (RECORD_ON_DISK(alloc, record)) {
+	if (RECORD_IS_ON_DISK(alloc, record)) {
 		if (alloc->a_fd < 0)
 			errx(1, "no file for allocator record %llu",
 			    (u_longlong_t)record);
@@ -348,7 +380,7 @@ void
 allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
 	VERIFY(buff != NULL);
-	if (RECORD_ON_DISK(alloc, record)) {
+	if (RECORD_IS_ON_DISK(alloc, record)) {
 		if (alloc->a_fd < 0)
 			errx(1, "no file for allocator record %llu",
 			    (u_longlong_t)record);

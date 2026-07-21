@@ -33,12 +33,12 @@
  *
  * The goal is to use memory as long as it's available but not give up
  * arbitrarily when memory has been exhausted. With sufficient disk space,
- * it's possible to process petabyte-scale streams.
+ * it's possible to process streams of arbitrary size.
  *
  * Dual-backed allocators keep the first N records in memory and later
  * records on disk. For data that grows linearly but is accessed randomly
- * (e.g., hash tables), this arrangement allows for gradual performance
- * degradation after memory becomes full.
+ * (e.g., a linear hash tables), this arrangement allows for gradual
+ * performance degradation after memory becomes full.
  *
  * - Blocks are of uniform fixed size.
  * - Every block lives at a 64-bit record_ix_t address.
@@ -69,26 +69,16 @@ typedef struct {
  *
  * The max_memory parameter determines how much RAM the allocator is allowed
  * to consume, in bytes. If it's 0, the allocator will initially be
- * disk-only.
+ * disk-only. The memory limit is recorded for future reference, but actual
+ * allocations occur only as memory is actually needed.
  */
 allocator_t *
 allocator_init(size_t record_size, size_t mem_size, int backing_fd);
 
 /*
- * An allocator's memory budget can be changed at any time. On a dual-backed
- * allocator, this operation incurs a disk-write cost proportional to the
- * difference between old and new budgets. However, all data remains intact.
- *
- * If the allocator is memory-only, the new memory budget must be sufficient
- * to accomodate all existing records. If it is not, the program will abort.
- * You can check the current memory consumption with allocator_get_stats().
- *
- * You can also use this function to convert a disk-only allocator to a
- * dual-backed allocator.
+ * The basic API, which is essentially just read() and write() but
+ * abstracted across memory and disk.
  */
-void
-allocator_set_max_memory(allocator_t *alloc, size_t new_size);
-
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);
 
@@ -102,13 +92,27 @@ record_ix_t
 allocator_append(allocator_t *alloc, const void *data);
 
 /*
- * Skip ahead one record. Useful if you want to use index 0 as a sentinel or
- * if you want the next index without triggering a write. No guarantees are
- * made about the contents of the record if it is read. Returns the index
- * that was skipped.
+ * Skip ahead one record. Useful if you want to use index 0 as a sentinel.
+ * Like other unwritten records, the skipped record is guaranteed to contain
+ * zeros if read. Returns the index that was skipped.
  */
 record_ix_t
 allocator_skip(allocator_t *alloc);
+
+/*
+ * An allocator's memory budget can be changed at any time. On a dual-backed
+ * allocator, this operation incurs a disk-write cost proportional to the
+ * difference between old and new budgets. However, all data remains intact.
+ *
+ * If the allocator is memory-only, the new memory budget must be sufficient
+ * to accommodate all existing records. If it is not, the program will abort.
+ * You can check the current memory consumption with allocator_get_stats().
+ *
+ * You can also use this function to convert a disk-only allocator to a
+ * dual-backed allocator.
+ */
+void
+allocator_set_max_memory(allocator_t *alloc, size_t new_size);
 
 /*
  * Gets general info about allocator utilization.
