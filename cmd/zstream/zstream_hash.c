@@ -29,23 +29,23 @@
 #define	INITIAL_HASH_SUFFIX_LENGTH 10
 
 /*
- * Memory-management pacing. These are variables rather than #defines so
+ * Memory management pacing. These are variables rather than #defines so
  * that tests (and eventually callers) can tweak them; see the declarations
  * in zstream_hash_impl.h. The margin should be sized so that a table under
  * sustained memory pressure performs a reasonable number of memory
  * clawbacks (a few dozen) over its lifetime rather than thrashing.
  */
-size_t lh_memory_margin = 1ULL << 26;		/* 64MB */
+size_t lh_memory_margin = 64ULL << 20;		/* 64MB */
 int lh_mem_check_interval = 4096;		/* insertions per check */
 
 /*
  * A slightly more detailed description of linear hashing:
  *
- * Hash keys are masked to reduce their length. At any given time, two mask
- * lengths are in use, the longer being one bit longer than the shorter.
- * Buckets hashed with the long mask appear at the beginning of the table,
- * and the remaining buckets follow. A cursor, the split pointer, points to
- * the first bucket hashed with a shorter mask.
+ * Hash keys are masked to reduce their effective length. At any given time,
+ * two mask lengths are in use, the longer being one bit longer than the
+ * shorter. Buckets hashed with the long mask appear at the beginning of the
+ * table, and the remaining buckets follow. A cursor, the split pointer,
+ * points to the first bucket hashed with a shorter mask.
  *
  * When occupancy exceeds a given threshold, the contents of the bucket
  * pointed to by the split pointer are rehashed using the longer key length.
@@ -94,7 +94,7 @@ int lh_mem_check_interval = 4096;		/* insertions per check */
  *
  * This implementation uses open hashing (overflow buckets) and is
  * insert-only. (Linear hashing allows deletions, but they're probably
- * not useful here and are unimplemented.)
+ * not useful here and are not implemented.)
  *
  * Each hash table has three allocator_t's underneath it: one for the data
  * being stored, one for hash buckets, and one for overflow buckets.
@@ -199,11 +199,12 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
  * During the partition pass, the source bucket has both a read iterator and
  * a write iterator. This is fine because each iterator has its own copy of
  * the bucket and the read iterator will always precede the write iterator.
+ * The bucket will never be modified through the read iterator.
  *
  * At steady state, bucket entries are packed at the front of buckets and
  * all inactive entries are zeroed out. The first entry with a record number
- * of 0 marks the end of entries. After partitioning, we have to zero out
- * the tail of the source bucket.
+ * of 0 marks the end of entries. After partitioning a bucket, we have to
+ * zero out its unoccupied tail.
  */
 static void
 split_bucket(linear_hash_t *lh)
@@ -245,7 +246,12 @@ split_bucket(linear_hash_t *lh)
 		}
 	}
 
-	/* Maintain top-level entry account used to determine occupancy */
+	/*
+	 * The occupancy figure used to determine when a split is required
+	 * should take account only of the occupancy rate of the top-level
+	 * bucket entries. Slots in overflow buckets don't count because
+	 * they don't represent independent hashing destinations.
+	 */
 	lh->lh_num_top_level_entries -= pre_num_top_level;
 	lh->lh_num_top_level_entries += post_num_top_level;
 	lh->lh_num_buckets++;
@@ -254,8 +260,7 @@ split_bucket(linear_hash_t *lh)
 	bucket_entry_t *entry;
 	while ((entry = entry_iterator_next(&stay, B_FALSE))) {
 		if (entry->be_record) {
-			/* CSTYLED */
-			*entry = (bucket_entry_t){0};
+			*entry = (bucket_entry_t) {0};
 			stay.ei_dirty = B_TRUE;
 		}
 	}
@@ -371,8 +376,8 @@ lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 	if (!lh->lh_data_alloc|| !lh->lh_bucket_alloc || !lh->lh_overflow_alloc)
 		errx(1, "unable to initialize linear_hash_t allocators");
 	/*
-	 * Skip first overflow and data buckets to allow 0 to indicate
-	 * empty or end-of-chain.
+	 * Skip first overflow and data buckets so we can use 0 as an empty
+	 * or end-of-chain sentinel.
 	 */
 	allocator_skip(lh->lh_data_alloc);
 	allocator_skip(lh->lh_overflow_alloc);
@@ -395,7 +400,7 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 	bucket_entry_t *entry;
 	while ((entry = entry_iterator_next(&iter, B_TRUE))) {
 		if (entry->be_record == 0) {
-			*entry = (bucket_entry_t){ hash, record };
+			*entry = (bucket_entry_t) { hash, record };
 			save_bucket(&iter, B_TRUE);
 			break;
 		}
@@ -431,7 +436,7 @@ lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 	int which_iterator = next_iterator++ % MAX_LH_ITERATORS;
 	lh_iterator_t *iter = &lh_iterators[which_iterator];
 	record_ix_t bucket = bucket_for_hash(lh, hash);
-	*iter = (lh_iterator_t){
+	*iter = (lh_iterator_t) {
 		.lhi_hash = hash,
 		.lhi_entry_iterator = ITER_BUCKET(lh, bucket)
 	};
