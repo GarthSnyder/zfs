@@ -66,13 +66,11 @@ safe_malloc(size_t size);
 void *
 safe_calloc(size_t n);
 
-void
-safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
-
-pthread_t
-safe_create_thread(thread_f *body, void *body_arg, const char *name,
-    boolean_t detach);
-
+/*
+ * In addition to quitting on error, safe_pwrite() and safe_pread() handle
+ * partial reads and writes correctly and do not return until the full
+ * buffer has been transferred.
+ */
 char *
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
 
@@ -86,7 +84,14 @@ safe_pread(int fd, void *buf, size_t count, off64_t offset);
 void
 safe_pread_zero(int fd, void *buf, size_t count, off64_t offset);
 
-extern char *
+void
+safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+
+pthread_t
+safe_create_thread(thread_f *body, void *body_arg, const char *name,
+    boolean_t detach);
+
+char *
 checksum_str(zio_cksum_t *cksum, char *buff, size_t buff_size);
 
 /*
