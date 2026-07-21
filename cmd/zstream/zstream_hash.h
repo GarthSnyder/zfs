@@ -59,6 +59,7 @@ extern "C" {
  * #define LH_STATS_AND_VALIDATION
  */
 
+#define LH_STATS_AND_VALIDATION
 #define	MAX_LH_ITERATORS 8
 
 struct linear_hash;
