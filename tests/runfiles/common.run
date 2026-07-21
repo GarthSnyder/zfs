@@ -1166,6 +1166,7 @@ tests = ['zstream_checksum_001_pos',
     'zstream_recompress_005_pos',
     'zstream_redup_001_pos',
     'zstream_selftest_queue_001_pos',
+    'zstream_selftest_allocator_002_pos', 'zstream_selftest_hash_003_pos',
     'zstream_validate_001_neg']
 tags = ['functional', 'zstream']
 
