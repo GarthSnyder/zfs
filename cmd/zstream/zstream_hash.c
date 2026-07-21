@@ -279,7 +279,7 @@ static inline void
 check_split(linear_hash_t *lh)
 {
 	double occupancy = (double)lh->lh_num_top_level_entries /
-		(lh->lh_num_buckets * ENTRIES_PER_BUCKET);
+	    (lh->lh_num_buckets * ENTRIES_PER_BUCKET);
 	if (occupancy > MAX_OCCUPANCY) {
 		split_bucket(lh);
 	}
@@ -351,15 +351,15 @@ lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 
 	if (cache_dir == NULL)
 		cache_dir = "/var/tmp";
-	linear_hash_t *lh = safe_malloc(sizeof(struct linear_hash));
-	*lh = (linear_hash_t){
+	linear_hash_t *lh = safe_malloc(sizeof (struct linear_hash));
+	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
 		.lh_max_memory = max_mem,
 		.lh_num_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH
 	};
 
-	if (strlen(cache_dir) > sizeof(path) - 32)
+	if (strlen(cache_dir) > sizeof (path) - 32)
 		errx(1, "cache dir path too long");
 	fd = create_temp_file(cache_dir, path);
 	lh->lh_data_alloc = allocator_init(record_size, max_mem, fd);
@@ -376,7 +376,7 @@ lh_init(size_t record_size, size_t max_mem, const char *cache_dir)
 	 */
 	allocator_skip(lh->lh_data_alloc);
 	allocator_skip(lh->lh_overflow_alloc);
-	return lh;
+	return (lh);
 }
 
 void
