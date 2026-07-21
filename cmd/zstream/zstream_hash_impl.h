@@ -25,7 +25,7 @@
  */
 
 #ifndef _ZSTREAM_HASH_IMPL_H
-#define _ZSTREAM_HASH_IMPL_H
+#define	_ZSTREAM_HASH_IMPL_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,7 +34,7 @@ extern "C" {
 #include "zstream_alloc.h"
 #include "zstream_hash.h"
 
-#define ENTRIES_PER_BUCKET 6
+#define	ENTRIES_PER_BUCKET 6
 
 /*
  * MAX_BUCKET_CHAIN is a reporting/stats limitation, not an implementation
@@ -42,7 +42,7 @@ extern "C" {
  */
 #define	MAX_BUCKET_CHAIN 16
 
-#define ITER_BUCKET(lh, bucket) (entry_iterator_t){			\
+#define	ITER_BUCKET(lh, bucket) {					\
 		.ei_lh = lh,						\
 		.ei_bucket_ix = bucket,					\
 		.ei_entry_ix = -1					\
@@ -148,7 +148,7 @@ struct linear_hash {
 
 	uint8_t		lh_hash_suffix_length;	/* Granularity above split */
 	record_ix_t	lh_split_pointer;	/* Next bucket to split */
-	int     	lh_next_memory_check;	/* # of splits before check */
+	int		lh_next_memory_check;	/* # of splits before check */
 	uint64_t	lh_num_buckets;		/* Top level only */
 	uint64_t	lh_num_entries;
 	uint64_t	lh_num_top_level_entries;
@@ -167,7 +167,7 @@ typedef struct {
 	uint64_t	bs_num_empty_chains;
 	uint64_t	bs_num_slots_filled;
 	double		bs_pct_empty;
-	double		bs_occupancy;          /* Full slots / All slots */
+	double		bs_occupancy;		/* Full slots / All slots */
 	double		bs_nonempty_occupancy;
 } bucket_stats_t;
 

@@ -82,7 +82,7 @@ rdt_lookup(linear_hash_t *lh, uint64_t guid, uint64_t object, uint64_t offset,
 		    entry.rhe_object == object && entry.rhe_offset == offset;
 		if (matches) {
 			*stream_offsetp = entry.rhe_stream_offset;
-			return
+			return;
 		}
 	}
 	errx(1, "could not find expected redup table entry");

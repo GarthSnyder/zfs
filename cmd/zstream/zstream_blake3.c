@@ -39,10 +39,11 @@ chain_calc_blake3(drr_blake3_t *item, void *context)
 
 chain_step_t
 parallel_calc_blake3(void) {
+	/* CSTYLED */
 	return (chain_step_t) {
 		.cs_type = CS_PARALLEL,
-		.cs_in_size = sizeof(drr_packet_t),
-		.cs_out_size = sizeof(drr_blake3_t),
+		.cs_in_size = sizeof (drr_packet_t),
+		.cs_out_size = sizeof (drr_blake3_t),
 		.cs_parallel = {
 			.csp_queue_length = 512,
 			.csp_batch_budget = 64 * 1024,
@@ -51,4 +52,3 @@ parallel_calc_blake3(void) {
 		}
 	};
 }
-
