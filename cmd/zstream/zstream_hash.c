@@ -127,7 +127,7 @@ bucket_for_hash(linear_hash_t *lh, uint64_t hash)
 	uint64_t mask = (1ULL << (lh->lh_hash_suffix_length)) - 1;
 	if ((hash & mask) < lh->lh_split_pointer)
 		mask = (mask << 1) | 1;
-	return hash & mask;
+	return (hash & mask);
 }
 
 static inline void
@@ -140,8 +140,8 @@ read_bucket(entry_iterator_t *iter)
 }
 
 static inline void
-save_bucket(entry_iterator_t *iter) {
-	if (iter->ei_dirty == B_FALSE)
+save_bucket(entry_iterator_t *iter, boolean_t force) {
+	if (!force && iter->ei_dirty == B_FALSE)
 		return;
 	allocator_store(ALLOC_FOR(iter), iter->ei_bucket_ix, &iter->ei_bucket);
 	iter->ei_dirty = B_FALSE;
@@ -160,7 +160,7 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 		read_bucket(iter);
 		return (BUCKET_ENTRY(iter));
 	} else if (iter->ei_entry_ix == ENTRIES_PER_BUCKET - 1) {
-		save_bucket(iter);
+		save_bucket(iter, B_FALSE);
 		if (iter->ei_bucket.b_overflow != 0) {
 			iter->ei_in_overflow = B_TRUE;
 			iter->ei_bucket_ix = iter->ei_bucket.b_overflow;
@@ -173,14 +173,15 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 			record_ix_t record =
 			    allocator_skip(iter->ei_lh->lh_overflow_alloc);
 			iter->ei_bucket.b_overflow = record;
-			iter->ei_dirty = B_TRUE;	/* New link must land */
-			save_bucket(iter);
+			save_bucket(iter, B_TRUE);
+			/* BEGIN CSTYLED */
 			*iter = (entry_iterator_t){
 				.ei_lh = iter->ei_lh,
 				.ei_bucket_ix = record,
 				.ei_in_overflow = B_TRUE,
 				.ei_dirty = B_TRUE,
 			};
+			/* END CSTYLED */
 			return (BUCKET_ENTRY(iter));
 		}
 	} else {
@@ -253,6 +254,7 @@ split_bucket(linear_hash_t *lh)
 	bucket_entry_t *entry;
 	while ((entry = entry_iterator_next(&stay, B_FALSE))) {
 		if (entry->be_record) {
+			/* CSTYLED */
 			*entry = (bucket_entry_t){0};
 			stay.ei_dirty = B_TRUE;
 		}
@@ -394,8 +396,7 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 	while ((entry = entry_iterator_next(&iter, B_TRUE))) {
 		if (entry->be_record == 0) {
 			*entry = (bucket_entry_t){ hash, record };
-			iter.ei_dirty = B_TRUE;
-			save_bucket(&iter);
+			save_bucket(&iter, B_TRUE);
 			break;
 		}
 	}
