@@ -259,8 +259,8 @@ split_bucket(linear_hash_t *lh)
 			stay.ei_dirty = B_TRUE;
 		}
 	}
-	save_bucket(&stay);
-	save_bucket(&move);
+	save_bucket(&stay, B_FALSE);
+	save_bucket(&move, B_FALSE);
 
 	/* Have we completed the full hashing cycle at this suffix length? */
 	record_ix_t buckets_this_cycle = 1ULL << (lh->lh_hash_suffix_length);

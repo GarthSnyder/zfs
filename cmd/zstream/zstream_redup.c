@@ -61,11 +61,11 @@ rdt_insert(linear_hash_t *lh,
 {
 	uint64_t hashcode = cityhash3(guid, object, offset);
 	redup_hash_entry_t re = {
-		.rhe_guid = guid;
-		.rhe_object = object;
-		.rhe_offset = offset;
-		.rhe_stream_offset = stream_offset;
-	}
+		.rhe_guid = guid,
+		.rhe_object = object,
+		.rhe_offset = offset,
+		.rhe_stream_offset = stream_offset
+	};
 	lh_insert(lh, hashcode, &re);
 }
 
@@ -190,8 +190,7 @@ zstream_do_redup(int argc, char *argv[])
 	int c;
 	chain_attrs_t attrs = {0};
 	redup_context_t context = {0};
-	uint64_t numbuckets;
-	char *temp_dir = "/var/tmp";
+	const char *temp_dir = "/var/tmp";
 
 	while ((c = getopt(argc, argv, "vd:")) != -1) {
 		switch (c) {
@@ -242,15 +241,13 @@ zstream_do_redup(int argc, char *argv[])
 	zstream_chain_exec(redup_chain, &attrs);
 
 	if (attrs.ca_command_opts & CA_VERBOSE) {
-		char mem_str[16];
 		record_stats_t *acsi = attrs.ca_stats_in;
-		zfs_nicenum(context.rc_rdt.ddt_count * sizeof (redup_entry_t),
-		    mem_str, sizeof (mem_str));
 		fprintf(stderr, "Converted stream with %llu total records, "
-		    "including %llu dedup records, using %sB memory.\n",
+		    "including %llu WRITE records and %llu WRITE_BYREF "
+		    "records\n",
 		    (u_longlong_t)attrs.ca_totals_in.rs_num_records,
-		    (u_longlong_t)acsi[DRR_WRITE_BYREF].rs_num_records,
-		    mem_str);
+		    (u_longlong_t)acsi[DRR_WRITE].rs_num_records,
+		    (u_longlong_t)acsi[DRR_WRITE_BYREF].rs_num_records);
 	}
 
 	fclose(context.rc_fp);

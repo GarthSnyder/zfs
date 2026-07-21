@@ -228,11 +228,15 @@ update_ops_tracking(linear_hash_t *lh);
 void
 complete_ops_tracking(linear_hash_t *lh);
 
+#ifdef LH_STATS_AND_VALIDATION
+
 void
 lh_get_stats(linear_hash_t *lh, lh_report_t *stats);
 
 void
 lh_print_stats(linear_hash_t *lh);
+
+#endif  /* LH_STATS_AND_VALIDATION */
 
 #ifdef __cplusplus
 }
