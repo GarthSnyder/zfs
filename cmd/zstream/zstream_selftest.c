@@ -218,7 +218,7 @@ zstream_do_selftest(int argc, char *argv[])
 		zstream_queue_set_num_threads(nthreads);
 
 	struct sigaction sa = { .sa_handler = watchdog_fire };
- 	(void) sigemptyset(&sa.sa_mask);
+	(void) sigemptyset(&sa.sa_mask);
 	if (sigaction(SIGALRM, &sa, NULL) != 0)
 		err(1, "failed to install watchdog signal handler");
 
