@@ -93,13 +93,6 @@ selftest_rng_below(selftest_rng_t *rng, uint64_t bound)
 	return (bound ? selftest_rng_next(rng) % bound : 0);
 }
 
-/*
- * Number of live threads in this process, or -1 if that can't be
- * determined on this platform. Used to verify thread pool spin-down.
- */
-int
-selftest_count_threads(void);
-
 #ifdef	__cplusplus
 }
 #endif

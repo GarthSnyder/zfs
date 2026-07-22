@@ -193,8 +193,8 @@ thread_destroyed(void *arg)
 }
 
 /*
- * This key ensures that the thread_destroyed() function is run no matter
- * how the monitored thread stops.
+ * This key ensures that the thread_destroyed() function is run at thread
+ * termination whether the thread exits normally or is cancelled.
  */
 static void
 initialize_pthread_key(void)

@@ -521,7 +521,7 @@ expect_spindown(uint32_t baseline)
 		(void) usleep(2000);
 	}
 	errx(1, "thread pool failed to spin down (%u threads, expected %u)",
-	    num_pthreads, baseline);
+	    atomic_add_32_nv(&num_pthreads, 0), baseline);
 }
 
 static void *
@@ -541,7 +541,7 @@ run_queue_workload_thread(void *arg)
 static void
 queue_cycles(void)
 {
-	uint32_t baseline = num_pthreads;
+	uint32_t baseline = atomic_add_32_nv(&num_pthreads, 0);
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 400,
