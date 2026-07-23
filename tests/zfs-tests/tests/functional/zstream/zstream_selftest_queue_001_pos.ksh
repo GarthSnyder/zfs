@@ -31,7 +31,7 @@ verify_runnable "both"
 
 log_assert "zstream self-tests for zstream_queue all pass"
 
-log_must zstream selftest queue
-log_must zstream selftest -t 1 queue
+log_must zstream selftest -s 0x415d5997f00adc queue
+log_must zstream selftest -t 1 -s 0x415d5997f00adc queue
 
 log_pass "zstream self-tests for zstream_queue all pass"
