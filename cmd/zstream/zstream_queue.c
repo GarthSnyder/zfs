@@ -404,6 +404,7 @@ advance_completion_index(zstream_queue_t *queue)
  * are submitted to any queue, no worker thread will ever be awakened to
  * process the newly-enqueued item.
  */
+__attribute__((no_sanitize("thread")))
 static inline double
 score_queue(zstream_queue_t *queue)
 {
