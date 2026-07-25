@@ -112,6 +112,8 @@ typedef struct {
 	uint32_t	qp_id;
 } qtest_producer_arg_t;
 
+extern uint64_t zq_batch_size_histogram[MAX_BATCH + 1];
+
 static uint64_t
 item_check_value(uint32_t producer, uint64_t seq)
 {
@@ -288,6 +290,22 @@ qtest_consumer(void *arg)
 	return (NULL);
 }
 
+static void
+print_batch_size_histogram(void)
+{
+	int last_nonzero = 0;
+
+	for (int i = 0; i <= MAX_BATCH; i++) {
+		if (zq_batch_size_histogram[i] > 0)
+			last_nonzero = i;
+	}
+
+	printf("Batch histogram: ");
+	for (int i = 0; i <= last_nonzero; i++)
+		printf("%llu, ", (u_longlong_t)zq_batch_size_histogram[i]);
+	printf("%llu\n", (u_longlong_t)zq_batch_size_histogram[MAX_BATCH]);
+}
+
 /*
  * Run several workloads at once, one queue per config, with a dedicated
  * consumer thread and qc_producers producer threads per queue. Returns
@@ -308,6 +326,7 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 	qtest_producer_arg_t pargs[total_producers];
 	memset(runs, 0, sizeof (runs));
 	memset(pargs, 0, sizeof (pargs));
+	memset(zq_batch_size_histogram, 0, sizeof (zq_batch_size_histogram));
 
 	for (int i = 0; i < ncfg; i++) {
 		runs[i].qr_cfg = &cfgs[i];
@@ -343,6 +362,8 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 
 	for (int i = 0; i < ncfg; i++)
 		VERIFY3U(runs[i].qr_processed, ==, runs[i].qr_expect_processed);
+
+	// print_batch_size_histogram();
 }
 
 static void

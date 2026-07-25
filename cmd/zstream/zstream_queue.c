@@ -154,6 +154,8 @@ static void
 start_monitor_thread(void);
 #endif
 
+uint64_t		zq_batch_size_histogram[MAX_BATCH + 1] = {0};
+
 static thread_pool_t	pool = {0};
 static int		num_threads = 0;
 static boolean_t	pool_initialized = B_FALSE;
@@ -503,6 +505,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 		queue->zq_ix.claim++;
 	}
 
+	atomic_inc_64(&zq_batch_size_histogram[count]);
 	advance_completion_index(queue);
 	return (count);
 }
