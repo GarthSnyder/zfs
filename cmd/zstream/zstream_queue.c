@@ -73,11 +73,10 @@
  *
  * THREAD SAFETY STRATEGY
  *
- * There are four types of lock:
+ * There are three types of lock:
  *
  * - One global lock that gates changes to the thread pool and queue cohort
- * - A second global lock that controls the creation of new queues
- * - A third global lock associated with the shared "enqueued" condition
+ * - A second global lock associated with the shared "enqueued" condition
  * - One lock for each queue
  *
  * Although the "enqueued" condition and its associated lock are stored as
@@ -94,7 +93,7 @@
  * Several operations require multiple locks. In these cases, a standardized
  * locking order is used to avoid deadlocks:
  *
- *   enqueue -> pool -> queue -> create
+ *   enqueue -> pool -> queue
  *
  * Several operations merit additional comments about locking. These are
  * marked with a "locking note" in the comments preceding the relevant
@@ -137,7 +136,6 @@ struct zstream_queue {
 
 typedef struct {
 	pthread_mutex_t	tp_pool_mutex;
-	pthread_mutex_t tp_create_mutex;
 	pthread_mutex_t tp_enqueue_mutex;
 	pthread_cond_t	tp_enqueued;
 	zstream_queue_t	*tp_queues[MAX_QUEUES];
@@ -159,14 +157,22 @@ start_monitor_thread(void);
 uint64_t		zq_batch_size_histogram[MAX_BATCH + 1] = {0};
 
 static thread_pool_t	pool = {0};
-static int		num_threads = 0;
-static boolean_t	pool_initialized = B_FALSE;
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
+
+static void
+thread_pool_init(void)
+{
+	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
+	pthread_mutex_init(&pool.tp_enqueue_mutex, NULL);
+	pthread_cond_init(&pool.tp_enqueued, NULL);
+}
 
 void
 zstream_queue_set_num_threads(uint_t n)
 {
-	if (pool_initialized) {
+	pthread_once(&once_control, thread_pool_init);
+	pthread_mutex_lock(&pool.tp_pool_mutex);
+	if (pool.tp_threads != NULL) {
 		errx(1, "thread pool size must be set before creating queues");
 	} else if (n == 0) {
 		errx(1, "number of threads must be at least 1");
@@ -177,23 +183,14 @@ zstream_queue_set_num_threads(uint_t n)
 		warnx("num_threads = %u seems suspiciously high, setting "
 		    "anyway...", n);
 	}
-	num_threads = n;
-}
-
-static void
-thread_pool_init(void)
-{
-	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
-	pthread_mutex_init(&pool.tp_create_mutex, NULL);
-	pthread_mutex_init(&pool.tp_enqueue_mutex, NULL);
-	pthread_cond_init(&pool.tp_enqueued, NULL);
-	pool_initialized = B_TRUE;
+	pool.tp_num_threads = n;
+	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
 /*
  * Locking note: must be called by a function holding the pool mutex
  *
- * If num_threads is nonzero, it sets the number of threads to spawn.
+ * If tp_num_threads is nonzero, it sets the number of threads to spawn.
  * Otherwise, one thread is spawned per core.
  *
  * sched_affinity() is a better estimate of available threads than sysconf
@@ -203,10 +200,7 @@ thread_pool_init(void)
 static void
 thread_pool_spinup(void)
 {
-	pool.tp_num_queues = 0;
-	if (num_threads > 0) {
-		pool.tp_num_threads = num_threads;
-	} else {
+	if (pool.tp_num_threads == 0) {
 #ifdef	CPU_COUNT
 		cpu_set_t cpu_set;
 		sched_getaffinity(0, sizeof (cpu_set_t), &cpu_set);
@@ -230,93 +224,36 @@ thread_pool_spinup(void)
 #endif
 }
 
-/*
- * Locking note: thread_pool_spindown() is a pool-level operation and by
- * rights should hold the pool mutex. (And in fact, the caller must already
- * hold that mutex.)
- *
- * However, we can't leave the pool mutex locked while canceling threads
- * because most worker threads will be waiting on the "enqueued" condition.
- * That condition is protected by the enqueue mutex, which threads need to
- * lock just to wake up and be canceled.
- *
- * Even though the two mutexes are locked by different threads, it is still
- * one composite operation for which the locking order is pool -> enqueue.
- * That's incompatible with the standard locking order of enqueue -> pool ->
- * queue -> create, so continuing to hold the pool mutex risks deadlock.
- *
- * If we are here, that means there are no existing queues, so we needn't
- * worry about operations being attempted on queues. The one potential
- * conflict is with zstream_queue_create(). That's the reason for the
- * seemingly redundant "create" mutex. It lets us prevent the creation of
- * new queues while simultaneously dropping the pool lock.
- *
- * This function must be called with the pool mutex held, and it returns
- * with the pool mutex unlocked.
- */
-static void
-thread_pool_spindown(void)
-{
-	pthread_mutex_lock(&pool.tp_create_mutex);
-	pthread_mutex_unlock(&pool.tp_pool_mutex);
-
-	for (int i = 0; i < pool.tp_num_threads; i++) {
-		VERIFY3S(pthread_cancel(pool.tp_threads[i]), ==, 0);
-		VERIFY3S(pthread_join(pool.tp_threads[i], NULL), ==, 0);
-	}
-	free(pool.tp_threads);
-	pool.tp_threads = NULL;
-	pool.tp_num_threads = 0;
-
-	pthread_mutex_unlock(&pool.tp_create_mutex);
-}
-
-/*
- * Locking note: see comments on thread_pool_spindown() for an explanation
- * of why this operation acquires two locks.
- */
 zstream_queue_t *
 zstream_queue_create(zq_params_t *params)
 {
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
-	pthread_mutex_lock(&pool.tp_create_mutex);
 	VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
 
-	if (!pool.tp_num_threads) {
+	if (pool.tp_threads == NULL) {
 		thread_pool_spinup();
 	}
 	zstream_queue_t *queue = safe_malloc(sizeof (zstream_queue_t));
 	pool.tp_queues[pool.tp_num_queues] = queue;
 
-	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size, 8);
-	zstream_queue_t new_queue = {
+	*queue = (zstream_queue_t) {
 		.zq_params = *params,
 		.zq_slots = safe_malloc(params->qp_queue_length *
-		    ((sizeof (queue_slot_t)) + qpis_rounded))
+		    (sizeof (queue_slot_t)))
 	};
-	*queue = new_queue;
-	/*
-	 * Queue slots and item storage are allocated in one block, so we
-	 * need to manually wire each slot to its item buffer.
-	 */
-	uint8_t *item = (uint8_t *)&queue->zq_slots[params->qp_queue_length];
-	queue_slot_t *slot = &queue->zq_slots[0];
-	for (int i = 0; i < params->qp_queue_length; i++) {
-		slot->qs_item = item;
-		item += qpis_rounded;
-		slot++;
-	}
+
+	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size, 8);
+	void *items = safe_malloc(params->qp_queue_length * qpis_rounded);
+	for (int i = 0; i < params->qp_queue_length; i++)
+		queue->zq_slots[i].qs_item = items + i * qpis_rounded;
 
 	pthread_mutex_init(&queue->zq_mutex, NULL);
 	pthread_cond_init(&queue->zq_cond.completed, NULL);
 	pthread_cond_init(&queue->zq_cond.dequeued, NULL);
 
 	pool.tp_num_queues++;
-
-	pthread_mutex_unlock(&pool.tp_create_mutex);
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
-
 	return (queue);
 }
 
@@ -445,20 +382,6 @@ select_stochastic(double weights[], int num_values)
 	return (num_values - 1);
 }
 
-static void
-auto_unlock_mutex(pthread_mutex_t *mutex)
-{
-	pthread_mutex_unlock(mutex);
-}
-
-static void
-await_condition(pthread_cond_t *cond, pthread_mutex_t *mutex)
-{
-	pthread_cleanup_push((cleanup_f *)auto_unlock_mutex, mutex);
-	pthread_cond_wait(cond, mutex);
-	pthread_cleanup_pop(0);
-}
-
 /*
  * Claim up to MAX_BATCH work items from the given queue, trying to
  * accumulate at least queue->qp_batch_budget worth of work data (==
@@ -531,12 +454,9 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * This sequence dictates the lock acquisition ordering for all of
  * zstream_queue:
  *
- *   enqueue -> pool -> queue -> create
+ *   enqueue -> pool -> queue
  *
- * If everyone follows that order, deadlocks can't occur. Unfortunately,
- * thread_pool_spindown() would like to acquire two of these locks in the
- * wrong order, so it uses a separate work-around. See the comments for that
- * function.
+ * If everyone follows that order, deadlocks should not occur.
  */
 static int
 assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
@@ -556,7 +476,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 		}
 		if (!queues_with_work) {
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
-			await_condition(&pool.tp_enqueued,
+			pthread_cond_wait(&pool.tp_enqueued,
 			    &pool.tp_enqueue_mutex);
 			pthread_mutex_lock(&pool.tp_pool_mutex);
 		} else {
@@ -621,19 +541,27 @@ queue_worker(void *dummy)
 	return (NULL);
 }
 
+static uint64_t scheduled;
+static uint64_t sent;
+static boolean_t pending;
+static pthread_mutex_t delay_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 static void
 signal_enqueue(union sigval sval)
 {
 	(void) sval;
+	pthread_mutex_lock(&delay_mutex);
+	pending = B_FALSE;
+	pthread_mutex_unlock(&delay_mutex);
 	pthread_mutex_lock(&pool.tp_enqueue_mutex);
 	pthread_cond_signal(&pool.tp_enqueued);
 	pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+	atomic_inc_64(&sent);
 }
 
 static void
 signal_enqueue_after_delay(uint64_t nsec)
 {
-	pthread_mutex_t delay_mutex = PTHREAD_MUTEX_INITIALIZER;
 	static timer_t timer;
 	struct itimerspec spec;
 	static boolean_t initialized = B_FALSE;
@@ -648,9 +576,9 @@ signal_enqueue_after_delay(uint64_t nsec)
 			err(1, "could not create timer");
 		initialized = B_TRUE;
 	}
-	if (timer_gettime(timer, &spec) != 0)
-		err(1, "could not get timer value");
-	if (spec.it_value.tv_nsec == 0 && spec.it_value.tv_sec == 0) {
+	if (!pending) {
+		pending = B_TRUE;
+		atomic_inc_64(&scheduled);
 		spec = (struct itimerspec) {
 			.it_value.tv_nsec = nsec
 		};
@@ -666,11 +594,12 @@ signal_enqueue_after_delay(uint64_t nsec)
 void
 zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 {
+	VERIFY(queue != NULL);
 	pthread_mutex_lock(&queue->zq_mutex);
 	VERIFY3B(queue->zq_disallow_enqueue, ==, B_FALSE);
 
 	while (Q_FULL(queue)) {
-		await_condition(&queue->zq_cond.dequeued, &queue->zq_mutex);
+		pthread_cond_wait(&queue->zq_cond.dequeued, &queue->zq_mutex);
 	}
 
 	queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.enqueue);
@@ -699,10 +628,10 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
-	// pthread_mutex_lock(&pool.tp_enqueue_mutex);
-	// pthread_cond_signal(&pool.tp_enqueued);
-	// pthread_mutex_unlock(&pool.tp_enqueue_mutex);
-	signal_enqueue_after_delay(1E6);  /* 1ms */
+	pthread_mutex_lock(&pool.tp_enqueue_mutex);
+	pthread_cond_signal(&pool.tp_enqueued);
+	pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+	// signal_enqueue_after_delay(1E6);  /* 1ms */
 }
 
 void
@@ -711,9 +640,9 @@ zstream_queue_fini(zstream_queue_t *queue) {
 }
 
 /*
- * Note that this function is not public. The only way to destroy a queue
- * through the public API is to call zstream_queue_fini(), wait for all
- * items to be processed, and then dequeue all items.
+ * This function is not public. The only way to destroy a queue through the
+ * public API is to call zstream_queue_fini(), wait for all items to be
+ * processed, and then dequeue all items.
  */
 static void
 zstream_queue_destroy(zstream_queue_t *queue)
@@ -729,21 +658,20 @@ zstream_queue_destroy(zstream_queue_t *queue)
 		    "simultaneously?");
 	}
 
+	free(queue->zq_slots[0].qs_item);
 	free(queue->zq_slots);
 	queue->zq_slots = NULL;
 	free(queue);
 	pool.tp_num_queues--;
 
-	if (pool.tp_num_queues == 0) {
-		thread_pool_spindown();  /* Unlocks pool mutex */
-	} else {
+	if (pool.tp_num_queues > 0) {
 		/* Gaps are not allowed in the tp_queues array */
 		zstream_queue_t **qscan = &pool.tp_queues[0];
 		int i = pool.tp_num_queues;
 		while (*qscan != queue) { qscan++; i--; }
 		memmove(qscan, qscan + 1, i * sizeof (*qscan));
-		pthread_mutex_unlock(&pool.tp_pool_mutex);
 	}
+	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
 /*
@@ -761,7 +689,7 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 {
 	pthread_mutex_lock(&queue->zq_mutex);
 	while (queue->zq_ix.dequeue >= queue->zq_ix.complete) {
-		await_condition(&queue->zq_cond.completed, &queue->zq_mutex);
+		pthread_cond_wait(&queue->zq_cond.completed, &queue->zq_mutex);
 	}
 	queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.dequeue);
 	queue->zq_ix.dequeue++;

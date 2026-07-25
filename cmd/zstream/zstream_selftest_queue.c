@@ -528,21 +528,50 @@ queue_multi_queue(void)
 	run_queue_workloads(cfgs, 12);
 }
 
+/*
+ * The worker pool is spun up once, on the first zstream_queue_create() of
+ * the process, and its threads live until the process exits. The invariant
+ * to police across queue lifetimes is therefore stability, not spin-down:
+ * queues may come and go, but the process must neither accumulate nor shed
+ * threads as they do.
+ *
+ * Establishing the expected count takes one concession. pthread_create()
+ * returns before the new thread reaches pthread_register_self(), so a short
+ * workload can finish while some workers are still uncounted. Let the count
+ * settle before adopting it; every check after that is exact.
+ */
+static uint32_t
+settled_thread_count(void)
+{
+	uint32_t prior = atomic_add_32_nv(&num_pthreads, 0);
+	int stable = 0;
+
+	for (int i = 0; i < 500; i++) {
+		(void) usleep(2000);
+		uint32_t now = atomic_add_32_nv(&num_pthreads, 0);
+		stable = (now == prior) ? stable + 1 : 0;
+		if (stable == 5)
+			return (now);
+		prior = now;
+	}
+	errx(1, "thread count never settled (%u threads)", prior);
+}
+
 static void
-expect_spindown(uint32_t baseline)
+expect_thread_count(uint32_t expected)
 {
 	/*
-	 * thread_pool_spindown() joins its workers synchronously, but give
-	 * the kernel a moment to retire task entries before declaring
-	 * failure.
+	 * The workload's own producers and consumers have been joined by the
+	 * time we get here, but give their key destructors a moment to run
+	 * before declaring the count wrong.
 	 */
 	for (int i = 0; i < 500; i++) {
-		if (atomic_add_32_nv(&num_pthreads, 0) == baseline)
+		if (atomic_add_32_nv(&num_pthreads, 0) == expected)
 			return;
 		(void) usleep(2000);
 	}
-	errx(1, "thread pool failed to spin down (%u threads, expected %u)",
-	    atomic_add_32_nv(&num_pthreads, 0), baseline);
+	errx(1, "thread pool churned across a queue lifetime (%u threads, "
+	    "expected %u)", atomic_add_32_nv(&num_pthreads, 0), expected);
 }
 
 static void *
@@ -554,15 +583,17 @@ run_queue_workload_thread(void *arg)
 }
 
 /*
- * Spin the thread pool up and down repeatedly. After every drain the
- * process must be back to its baseline thread count. The second phase
- * races a fresh zstream_queue_create() against the previous queue's
- * spin-down to exercise the create-vs-spindown locking.
+ * Cycle queues through the shared pool repeatedly. The pool is permanent,
+ * so the process thread count must be identical after every drain: no
+ * worker may be reaped when the last queue goes away, and no second pool
+ * may be spawned when the next queue arrives. The second phase overlaps a
+ * fresh zstream_queue_create() with another workload's teardown, exercising
+ * the create-vs-destroy locking on the pool mutex and the compaction of the
+ * pool's queue array.
  */
 static void
 queue_cycles(void)
 {
-	uint32_t baseline = atomic_add_32_nv(&num_pthreads, 0);
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 400,
@@ -571,14 +602,18 @@ queue_cycles(void)
 		.qc_pattern_len = 16,
 		.qc_zero_cost_pct = 20,
 		.qc_max_cost = 32,
-		.qc_rng_stream = 600,
+		.qc_rng_stream = 599,
 	};
+
+	/* Prime the pool, then pin down the count it must hold from here on */
+	run_queue_workload(&cfg);
+	uint32_t expected = settled_thread_count();
 
 	for (int iter = 0; iter < 30; iter++) {
 		cfg.qc_producers = 1 + iter % 2;
 		cfg.qc_rng_stream = 600 + iter;
 		run_queue_workload(&cfg);
-		expect_spindown(baseline);
+		expect_thread_count(expected);
 	}
 
 	selftest_rng_t rng;
@@ -594,7 +629,7 @@ queue_cycles(void)
 		cfg.qc_rng_stream = 800 + iter;
 		run_queue_workload(&cfg);
 		VERIFY3S(pthread_join(bg, NULL), ==, 0);
-		expect_spindown(baseline);
+		expect_thread_count(expected);
 	}
 }
 
