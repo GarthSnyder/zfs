@@ -22,6 +22,7 @@
 #include <err.h>
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,7 @@
 #include <sys/param.h>
 #include <sys/random.h>
 #include <sys/stdtypes.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "zstream_queue.h"
@@ -618,6 +620,45 @@ queue_worker(void *dummy)
 	return (NULL);
 }
 
+static void
+signal_enqueue(union sigval sval)
+{
+	(void) sval;
+	pthread_mutex_lock(&pool.tp_enqueue_mutex);
+	pthread_cond_signal(&pool.tp_enqueued);
+	pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+}
+
+static void
+signal_enqueue_after_delay(uint64_t nsec)
+{
+	pthread_mutex_t delay_mutex = PTHREAD_MUTEX_INITIALIZER;
+	static timer_t timer;
+	struct itimerspec spec;
+	static boolean_t initialized = B_FALSE;
+
+	pthread_mutex_lock(&delay_mutex);
+	if (!initialized) {
+		struct sigevent sev = {
+			.sigev_notify = SIGEV_THREAD,
+			.sigev_notify_function = signal_enqueue
+		};
+		if (timer_create(CLOCK_REALTIME, &sev, &timer) != 0)
+			err(1, "could not create timer");
+		initialized = B_TRUE;
+	}
+	if (timer_gettime(timer, &spec) != 0)
+		err(1, "could not get timer value");
+	if (spec.it_value.tv_nsec == 0 && spec.it_value.tv_sec == 0) {
+		spec = (struct itimerspec) {
+			.it_value.tv_nsec = nsec
+		};
+		if (timer_settime(timer, 0, &spec, NULL) != 0)
+			err(1, "could not set timer value");
+	}
+	pthread_mutex_unlock(&delay_mutex);
+}
+
 /*
  * Implements both _enqueue and _fini. item == NULL for fini.
  */
@@ -657,9 +698,10 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
-	pthread_mutex_lock(&pool.tp_enqueue_mutex);
-	pthread_cond_signal(&pool.tp_enqueued);
-	pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+	// pthread_mutex_lock(&pool.tp_enqueue_mutex);
+	// pthread_cond_signal(&pool.tp_enqueued);
+	// pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+	signal_enqueue_after_delay(1E6);  /* 1ms */
 }
 
 void
