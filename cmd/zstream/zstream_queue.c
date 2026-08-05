@@ -498,7 +498,6 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			if (more_here || queues_with_work > 1) {
 				pthread_cond_signal(&pool.tp_enqueued);
 			}
-			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
 			pthread_mutex_unlock(&pool.tp_enqueue_mutex);
 			return (count);
@@ -630,8 +629,9 @@ zstream_queue_destroy(zstream_queue_t *queue)
 		int i = pool.tp_num_queues;
 		while (*qscan != queue) { qscan++; i--; }
 		memmove(qscan, qscan + 1, i * sizeof (*qscan));
-		pthread_mutex_unlock(&pool.tp_pool_mutex);
 	}
+
+	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
 /*
