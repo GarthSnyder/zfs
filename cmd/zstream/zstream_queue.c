@@ -49,6 +49,8 @@
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
 	    (queue)->zq_params.qp_queue_length)
 
+#define MONITOR_QUEUES
+
 /*
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
  * complete, and dequeue, in that order. No index can move beyond its
@@ -125,6 +127,8 @@ struct zstream_queue {
 	zq_params_t	zq_params;
 	zq_stats_t	zq_stats;
 	boolean_t	zq_disallow_enqueue;
+	int		zq_id;
+	uint64_t	zq_histogram[MAX_BATCH+1];
 };
 
 typedef struct {
@@ -271,6 +275,8 @@ zstream_queue_create(zq_params_t *params)
 	VERIFY3P(params->qp_cost, !=, NULL);
 	VERIFY3U(params->qp_item_size, >, 0);
 	VERIFY3U(params->qp_queue_length, >, 0);
+	
+	static int next_queue_id = 0;
 
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
@@ -286,7 +292,8 @@ zstream_queue_create(zq_params_t *params)
 	*queue = (zstream_queue_t) {
 		.zq_params = *params,
 		.zq_slots = safe_malloc(params->qp_queue_length *
-		    (sizeof (queue_slot_t)))
+		    (sizeof (queue_slot_t))),
+		.zq_id = next_queue_id++
 	};
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size,
@@ -484,6 +491,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 		queue->zq_ix.claim++;
 	}
 
+	queue->zq_histogram[count]++;
 	advance_indexes(queue);
 	return (count);
 }
@@ -645,6 +653,25 @@ zstream_queue_fini(zstream_queue_t *queue) {
 	zstream_enqueue(queue, NULL);
 }
 
+static void
+print_batch_size_histogram(zstream_queue_t *queue)
+{
+	int last_nonzero = 0;
+	for (last_nonzero = MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
+		if (queue->zq_histogram[last_nonzero] > 0)
+			break;
+	}
+	fprintf(stderr, "Batch histogram, queue %d: ", queue->zq_id);
+	const char *sep = "";
+	for (int i = 0; i <= last_nonzero; i++) {
+		fprintf(stderr, "%s%llu", sep,
+		    (u_longlong_t)queue->zq_histogram[i]);
+		sep = ", ";
+	}
+	fprintf(stderr, "\n");
+	fflush(stderr);
+}
+
 /*
  * This function is not public. The only way to destroy a queue through the
  * public API is to call zstream_queue_fini(), wait for all items to be
@@ -657,6 +684,10 @@ static void
 zstream_queue_destroy(zstream_queue_t *queue)
 {
 	pthread_mutex_lock(&pool.tp_pool_mutex);
+
+#ifdef MONITOR_QUEUES
+	print_batch_size_histogram(queue);
+#endif
 
 	pthread_mutex_destroy(&queue->zq_mutex);
 	pthread_cond_destroy(&queue->zq_cond.dequeued);
@@ -768,7 +799,7 @@ cpu_and_queue_monitor(void *dummy)
 			    (JIFFIES_PER_SEC * 100);
 			double cpu_pct = (double)delta_cpu_jif /
 			    (pool.tp_num_threads * delta_jif);
-			fprintf(stderr, "CPU: %.2f%%  ", 100 * cpu_pct);
+			fprintf(stderr, "CPU: %3.2f%%  ", 100 * cpu_pct);
 			/* Stop to investigate low CPU usage */
 			if (interrupt && cpu_pct < 0.85 && cpu_pct > 0.1) {
 				kill(getpid(), SIGSTOP);
@@ -778,12 +809,11 @@ cpu_and_queue_monitor(void *dummy)
 		/* Report queue depths */
 		for (int i = 0; i < pool.tp_num_queues; i++) {
 			zstream_queue_t *q = pool.tp_queues[i];
-			fprintf(stderr, "Queue %d: %d-%d  ", i,
+			fprintf(stderr, "Queue %d: %4d-%-4d  ", i,
 			    q->zq_stats.min_depth, q->zq_stats.max_depth);
 			q->zq_stats.min_depth = 999999999;
 			q->zq_stats.max_depth = 0;
 		}
-
 		pthread_mutex_unlock(&pool.tp_pool_mutex);
 		fprintf(stderr, "\n");
 		cpu_jif_prior = utime + stime;
