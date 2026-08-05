@@ -35,8 +35,9 @@
 #include "zstream_queue.h"
 #include "zstream_util.h"
 
-#define	MIN_THREADS 	6
-#define	MAX_QUEUES 	16	/* Largest # of queues simultaneously active */
+#define	MIN_THREADS		6
+#define	MAX_QUEUES		16	/* Largest # simultaneously active */
+#define	ENQUEUE_DELAY_NSEC	1E4	/* Signal delay for enqueues, 10us */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			0.0001	/* No-work score threshold */
@@ -72,15 +73,12 @@
  *
  * THREAD SAFETY STRATEGY
  *
- * There are three types of lock:
+ * There are four types of lock:
  *
  * - One global lock that gates changes to the thread pool and queue cohort
  * - A second global lock associated with the shared "enqueued" condition
+ * - A third global lock that protects the enqueue signal delay
  * - One lock for each queue
- *
- * Although the "enqueued" condition and its associated lock are stored as
- * part of the global thread pool, they are logically separate from the pool
- * itself.
  *
  * For the most part, locking is straightforward. Any operation that adds or
  * removes queues or threads should hold the pool lock. Any operation that
@@ -92,7 +90,7 @@
  * Several operations require multiple locks. In these cases, a standardized
  * locking order is used to avoid deadlocks:
  *
- *   enqueue -> pool -> queue
+ *   enqueue -> pool -> queue -> delay
  */
 
 typedef struct {
@@ -130,13 +128,21 @@ struct zstream_queue {
 };
 
 typedef struct {
-	pthread_mutex_t	tp_pool_mutex;
-	pthread_mutex_t tp_enqueue_mutex;
-	pthread_cond_t	tp_enqueued;
-	zstream_queue_t	*tp_queues[MAX_QUEUES];
-	int		tp_num_queues;
-	boolean_t	tp_threads_created;
-	int		tp_num_threads;
+	pthread_mutex_t		enqueue_mutex;
+	pthread_mutex_t		delay_mutex;
+	pthread_cond_t		condition;
+	timer_t			timer;
+	boolean_t		pending;
+	struct itimerspec	delay_nsec;
+} enqueue_control_t;
+
+typedef struct {
+	pthread_mutex_t		tp_pool_mutex;
+	zstream_queue_t		*tp_queues[MAX_QUEUES];
+	int			tp_num_queues;
+	boolean_t		tp_threads_created;
+	int			tp_num_threads;
+	enqueue_control_t	tp_enqueue;
 } thread_pool_t;
 
 typedef union {
@@ -158,11 +164,47 @@ static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 
 static void
+delayed_enqueue_send(union sigval sval)
+{
+	(void) sval;
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+
+	pthread_mutex_lock(&ctl->enqueue_mutex);
+	pthread_mutex_lock(&ctl->delay_mutex);
+	ctl->pending = B_FALSE;
+	pthread_cond_signal(&ctl->condition);
+	pthread_mutex_unlock(&ctl->delay_mutex);
+	pthread_mutex_unlock(&ctl->enqueue_mutex);
+}
+
+static inline void
+delayed_enqueue_schedule(void)
+{
+	pthread_mutex_lock(&pool.tp_enqueue.delay_mutex);
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+	if (!ctl->pending) {
+		ctl->pending = B_TRUE;
+		if (timer_settime(ctl->timer, 0, &ctl->delay_nsec, NULL))
+			err(1, "could not set timer value");
+	}
+	pthread_mutex_unlock(&pool.tp_enqueue.delay_mutex);
+}
+
+static void
 thread_pool_init(void)
 {
 	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
-	pthread_mutex_init(&pool.tp_enqueue_mutex, NULL);
-	pthread_cond_init(&pool.tp_enqueued, NULL);
+	pthread_mutex_init(&pool.tp_enqueue.enqueue_mutex, NULL);
+	pthread_mutex_init(&pool.tp_enqueue.delay_mutex, NULL);
+	pthread_cond_init(&pool.tp_enqueue.condition, NULL);
+
+	struct sigevent sev = {
+		.sigev_notify = SIGEV_THREAD,
+		.sigev_notify_function = delayed_enqueue_send
+	};
+	pool.tp_enqueue.delay_nsec.it_value.tv_nsec = ENQUEUE_DELAY_NSEC;
+	if (timer_create(CLOCK_BOOTTIME, &sev, &pool.tp_enqueue.timer) != 0)
+		err(1, "could not create enqueue signal timer");
 }
 
 /*
@@ -466,14 +508,14 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * This sequence dictates the lock acquisition ordering for all of
  * zstream_queue:
  *
- *     enqueue -> pool -> queue
+ *     enqueue -> pool -> queue -> delay
  *
  * If everyone follows that order, deadlocks should not occur.
  */
 static int
 assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 {
-	pthread_mutex_lock(&pool.tp_enqueue_mutex);
+	pthread_mutex_lock(&pool.tp_enqueue.enqueue_mutex);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
 
 	while (B_TRUE) {
@@ -491,8 +533,8 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 		}
 		if (!queues_with_work) {
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
-			pthread_cond_wait(&pool.tp_enqueued,
-			    &pool.tp_enqueue_mutex);
+			pthread_cond_wait(&pool.tp_enqueue.condition,
+			    &pool.tp_enqueue.enqueue_mutex);
 			pthread_mutex_lock(&pool.tp_pool_mutex);
 		} else {
 			int q = select_stochastic(weights, num_queues);
@@ -507,10 +549,10 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			    (*queue)->zq_ix.enqueue;
 			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			if (more_here || queues_with_work > 1) {
-				pthread_cond_signal(&pool.tp_enqueued);
+				pthread_cond_signal(&pool.tp_enqueue.condition);
 			}
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
-			pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+			pthread_mutex_unlock(&pool.tp_enqueue.enqueue_mutex);
 			return (count);
 		}
 	}
@@ -595,9 +637,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
-	pthread_mutex_lock(&pool.tp_enqueue_mutex);
-	pthread_cond_signal(&pool.tp_enqueued);
-	pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+	delayed_enqueue_schedule();
 }
 
 void
