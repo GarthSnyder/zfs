@@ -20,6 +20,7 @@
 #include <assert.h>
 #include <atomic.h>
 #include <err.h>
+#include <limits.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -48,8 +49,6 @@
 
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
 	    (queue)->zq_params.qp_queue_length)
-
-#define MONITOR_QUEUES
 
 /*
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
@@ -653,15 +652,21 @@ zstream_queue_fini(zstream_queue_t *queue) {
 	zstream_enqueue(queue, NULL);
 }
 
+#ifdef MONITOR_QUEUES
+
 static void
 print_batch_size_histogram(zstream_queue_t *queue)
 {
 	int last_nonzero = 0;
+	static int lines_printed = 0;
+
+	if (lines_printed++ == 0)
+		fprintf(stderr, "\nBatch size histograms:\n");
 	for (last_nonzero = MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
 		if (queue->zq_histogram[last_nonzero] > 0)
 			break;
 	}
-	fprintf(stderr, "Batch histogram, queue %d: ", queue->zq_id);
+	fprintf(stderr, "Queue %d: ", queue->zq_id);
 	const char *sep = "";
 	for (int i = 0; i <= last_nonzero; i++) {
 		fprintf(stderr, "%s%llu", sep,
@@ -671,6 +676,8 @@ print_batch_size_histogram(zstream_queue_t *queue)
 	fprintf(stderr, "\n");
 	fflush(stderr);
 }
+
+#endif  /* MONITOR_QUEUES */
 
 /*
  * This function is not public. The only way to destroy a queue through the
@@ -754,6 +761,34 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 #define	SAMPLE_DURATION_US 1000000
 
 /*
+ * Report layout: a fixed-width "CPU: 99.99%" field followed by one
+ * right-aligned column per queue. Queue depths are assumed to be at most
+ * four digits, so the widest possible column entry is "1024-1024".
+ */
+#define	CPU_FIELD_WIDTH	11
+#define	Q_COL_WIDTH	11
+#define	Q_COL_RULE	"-------"
+
+/*
+ * Print a column header for the current cohort of queues, preceded by a
+ * blank line to separate it from any data lines above.
+ */
+static void
+print_queue_header(const int ids[], int num_queues)
+{
+	fprintf(stderr, "\n%*s", CPU_FIELD_WIDTH, "");
+	for (int i = 0; i < num_queues; i++) {
+		char label[16];
+		snprintf(label, sizeof (label), "Queue %d", ids[i]);
+		fprintf(stderr, "%*s", Q_COL_WIDTH, label);
+	}
+	fprintf(stderr, "\n%*s", CPU_FIELD_WIDTH, "");
+	for (int i = 0; i < num_queues; i++)
+		fprintf(stderr, "%*s", Q_COL_WIDTH, Q_COL_RULE);
+	fprintf(stderr, "\n");
+}
+
+/*
  * Monitor queue and CPU usage from a separate thread. This is all
  * Linux-specific, but it's needed only while tuning queue lengths and batch
  * sizes.
@@ -772,8 +807,12 @@ cpu_and_queue_monitor(void *dummy)
 	boolean_t interrupt = B_FALSE;
 	FILE *fp;
 
-	/* Wait a few seconds for things to settle into steady state */
-	usleep(3 * 1000 * 1000);
+	int ids[MAX_QUEUES], prior_ids[MAX_QUEUES];
+	char depths[MAX_QUEUES][16];
+	int num_queues, prior_num_queues = -1;
+
+	/* Wait a moment for things to settle into steady state */
+	usleep(500000);
 
 	while (B_TRUE) {
 		usleep(period);
@@ -793,29 +832,58 @@ cpu_and_queue_monitor(void *dummy)
 		pthread_mutex_lock(&pool.tp_pool_mutex);
 		clock_gettime(CLOCK_MONOTONIC, &clock);
 		end_us = clock.tv_sec * 1000000 + clock.tv_nsec / 1000;
+
+		/*
+		 * Collect the depth range accumulated by each queue over the
+		 * last interval, then reset the accounting. A queue that saw
+		 * no enqueues still holds the sentinel values, and is
+		 * reported as "0-0".
+		 */
+		num_queues = pool.tp_num_queues;
+		for (int i = 0; i < num_queues; i++) {
+			zstream_queue_t *q = pool.tp_queues[i];
+			pthread_mutex_lock(&q->zq_mutex);
+			ids[i] = q->zq_id;
+			int min = q->zq_stats.min_depth;
+			int max = q->zq_stats.max_depth;
+			if (min > max)
+				min = max = 0;
+			snprintf(depths[i], sizeof (depths[i]), "%d-%d",
+			    min, max);
+			q->zq_stats.min_depth = INT_MAX;
+			q->zq_stats.max_depth = 0;
+			pthread_mutex_unlock(&q->zq_mutex);
+		}
+		pthread_mutex_unlock(&pool.tp_pool_mutex);
+
+		if (num_queues != prior_num_queues ||
+		    memcmp(ids, prior_ids, num_queues * sizeof (int)) != 0) {
+			print_queue_header(ids, num_queues);
+			memcpy(prior_ids, ids, num_queues * sizeof (int));
+			prior_num_queues = num_queues;
+		}
+
+		boolean_t stop = B_FALSE;
 		if (cpu_jif_prior) {
 			delta_cpu_jif = utime + stime - cpu_jif_prior;
 			delta_jif = (end_us - start_us) /
 			    (JIFFIES_PER_SEC * 100);
 			double cpu_pct = (double)delta_cpu_jif /
 			    (pool.tp_num_threads * delta_jif);
-			fprintf(stderr, "CPU: %3.2f%%  ", 100 * cpu_pct);
+			cpu_pct = MIN(cpu_pct, 0.9999);
+			fprintf(stderr, "CPU: %5.2f%%", 100 * cpu_pct);
 			/* Stop to investigate low CPU usage */
-			if (interrupt && cpu_pct < 0.85 && cpu_pct > 0.1) {
-				kill(getpid(), SIGSTOP);
-			}
+			stop = interrupt && cpu_pct < 0.85 && cpu_pct > 0.1;
+		} else {
+			/* No CPU data available for the first interval */
+			fprintf(stderr, "%*s", CPU_FIELD_WIDTH, "");
 		}
-
-		/* Report queue depths */
-		for (int i = 0; i < pool.tp_num_queues; i++) {
-			zstream_queue_t *q = pool.tp_queues[i];
-			fprintf(stderr, "Queue %d: %4d-%-4d  ", i,
-			    q->zq_stats.min_depth, q->zq_stats.max_depth);
-			q->zq_stats.min_depth = 999999999;
-			q->zq_stats.max_depth = 0;
-		}
-		pthread_mutex_unlock(&pool.tp_pool_mutex);
+		for (int i = 0; i < num_queues; i++)
+			fprintf(stderr, "%*s", Q_COL_WIDTH, depths[i]);
 		fprintf(stderr, "\n");
+
+		if (stop)
+			kill(getpid(), SIGSTOP);
 		cpu_jif_prior = utime + stime;
 		start_us = end_us;
 	}
