@@ -66,7 +66,7 @@ extern "C" {
  * The shared thread pool persists until the process exits.
  */
 
-#define	MAX_BATCH 32	/* The most items that can be claimed at once */
+#define	MAX_BATCH 16	/* The most items that can be claimed at once */
 
 typedef void queue_item_t;
 

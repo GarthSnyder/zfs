@@ -292,7 +292,7 @@ parallel_calc_fletcher4(int queue_length)
 	    .cs_out_size = sizeof (drr_fletcher4_t),
 	    .cs_parallel = {
 		.queue_length = queue_length,
-		.batch_budget = 256 * 1024,
+		.batch_budget = 5 * 1024 * 1024,
 		.process = chain_calc_fletcher4,
 		.cost = payload_size_as_cost
 	    }

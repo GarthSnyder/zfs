@@ -65,6 +65,7 @@
 
 #include "zstream.h"
 #include "zstream_backtrace.h"
+#include "zstream_util.h"
 
 /*
  * Watchdog timeout in seconds. A test that hits this limit is almost

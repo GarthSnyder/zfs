@@ -268,7 +268,7 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 	for (int i = 0; i < num_workers; i++) {
 		char name[32];
 		snprintf(name, sizeof (name), "chain-%d", i);
-		worker_threads[i] = safe_pthread_create(
+		worker_threads[i] = safe_create_thread(
 		    (thread_f *)zstream_chain_worker, &contexts[i],
 		    name, B_FALSE);
 	}

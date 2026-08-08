@@ -23,6 +23,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +39,7 @@
 
 #define	MIN_THREADS		6
 #define	MAX_QUEUES		16	/* Largest # simultaneously active */
-#define	ENQUEUE_DELAY_NSEC	1E4	/* Signal delay for enqueues, 10us */
+#define	ENQUEUE_DELAY_NSEC	1E5	/* Signal delay for enqueues, 200us */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			0.0001	/* No-work score threshold */
@@ -49,6 +50,8 @@
 
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
 	    (queue)->zq_params.qp_queue_length)
+
+#define MONITOR_QUEUES
 
 /*
  * A zstream_queue is a ring buffer with four indices: enqueue, claim,
@@ -133,7 +136,7 @@ struct zstream_queue {
 typedef struct {
 	pthread_mutex_t		enqueue_mutex;
 	pthread_mutex_t		delay_mutex;
-	pthread_cond_t		condition;
+	pthread_cond_t		enqueued;
 	timer_t			timer;
 	boolean_t		pending;
 	struct itimerspec	delay_nsec;
@@ -141,11 +144,11 @@ typedef struct {
 
 typedef struct {
 	pthread_mutex_t		tp_pool_mutex;
+	enqueue_control_t	tp_enqueue;
 	zstream_queue_t		*tp_queues[MAX_QUEUES];
 	int			tp_num_queues;
 	boolean_t		tp_threads_created;
 	int			tp_num_threads;
-	enqueue_control_t	tp_enqueue;
 } thread_pool_t;
 
 typedef union {
@@ -166,25 +169,47 @@ start_monitor_thread(void);
 static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 
-static void
-delayed_enqueue_send(union sigval sval)
+/*
+ * Body of the "enqueued" signal delay thread. Despite the name, this system does not
+ * delay enqueueing, just the delievery of the "enqueued" signal.
+ */
+static void *
+delayed_enqueue_send(void *nope)
 {
-	(void) sval;
+	(void) nope;
+
+	sigset_t set;
+	int which;
 	enqueue_control_t *ctl = &pool.tp_enqueue;
 
-	pthread_mutex_lock(&ctl->enqueue_mutex);
-	pthread_mutex_lock(&ctl->delay_mutex);
-	ctl->pending = B_FALSE;
-	pthread_cond_signal(&ctl->condition);
-	pthread_mutex_unlock(&ctl->delay_mutex);
-	pthread_mutex_unlock(&ctl->enqueue_mutex);
+	sigemptyset(&set);
+	sigaddset(&set, ENQUEUE_SIGNAL);
+
+	while (B_TRUE) {
+		if (sigwait(&set, &which) != 0)
+			err(1, "error sigwaiting for ENQUEUE_SIGNAL");
+		else if (which != ENQUEUE_SIGNAL)
+			errx(1, "received signal was not ENQUEUE_SIGNAL");
+		pthread_mutex_lock(&ctl->enqueue_mutex);
+		pthread_mutex_lock(&ctl->delay_mutex);
+		ctl->pending = B_FALSE;
+		pthread_cond_signal(&ctl->enqueued);
+		pthread_mutex_unlock(&ctl->delay_mutex);
+		pthread_mutex_unlock(&ctl->enqueue_mutex);
+	}
 }
 
+/*
+ * The ENQUEUE_SIGNAL signal is blocked as soon as zstream starts up.
+ * Threads created later inherit this setting, so no thread will take the
+ * signal. Once the signal transfers to the pending state, it's then
+ * detectable by sigwait().
+ */
 static inline void
 delayed_enqueue_schedule(void)
 {
-	pthread_mutex_lock(&pool.tp_enqueue.delay_mutex);
 	enqueue_control_t *ctl = &pool.tp_enqueue;
+	pthread_mutex_lock(&ctl->delay_mutex);
 	if (!ctl->pending) {
 		ctl->pending = B_TRUE;
 		if (timer_settime(ctl->timer, 0, &ctl->delay_nsec, NULL))
@@ -196,24 +221,21 @@ delayed_enqueue_schedule(void)
 static void
 enqueue_control_init(void)
 {
-	pthread_mutex_init(&pool.tp_enqueue.enqueue_mutex, NULL);
-	pthread_mutex_init(&pool.tp_enqueue.delay_mutex, NULL);
-	pthread_cond_init(&pool.tp_enqueue.condition, NULL);
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+
+	pthread_mutex_init(&ctl->enqueue_mutex, NULL);
+	pthread_mutex_init(&ctl->delay_mutex, NULL);
+	pthread_cond_init(&ctl->enqueued, NULL);
+
+	safe_create_thread(delayed_enqueue_send, NULL, "enqueue", B_TRUE);
 
 	struct sigevent sev = {
 		.sigev_notify = SIGEV_SIGNAL,
 		.sigev_signo = ENQUEUE_SIGNAL
 	};
-	pool.tp_enqueue.delay_nsec.it_value.tv_nsec = ENQUEUE_DELAY_NSEC;
-	if (timer_create(CLOCK_MONOTONIC, &sev, &pool.tp_enqueue.timer) != 0)
+	ctl->delay_nsec.it_value.tv_nsec = ENQUEUE_DELAY_NSEC;
+	if (timer_create(CLOCK_MONOTONIC, &sev, &ctl->timer) != 0)
 		err(1, "could not create enqueue signal timer");
-
-	struct sigaction sa = {
-		.sa_handler = backtrace_self,
-		.sa_flags = SA_RESTART
-	};
-	if (sigaction(THREAD_BACKTRACE_SIGNAL, &sa, NULL) != 0)
-		err(1, "backtrace sigaction failed");
 }
 
 static void
@@ -273,7 +295,7 @@ thread_pool_spinup(void)
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		char name[32];
 		snprintf(name, sizeof (name), "queue-%d", i);
-		safe_pthread_create(queue_worker, NULL, name, B_TRUE);
+		safe_create_thread(queue_worker, NULL, name, B_TRUE);
 	}
 #ifdef MONITOR_QUEUES
 	start_monitor_thread();
@@ -287,7 +309,7 @@ zstream_queue_create(zq_params_t *params)
 	VERIFY3P(params->qp_cost, !=, NULL);
 	VERIFY3U(params->qp_item_size, >, 0);
 	VERIFY3U(params->qp_queue_length, >, 0);
-	
+
 	static int next_queue_id = 0;
 
 	pthread_once(&once_control, thread_pool_init);
@@ -553,7 +575,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 		}
 		if (!queues_with_work) {
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
-			pthread_cond_wait(&pool.tp_enqueue.condition,
+			pthread_cond_wait(&pool.tp_enqueue.enqueued,
 			    &pool.tp_enqueue.enqueue_mutex);
 			pthread_mutex_lock(&pool.tp_pool_mutex);
 		} else {
@@ -569,7 +591,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			    (*queue)->zq_ix.enqueue;
 			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			if (more_here || queues_with_work > 1) {
-				pthread_cond_signal(&pool.tp_enqueue.condition);
+				pthread_cond_signal(&pool.tp_enqueue.enqueued);
 			}
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
 			pthread_mutex_unlock(&pool.tp_enqueue.enqueue_mutex);
@@ -657,7 +679,10 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
-	delayed_enqueue_schedule();
+	pthread_mutex_lock(&pool.tp_enqueue.enqueue_mutex);
+	pthread_cond_signal(&pool.tp_enqueue.enqueued);
+	pthread_mutex_unlock(&pool.tp_enqueue.enqueue_mutex);
+	// delayed_enqueue_schedule();
 }
 
 void
@@ -906,14 +931,7 @@ cpu_and_queue_monitor(void *dummy)
 static void
 start_monitor_thread(void)
 {
-	static boolean_t started = B_FALSE;
-	pthread_t monitor;
-
-	if (!started) {
-		safe_pthread_create(cpu_and_queue_monitor, NULL,
-		    "monitor", B_TRUE);
-		started = B_TRUE;
-	}
+	safe_create_thread(cpu_and_queue_monitor, NULL, "monitor", B_TRUE);
 }
 
 #endif	/* MONITOR_QUEUES */
