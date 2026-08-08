@@ -194,20 +194,33 @@ delayed_enqueue_schedule(void)
 }
 
 static void
-thread_pool_init(void)
+enqueue_control_init(void)
 {
-	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
 	pthread_mutex_init(&pool.tp_enqueue.enqueue_mutex, NULL);
 	pthread_mutex_init(&pool.tp_enqueue.delay_mutex, NULL);
 	pthread_cond_init(&pool.tp_enqueue.condition, NULL);
 
 	struct sigevent sev = {
-		.sigev_notify = SIGEV_THREAD,
-		.sigev_notify_function = delayed_enqueue_send
+		.sigev_notify = SIGEV_SIGNAL,
+		.sigev_signo = ENQUEUE_SIGNAL
 	};
 	pool.tp_enqueue.delay_nsec.it_value.tv_nsec = ENQUEUE_DELAY_NSEC;
-	if (timer_create(CLOCK_BOOTTIME, &sev, &pool.tp_enqueue.timer) != 0)
+	if (timer_create(CLOCK_MONOTONIC, &sev, &pool.tp_enqueue.timer) != 0)
 		err(1, "could not create enqueue signal timer");
+
+	struct sigaction sa = {
+		.sa_handler = backtrace_self,
+		.sa_flags = SA_RESTART
+	};
+	if (sigaction(THREAD_BACKTRACE_SIGNAL, &sa, NULL) != 0)
+		err(1, "backtrace sigaction failed");
+}
+
+static void
+thread_pool_init(void)
+{
+	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
+	enqueue_control_init();
 }
 
 /*

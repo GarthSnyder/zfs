@@ -33,6 +33,7 @@ extern "C" {
  */
 #define	WATCHDOG_SIGNAL		SIGALRM
 #define	THREAD_BACKTRACE_SIGNAL	(SIGRTMIN)
+#define	ENQUEUE_SIGNAL		(SIGTRMIN + 1)
 
 /*
  * Establishes the process-wide signal mask. Must be called before any
