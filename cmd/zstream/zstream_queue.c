@@ -127,6 +127,7 @@ struct zstream_queue {
 	zq_stats_t	zq_stats;
 	zq_params_t	zq_params;
 	boolean_t	zq_disallow_enqueue;
+	uint64_t	zq_histogram[MAX_BATCH+1];
 };
 
 typedef struct {
@@ -156,7 +157,11 @@ typedef union {
 
 static void *queue_worker(void *);
 static void *enqueue_signal_worker(void *);
+
+#ifdef MONITOR_QUEUES
 static void *cpu_and_queue_monitor(void *);
+static void print_batch_size_histogram(zstream_queue_t *);
+#endif
 
 static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
@@ -537,8 +542,6 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 	}
 }
 
-static uint64_t items_in_claimed_state = 0;  /* Used for tuning/debugging */
-
 static void *
 queue_worker(void *dummy)
 {
@@ -549,11 +552,11 @@ queue_worker(void *dummy)
 
 	while (B_TRUE) {
 		count = assign_queue_and_get_work(&queue, batch);
+		queue->zq_histogram[count]++;
 		if (count) {
 			zq_process_item_f *process =
 			    queue->zq_params.qp_process;
 			void *context = queue->zq_params.qp_context;
-			atomic_add_64(&items_in_claimed_state, count);
 			/*
 			 * Locking note: we complete the whole batch without
 			 * holding any locks. However, we can't mark items
@@ -569,7 +572,6 @@ queue_worker(void *dummy)
 				batch[i]->qs_completed = B_TRUE;
 			}
 			advance_indexes(queue);
-			atomic_sub_64(&items_in_claimed_state, count);
 			pthread_mutex_unlock(&queue->zq_mutex);
 		}
 	}
@@ -661,12 +663,10 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 		advance_indexes(queue);
 	}
 
-#ifdef MONITOR_QUEUES
 	/* Maintain queue usage data per monitor interval */
 	int depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
 	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
 	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
-#endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
 	signal_enqueue();
@@ -688,6 +688,9 @@ zstream_queue_fini(zstream_queue_t *queue) {
 static void
 zstream_queue_destroy(zstream_queue_t *queue)
 {
+#ifdef MONITOR_QUEUES
+	print_batch_size_histogram(queue);
+#endif
 	pthread_mutex_lock(&pool.tp_pool_mutex);
 
 	pthread_mutex_destroy(&queue->zq_mutex);
@@ -754,6 +757,29 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 #define	JIFFIES_PER_SEC		100
 #define	SAMPLE_DURATION_US	1000000
 #define	CPU_FIELD_WIDTH		14
+
+static void
+print_batch_size_histogram(zstream_queue_t *queue)
+{
+	int last_nonzero = 0;
+	static int lines_printed = 0;
+
+	if (lines_printed++ == 0)
+		fprintf(stderr, "\nBatch size histograms:\n");
+	for (last_nonzero = MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
+		if (queue->zq_histogram[last_nonzero] > 0)
+			break;
+	}
+	fprintf(stderr, "Queue %d: ", queue->zq_id);
+	const char *sep = "";
+	for (int i = 0; i <= last_nonzero; i++) {
+		fprintf(stderr, "%s%llu", sep,
+		    (u_longlong_t)queue->zq_histogram[i]);
+		sep = ", ";
+	}
+	fprintf(stderr, "\n");
+	fflush(stderr);
+}
 
 /*
  * Monitor queue and CPU usage from a separate thread. This is all
