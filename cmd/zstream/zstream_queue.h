@@ -63,7 +63,8 @@ extern "C" {
  * The shared thread pool persists until the process exits.
  */
 
-#define	MAX_BATCH 32	/* The most items that can be claimed at once */
+#define	MAX_BATCH	128	/* Most items claimable at once */
+#define	MAX_QUEUES	16	/* Largest # of simultaneously active queues */
 
 typedef void queue_item_t;
 
@@ -79,15 +80,6 @@ typedef void
 zq_process_item_f(queue_item_t *item, void *context);
 
 /*
- * Set the number of threads to be spawned for queue work. Since all queues
- * share a thread pool, this value affects all queues. The value must be set
- * before any queues are created. By default, one thread is spawned for
- * every CPU core.
- */
-void
-zstream_queue_set_num_threads(uint_t num_threads);
-
-/*
  * Create a queue. The qp_context field is passed to the cost and processing
  * functions and is not examined by the queue itself.
  */
@@ -97,12 +89,20 @@ typedef struct {
 	zq_estimate_cost_f	*qp_cost;
 	void			*qp_context;
 	size_t			qp_item_size;
-	size_t			qp_batch_budget;
 	size_t			qp_queue_length;
 } zq_params_t;
 
 zstream_queue_t *
 zstream_queue_create(zq_params_t *params);
+
+/*
+ * Set the number of threads to be spawned for queue work. Since all queues
+ * share a thread pool, this value affects all queues. The value must be set
+ * before any queues are created. By default, one thread is spawned for
+ * every CPU core.
+ */
+void
+zstream_queue_set_num_threads(uint_t num_threads);
 
 /*
  * Submit a work item. Blocks if the queue is full. The work item is

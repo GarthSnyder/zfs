@@ -19,6 +19,8 @@
 #include <err.h>
 #include <pthread.h>
 #include <sched.h>
+#include <signal.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,13 +29,16 @@
 #include <sys/random.h>
 #include <sys/stdtypes.h>
 #include <sys/sysmacros.h>
+#include <time.h>
 #include <unistd.h>
 
+#include "zstream.h"
+#include "zstream_monitor.h"
 #include "zstream_queue.h"
 #include "zstream_util.h"
 
-#define	MIN_THREADS 	6
-#define	MAX_QUEUES 	16	/* Largest # of queues simultaneously active */
+#define	MIN_THREADS		6
+#define	ENQUEUE_DELAY_NSEC	1E5	/* Signal delay for enqueues, 100us */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			0.0001	/* No-work score threshold */
@@ -69,15 +74,12 @@
  *
  * THREAD SAFETY STRATEGY
  *
- * There are three types of lock:
+ * There are four types of lock:
  *
  * - One global lock that gates changes to the thread pool and queue cohort
  * - A second global lock associated with the shared "enqueued" condition
+ * - A third global lock that protects the enqueue signal delay
  * - One lock for each queue
- *
- * Although the "enqueued" condition and its associated lock are stored as
- * part of the global thread pool, they are logically separate from the pool
- * itself.
  *
  * For the most part, locking is straightforward. Any operation that adds or
  * removes queues or threads should hold the pool lock. Any operation that
@@ -89,7 +91,10 @@
  * Several operations require multiple locks. In these cases, a standardized
  * locking order is used to avoid deadlocks:
  *
- *   enqueue -> pool -> queue
+ *   enqueue -> pool -> queue -> delay
+ *
+ * zstream_monitor's registry mutex is a leaf lock that may be acquired
+ * while holding any of the above; see zstream_monitor.c.
  */
 
 typedef struct {
@@ -117,23 +122,31 @@ typedef struct {
 } zq_stats_t;
 
 struct zstream_queue {
-	queue_slot_t	*zq_slots;
 	pthread_mutex_t	zq_mutex;
-	zq_indices_t	zq_ix;
 	zq_conditions_t	zq_cond;
-	zq_params_t	zq_params;
+	zq_indices_t	zq_ix;
+	queue_slot_t	*zq_slots;
 	zq_stats_t	zq_stats;
+	zq_params_t	zq_params;
 	boolean_t	zq_disallow_enqueue;
 };
 
 typedef struct {
-	pthread_mutex_t	tp_pool_mutex;
-	pthread_mutex_t tp_enqueue_mutex;
-	pthread_cond_t	tp_enqueued;
-	zstream_queue_t	*tp_queues[MAX_QUEUES];
-	int		tp_num_queues;
-	boolean_t	tp_threads_created;
-	int		tp_num_threads;
+	pthread_mutex_t		enqueue_mutex;
+	pthread_mutex_t		delay_mutex;
+	pthread_cond_t		enqueued;
+	timer_t			timer;
+	boolean_t		pending;
+	struct itimerspec	delay_nsec;
+} enqueue_control_t;
+
+typedef struct {
+	pthread_mutex_t		tp_pool_mutex;
+	enqueue_control_t	tp_enqueue;
+	zstream_queue_t		*tp_queues[MAX_QUEUES];
+	int			tp_num_queues;
+	boolean_t		tp_threads_created;
+	int			tp_num_threads;
 } thread_pool_t;
 
 typedef union {
@@ -146,20 +159,78 @@ typedef union {
 static void *
 queue_worker(void *);
 
-#ifdef MONITOR_QUEUES
-static void *
-cpu_and_queue_monitor(void *);
-#endif
-
 static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
+
+/*
+ * Body of the "enqueued" signal delay thread. Note that this system does
+ * not delay enqueueing, just the delievery of the "enqueued" signal.
+ */
+static void *
+delayed_enqueue_signal(void *nope)
+{
+	(void) nope;
+
+	sigset_t set;
+	int which;
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+
+	sigemptyset(&set);
+	sigaddset(&set, ENQUEUE_SIGNAL);
+
+	while (B_TRUE) {
+		if (sigwait(&set, &which) != 0)
+			err(1, "error sigwaiting for ENQUEUE_SIGNAL");
+		else if (which != ENQUEUE_SIGNAL)
+			errx(1, "received signal was not ENQUEUE_SIGNAL");
+		pthread_mutex_lock(&ctl->enqueue_mutex);
+		pthread_mutex_lock(&ctl->delay_mutex);
+		ctl->pending = B_FALSE;
+		pthread_cond_signal(&ctl->enqueued);
+		pthread_mutex_unlock(&ctl->delay_mutex);
+		pthread_mutex_unlock(&ctl->enqueue_mutex);
+	}
+}
+
+/*
+ * The ENQUEUE_SIGNAL signal is blocked as soon as zstream starts up.
+ * Threads created later inherit this setting, so no thread will take the
+ * signal. Once the signal transfers to the pending state, it's then
+ * detectable by sigwait().
+ */
+static inline void
+schedule_delayed_enqueue_signal(void)
+{
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+	pthread_mutex_lock(&ctl->delay_mutex);
+	if (!ctl->pending) {
+		ctl->pending = B_TRUE;
+		if (timer_settime(ctl->timer, 0, &ctl->delay_nsec, NULL))
+			err(1, "could not set timer value");
+	}
+	pthread_mutex_unlock(&pool.tp_enqueue.delay_mutex);
+}
 
 static void
 thread_pool_init(void)
 {
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+
 	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
-	pthread_mutex_init(&pool.tp_enqueue_mutex, NULL);
-	pthread_cond_init(&pool.tp_enqueued, NULL);
+
+	pthread_mutex_init(&ctl->enqueue_mutex, NULL);
+	pthread_mutex_init(&ctl->delay_mutex, NULL);
+	pthread_cond_init(&ctl->enqueued, NULL);
+
+	safe_create_thread(delayed_enqueue_signal, NULL, "enqueue", B_TRUE);
+
+	struct sigevent sev = {
+		.sigev_notify = SIGEV_SIGNAL,
+		.sigev_signo = ENQUEUE_SIGNAL
+	};
+	ctl->delay_nsec.it_value.tv_nsec = ENQUEUE_DELAY_NSEC;
+	if (timer_create(CLOCK_MONOTONIC, &sev, &ctl->timer) != 0)
+		err(1, "could not create enqueue signal timer");
 }
 
 /*
@@ -463,14 +534,14 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * This sequence dictates the lock acquisition ordering for all of
  * zstream_queue:
  *
- *     enqueue -> pool -> queue
+ *     enqueue -> pool -> queue -> delay
  *
  * If everyone follows that order, deadlocks should not occur.
  */
 static int
 assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 {
-	pthread_mutex_lock(&pool.tp_enqueue_mutex);
+	pthread_mutex_lock(&pool.tp_enqueue.enqueue_mutex);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
 
 	while (B_TRUE) {
@@ -488,8 +559,8 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 		}
 		if (!queues_with_work) {
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
-			pthread_cond_wait(&pool.tp_enqueued,
-			    &pool.tp_enqueue_mutex);
+			pthread_cond_wait(&pool.tp_enqueue.enqueued,
+			    &pool.tp_enqueue.enqueue_mutex);
 			pthread_mutex_lock(&pool.tp_pool_mutex);
 		} else {
 			int q = select_stochastic(weights, num_queues);
@@ -504,10 +575,10 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			    (*queue)->zq_ix.enqueue;
 			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			if (more_here || queues_with_work > 1) {
-				pthread_cond_signal(&pool.tp_enqueued);
+				pthread_cond_signal(&pool.tp_enqueue.enqueued);
 			}
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
-			pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+			pthread_mutex_unlock(&pool.tp_enqueue.enqueue_mutex);
 			return (count);
 		}
 	}
@@ -592,9 +663,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
-	pthread_mutex_lock(&pool.tp_enqueue_mutex);
-	pthread_cond_signal(&pool.tp_enqueued);
-	pthread_mutex_unlock(&pool.tp_enqueue_mutex);
+	schedule_delayed_enqueue_signal();
 }
 
 void
@@ -676,33 +745,39 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 
 #ifdef	MONITOR_QUEUES
 
-#define	JIFFIES_PER_SEC 100
-#define	SAMPLE_DURATION_US 1000000
+#define	JIFFIES_PER_SEC		100
+#define	SAMPLE_DURATION_US	1000000
+#define	CPU_FIELD_WIDTH		14
 
 /*
  * Monitor queue and CPU usage from a separate thread. This is all
  * Linux-specific, but it's needed only while tuning queue lengths and batch
- * sizes.
+ * sizes. Prints the minimum and maximum queue depth observed during each period.
+ *
+ * Example output:
+ *
+ *     CPU: 99.85%   Queue 0:  745-1024   Queue 1:  183-256
  */
 static void *
 cpu_and_queue_monitor(void *dummy)
 {
 	(void) dummy;
 	uint64_t period = SAMPLE_DURATION_US;
-	struct timespec clock = {};
-	uint64_t start_us, end_us, delta_jif;
+	struct timespec clock = {0};
+	uint64_t start_us, end_us;
 	uint64_t cpu_jif_prior = 0;
-	uint64_t delta_cpu_jif;
+	uint64_t delta_jif, delta_cpu_jif;
 	long unsigned int utime, stime;
 	char buff[1024];
 	boolean_t interrupt = B_FALSE;
 	FILE *fp;
 
-	/* Wait a few seconds for things to settle into steady state */
-	usleep(3 * 1000 * 1000);
+	fprintf(stderr, "Queue depths:\n");
 
 	while (B_TRUE) {
+
 		usleep(period);
+
 		fp = fopen("/proc/self/stat", "r");
 		VERIFY3P(fp, !=, NULL);
 		VERIFY3P(fgets(buff, sizeof (buff), fp), !=, NULL);
@@ -716,33 +791,49 @@ cpu_and_queue_monitor(void *dummy)
 			p++;
 		}
 		VERIFY3U(sscanf(p, "%lu %lu", &utime, &stime), ==, 2);
+
 		pthread_mutex_lock(&pool.tp_pool_mutex);
+
 		clock_gettime(CLOCK_MONOTONIC, &clock);
 		end_us = clock.tv_sec * 1000000 + clock.tv_nsec / 1000;
-		if (cpu_jif_prior) {
+
+		boolean_t stop = B_FALSE;
+		if (cpu_jif_prior > 0) {
 			delta_cpu_jif = utime + stime - cpu_jif_prior;
 			delta_jif = (end_us - start_us) /
 			    (JIFFIES_PER_SEC * 100);
 			double cpu_pct = (double)delta_cpu_jif /
 			    (pool.tp_num_threads * delta_jif);
-			fprintf(stderr, "CPU: %.2f%%  ", 100 * cpu_pct);
-			/* Stop to investigate low CPU usage */
-			if (interrupt && cpu_pct < 0.85 && cpu_pct > 0.1) {
-				kill(getpid(), SIGSTOP);
-			}
+			cpu_pct = MIN(cpu_pct, 0.9999); /* Don't print 100% */
+			fprintf(stderr, "CPU: %5.2f%%   ", 100 * cpu_pct);
+			/* Stop to investigate low CPU usage? */
+			stop = interrupt && cpu_pct < 0.85 && cpu_pct > 0.1;
+		} else {
+			/* No CPU data available for the first interval */
+			fprintf(stderr, "%*s", CPU_FIELD_WIDTH, "");
 		}
 
-		/* Report queue depths */
 		for (int i = 0; i < pool.tp_num_queues; i++) {
 			zstream_queue_t *q = pool.tp_queues[i];
-			fprintf(stderr, "Queue %d: %d-%d  ", i,
-			    q->zq_stats.min_depth, q->zq_stats.max_depth);
-			q->zq_stats.min_depth = 999999999;
+			pthread_mutex_lock(&q->zq_mutex);
+			int min = q->zq_stats.min_depth;
+			int max = q->zq_stats.max_depth;
+			if (min > max)
+				min = max = 0;
+			fprintf(stderr, "Queue %d: %4d-%-4d   ", q->zq_id, min, max);
+			q->zq_stats.min_depth = INT_MAX;
 			q->zq_stats.max_depth = 0;
+			pthread_mutex_unlock(&q->zq_mutex);
 		}
 
 		pthread_mutex_unlock(&pool.tp_pool_mutex);
+
 		fprintf(stderr, "\n");
+		fflush(stderr);
+
+		if (stop)
+			kill(getpid(), SIGSTOP);
+
 		cpu_jif_prior = utime + stime;
 		start_us = end_us;
 	}
