@@ -38,6 +38,7 @@
 #include "zstream_util.h"
 
 #define	MIN_THREADS		6
+#define MAX_QUEUES		16	/* Maximum simultaneously active */
 #define	ENQUEUE_DELAY_NSEC	1E5	/* Signal delay for enqueues, 100us */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
