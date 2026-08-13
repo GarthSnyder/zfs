@@ -37,7 +37,7 @@
 #include "zstream_util.h"
 
 #define	MIN_THREADS		6
-#define MAX_QUEUES		16	/* Maximum simultaneously active */
+#define	MAX_QUEUES		16	/* Maximum simultaneously active */
 #define	ENQUEUE_DELAY_NSEC	1E5	/* Signal delay for enqueues, 100us */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
@@ -81,10 +81,10 @@
  * - A third global lock that protects the enqueue signal delay
  * - One lock for each queue
  *
- * For the most part, locking is straightforward. Any operation that adds or
- * removes queues or threads should hold the pool lock. Any operation that
- * moves a queue's indices should hold the queue lock. Any thread waiting
- * for work should wait on the "enqueued" condition.
+ * Any operation that adds or removes queues or threads should hold the
+ * pool lock. Any operation that moves a queue's indices should hold the
+ * queue lock. Any thread waiting for work should wait on the "enqueued"
+ * condition.
  *
  * Worker threads hold no locks while they are actually processing items.
  *
@@ -92,9 +92,6 @@
  * locking order is used to avoid deadlocks:
  *
  *   enqueue -> pool -> queue -> delay
- *
- * zstream_monitor's registry mutex is a leaf lock that may be acquired
- * while holding any of the above; see zstream_monitor.c.
  */
 
 typedef struct {
@@ -122,6 +119,7 @@ typedef struct {
 } zq_stats_t;
 
 struct zstream_queue {
+	int		zq_id;
 	pthread_mutex_t	zq_mutex;
 	zq_conditions_t	zq_cond;
 	zq_indices_t	zq_ix;
@@ -156,11 +154,9 @@ typedef union {
 	void		(*fp)(void);
 } worst_case_alignment_t;
 
-static void *
-queue_worker(void *);
-
-static void *
-enqueue_signal_worker(void *);
+static void *queue_worker(void *);
+static void *enqueue_signal_worker(void *);
+static void *cpu_and_queue_monitor(void *);
 
 static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
@@ -247,6 +243,8 @@ thread_pool_spinup(void)
 zstream_queue_t *
 zstream_queue_create(zq_params_t *params)
 {
+	static int next_queue_id = 0;
+
 	VERIFY3P(params->qp_process, !=, NULL);
 	VERIFY3P(params->qp_cost, !=, NULL);
 	VERIFY3U(params->qp_item_size, >, 0);
@@ -264,6 +262,7 @@ zstream_queue_create(zq_params_t *params)
 	pool.tp_queues[pool.tp_num_queues] = queue;
 
 	*queue = (zstream_queue_t) {
+		.zq_id = next_queue_id++,
 		.zq_params = *params,
 		.zq_slots = safe_malloc(params->qp_queue_length *
 		    (sizeof (queue_slot_t)))
@@ -579,7 +578,7 @@ queue_worker(void *dummy)
 
 /*
  * Body of the "enqueued" signal delay thread. This system does not delay
- * enqueueing, just the delievery of the "enqueued" signal.
+ * enqueueing itself, just the delievery of the "enqueued" signal.
  *
  * The ENQUEUE_SIGNAL signal is blocked as soon as zstream starts up.
  * Threads created later inherit this setting, so no thread will take the
@@ -758,8 +757,9 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 
 /*
  * Monitor queue and CPU usage from a separate thread. This is all
- * Linux-specific, but it's needed only while tuning queue lengths and batch
- * sizes. Prints the minimum and maximum queue depth observed during each period.
+ * Linux-specific, but it's needed only while tuning queue lengths and
+ * batch sizes. Prints the minimum and maximum queue depth observed
+ * during each period.
  *
  * Example output:
  *
@@ -827,7 +827,8 @@ cpu_and_queue_monitor(void *dummy)
 			int max = q->zq_stats.max_depth;
 			if (min > max)
 				min = max = 0;
-			fprintf(stderr, "Queue %d: %4d-%-4d   ", q->zq_id, min, max);
+			fprintf(stderr, "Queue %d: %4d-%-4d   ",
+			    q->zq_id, min, max);
 			q->zq_stats.min_depth = INT_MAX;
 			q->zq_stats.max_depth = 0;
 			pthread_mutex_unlock(&q->zq_mutex);
