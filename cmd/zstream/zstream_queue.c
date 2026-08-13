@@ -33,7 +33,6 @@
 #include <unistd.h>
 
 #include "zstream.h"
-#include "zstream_monitor.h"
 #include "zstream_queue.h"
 #include "zstream_util.h"
 
@@ -160,57 +159,11 @@ typedef union {
 static void *
 queue_worker(void *);
 
+static void *
+enqueue_signal_worker(void *);
+
 static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
-
-/*
- * Body of the "enqueued" signal delay thread. Note that this system does
- * not delay enqueueing, just the delievery of the "enqueued" signal.
- */
-static void *
-delayed_enqueue_signal(void *nope)
-{
-	(void) nope;
-
-	sigset_t set;
-	int which;
-	enqueue_control_t *ctl = &pool.tp_enqueue;
-
-	sigemptyset(&set);
-	sigaddset(&set, ENQUEUE_SIGNAL);
-
-	while (B_TRUE) {
-		if (sigwait(&set, &which) != 0)
-			err(1, "error sigwaiting for ENQUEUE_SIGNAL");
-		else if (which != ENQUEUE_SIGNAL)
-			errx(1, "received signal was not ENQUEUE_SIGNAL");
-		pthread_mutex_lock(&ctl->enqueue_mutex);
-		pthread_mutex_lock(&ctl->delay_mutex);
-		ctl->pending = B_FALSE;
-		pthread_cond_signal(&ctl->enqueued);
-		pthread_mutex_unlock(&ctl->delay_mutex);
-		pthread_mutex_unlock(&ctl->enqueue_mutex);
-	}
-}
-
-/*
- * The ENQUEUE_SIGNAL signal is blocked as soon as zstream starts up.
- * Threads created later inherit this setting, so no thread will take the
- * signal. Once the signal transfers to the pending state, it's then
- * detectable by sigwait().
- */
-static inline void
-schedule_delayed_enqueue_signal(void)
-{
-	enqueue_control_t *ctl = &pool.tp_enqueue;
-	pthread_mutex_lock(&ctl->delay_mutex);
-	if (!ctl->pending) {
-		ctl->pending = B_TRUE;
-		if (timer_settime(ctl->timer, 0, &ctl->delay_nsec, NULL))
-			err(1, "could not set timer value");
-	}
-	pthread_mutex_unlock(&pool.tp_enqueue.delay_mutex);
-}
 
 static void
 thread_pool_init(void)
@@ -223,7 +176,7 @@ thread_pool_init(void)
 	pthread_mutex_init(&ctl->delay_mutex, NULL);
 	pthread_cond_init(&ctl->enqueued, NULL);
 
-	safe_create_thread(delayed_enqueue_signal, NULL, "enqueue", B_TRUE);
+	safe_create_thread(enqueue_signal_worker, NULL, "enqueue", B_TRUE);
 
 	struct sigevent sev = {
 		.sigev_notify = SIGEV_SIGNAL,
@@ -625,6 +578,59 @@ queue_worker(void *dummy)
 }
 
 /*
+ * Body of the "enqueued" signal delay thread. This system does not delay
+ * enqueueing, just the delievery of the "enqueued" signal.
+ *
+ * The ENQUEUE_SIGNAL signal is blocked as soon as zstream starts up.
+ * Threads created later inherit this setting, so no thread will take the
+ * signal. Once the signal transfers to the pending state, it's then
+ * detectable by sigwait().
+ */
+static void *
+enqueue_signal_worker(void *nope)
+{
+	(void) nope;
+
+	sigset_t set;
+	int which;
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+
+	sigemptyset(&set);
+	sigaddset(&set, ENQUEUE_SIGNAL);
+
+	while (B_TRUE) {
+		if (sigwait(&set, &which) != 0)
+			err(1, "error sigwaiting for ENQUEUE_SIGNAL");
+		else if (which != ENQUEUE_SIGNAL)
+			errx(1, "received signal was not ENQUEUE_SIGNAL");
+		pthread_mutex_lock(&ctl->enqueue_mutex);
+		pthread_mutex_lock(&ctl->delay_mutex);
+		ctl->pending = B_FALSE;
+		pthread_cond_signal(&ctl->enqueued);
+		pthread_mutex_unlock(&ctl->delay_mutex);
+		pthread_mutex_unlock(&ctl->enqueue_mutex);
+	}
+}
+
+/*
+ * Schedule the "enqueued" signal to be sent in ENQUEUE_DELAY_NSEC ns.
+ * Deferring the signal allows a separate thread to handle it, so the
+ * enqueuer can return immediately.
+ */
+static inline void
+signal_enqueue(void)
+{
+	enqueue_control_t *ctl = &pool.tp_enqueue;
+	pthread_mutex_lock(&ctl->delay_mutex);
+	if (!ctl->pending) {
+		ctl->pending = B_TRUE;
+		if (timer_settime(ctl->timer, 0, &ctl->delay_nsec, NULL))
+			err(1, "could not set timer value");
+	}
+	pthread_mutex_unlock(&pool.tp_enqueue.delay_mutex);
+}
+
+/*
  * Implements both _enqueue and _fini. item == NULL for fini.
  */
 void
@@ -664,7 +670,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
-	schedule_delayed_enqueue_signal();
+	signal_enqueue();
 }
 
 void

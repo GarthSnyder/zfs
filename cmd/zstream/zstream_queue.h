@@ -88,6 +88,7 @@ typedef struct {
 	zq_estimate_cost_f	*qp_cost;
 	void			*qp_context;
 	size_t			qp_item_size;
+	size_t			qp_batch_budget;
 	size_t			qp_queue_length;
 } zq_params_t;
 
