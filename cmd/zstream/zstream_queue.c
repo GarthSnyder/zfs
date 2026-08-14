@@ -120,14 +120,14 @@ typedef struct {
 
 struct zstream_queue {
 	int		zq_id;
-	pthread_mutex_t	zq_mutex;
-	zq_conditions_t	zq_cond;
-	zq_indices_t	zq_ix;
 	queue_slot_t	*zq_slots;
-	zq_stats_t	zq_stats;
+	pthread_mutex_t	zq_mutex;
+	zq_indices_t	zq_ix;
+	zq_conditions_t	zq_cond;
 	zq_params_t	zq_params;
+	zq_stats_t	zq_stats;
 	boolean_t	zq_disallow_enqueue;
-	uint64_t	zq_histogram[MAX_BATCH+1];
+	uint64_t	zq_histogram[MAX_BATCH+1];	/* Batch sizes */
 };
 
 typedef struct {
