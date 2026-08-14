@@ -580,7 +580,7 @@ queue_worker(void *dummy)
 
 /*
  * Body of the "enqueued" signal delay thread. This system does not delay
- * enqueueing itself, just the delievery of the "enqueued" signal.
+ * enqueueing itself, just the delivery of the "enqueued" signal.
  *
  * The ENQUEUE_SIGNAL signal is blocked as soon as zstream starts up.
  * Threads created later inherit this setting, so no thread will take the
