@@ -53,8 +53,6 @@
 	    (queue)->zq_params.qp_queue_length)
 
 /*
- * OVERVIEW
- *
  * A zstream_queue is a ring buffer with four indexes: enqueue, claim,
  * complete, and dequeue, in that order. No index can move beyond its
  * preceding index. Every interval between indexes contains work items in a
@@ -72,9 +70,9 @@
  *
  * - All queues share one thread pool, so idle threads are not bound to any
  * particular queue. Instead of having queue-specific "enqueued" conditions,
- * queues share a centralized dispatch system that has several conditions of
- * its own. On being awakened, worker threads assign themselves to a queue
- * through a scoring mechanism described in the comments at score_queue().
+ * queues share a centralized dispatch system. On being awakened, worker
+ * threads assign themselves to a queue through a scoring mechanism
+ * described in the comments at score_queue().
  *
  * LOCKING
  *
@@ -106,16 +104,13 @@
  * to wake up and assess the current state.
  *
  * 3) Enqueues. These are batched. ENQUEUE_DELAY_NSEC after an enqueue (on
- * any queue), the dispatcher() awakes a worker.
+ * any queue), the dispatch thread wakes up a worker.
  *
- * 4) A backup heartbeat. Prior versions of this code fussed about ensuring
- * that no new-work signal could possibly be dropped, at a nontrivial
- * expense of time and complexity. In this version, the edge cases (which
- * generally won't occur at all) are handled by a backup heartbeat
- * implemented by heartbeat_worker(). The heartbeat ensures that dispatch
- * loops happen at least once every HEARBEAT_NSEC while queues are active.
- * As long as things are running smoothly, the heartbeat does not trigger at
- * all.
+ * 4) A backup heartbeat that jump-starts normal dispatching if it has
+ * stalled. It's theoretically possible for an enqueue notification to be
+ * overlooked because of time skew. Rather than trying to ensure that this
+ * pattern doesn't occur (which is expensive), we monitor and correct. In
+ * normal operation, the heartbeat does not trigger at all.
  *
  * Two atomics keep major thoroughfares off the pool lock:
  *
@@ -125,8 +120,7 @@
  * fruitful. This value can be out of date, but at worst, any overlooked
  * items are bundled into the next dispatch loop.
  *
- * tp_generation counts dispatch loops. It's the basis on which the
- * heartbeat thread requests dispatches.
+ * tp_generation counts dispatch loops. It's part of the heartbeat monitor.
  */
 
 typedef struct {
@@ -165,14 +159,6 @@ struct zstream_queue {
 	uint64_t	zq_histogram[MAX_BATCH+1];	/* Batch sizes */
 };
 
-/*
- * The three conditions all use tp_pool_mutex. Each has exactly one kind of
- * waiter, named in the comment beside it.
- *
- * tp_unclaimed, tp_generation and tp_beat_requested are read without the
- * pool mutex and so are touched only through the atomic_*_64 interfaces.
- * Everything else here requires tp_pool_mutex.
- */
 typedef struct {
 	pthread_mutex_t		tp_pool_mutex;
 	pthread_cond_t		tp_wake_worker;		/* Awaited by workers */
@@ -205,8 +191,8 @@ static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 
 /*
- * Both the dispatch timer and the heartbeat need sub-millisecond accuracy.
- * POSIX timers on FreeBSD don't implement that, but nanosleep() works fine.
+ * The dispatch timer needs sub-millisecond accuracy. POSIX timers on
+ * FreeBSD don't implement that, but nanosleep() works fine.
  */
 static void
 sleep_nsec(uint64_t nsec)
@@ -356,11 +342,11 @@ zstream_queue_create(zq_params_t *params)
  * - Whenever an item of cost 0 is enqueued
  *
  * Strictly speaking, advancing on claiming a batch is not logically
- * necessary. However, the claimer already holds the queue mutex, and
- * it's in our interest to make completed items available for dequeueing
- * as expeditiously as possible.
+ * necessary. However, the claimer already holds the queue mutex, and it's
+ * in our interest to make completed items available for dequeueing as
+ * expeditiously as possible.
  *
- * It's also expedient to sweep the "claim" index if we can. This is not
+ * Sweeping of the "claim" index is also an optimization. It is not
  * necessary for correctness. However, if we don't do it here, it can only
  * be done by threads as they claim jobs to work on. In some cases, not
  * advancing the "claim" index here can result in an empty batch and a
@@ -372,11 +358,15 @@ static inline void
 advance_indexes(zstream_queue_t *queue)
 {
 	boolean_t any_completed = B_FALSE;
+	uint64_t claimed = 0;
 
 	while (queue->zq_ix.claim < queue->zq_ix.enqueue &&
 	    Q_SLOT(queue, queue->zq_ix.claim).qs_completed) {
 		queue->zq_ix.claim++;
-		atomic_dec_64(&pool.tp_unclaimed);
+		claimed++;
+	}
+	if (claimed > 0) {
+		atomic_sub_64(&pool.tp_unclaimed, claimed);
 	}
 	while (queue->zq_ix.complete < queue->zq_ix.claim &&
 	    Q_SLOT(queue, queue->zq_ix.complete).qs_completed) {
@@ -389,11 +379,10 @@ advance_indexes(zstream_queue_t *queue)
 }
 
 /*
- * This function scores a queue according to its need for workers. Higher is
- * better. The scoring tries to assign threads to queues that are running
- * out of space for new enqueuements or that have little completed work
- * available to dequeue. The broader goal is to try to avoid pipeline
- * stalls.
+ * Score a queue according to its need for workers. Higher is better. The
+ * scoring tries to assign threads to queues that are running out of space
+ * for new enqueuements or that have little completed work available to
+ * dequeue. The broader goal is to try to avoid pipeline stalls.
  *
  * Two measures are used for scoring. The "open score" is 1/M where M is the
  * number of slots available to receive new items. The "dequeue score" is
@@ -406,28 +395,6 @@ advance_indexes(zstream_queue_t *queue)
  * threads to queues that have no work.
  *
  * Locking: the caller must hold the thread pool mutex and the queue mutex.
- * Several corollaries:
- *
- * 1) Only one thread may score queues at a time.
- *
- * 2) Worker threads can still complete work during the process of scoring
- * all queues, so there will likely be time skew among scores.
- *
- * 3) If a queue score is stale, it will always err on the side of
- * overstating the amount of work that a queue has available. This is fine
- * because at worst, a thread is assigned to a no-work queue and loops
- * immediately.
- *
- * 4) Understatement is possible, and is tolerated by design. Enqueueing
- * takes only the queue mutex, so a queue can be scored as empty and then
- * receive work while the scorer is still looking at other queues. The
- * scorer concludes there is nothing to do anywhere and parks, even though
- * by then there is. Excluding that race would mean holding a global lock
- * across every enqueue, which is a real cost on the hottest path in the
- * system to buy a guarantee we do not need: the heartbeat notices the
- * stalled generation within HEARTBEAT_NSEC and wakes somebody. We pay a
- * bounded latency on a rare race instead of a serialization penalty on
- * every enqueue.
  */
 static inline double
 score_queue(zstream_queue_t *queue)
@@ -533,7 +500,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 /*
  * Threads are assigned to a queue on each loop so they can be shifted
  * dynamically to follow available work. Idle threads will typically be
- * awaiting tp_wake_worker within this function.
+ * waiting on the tp_wake_worker condition within this function.
  *
  * If tp_unclaimed is 0, we can skip queue scoring entirely. Because of time
  * skew in reading this value, and because of time skew among queue scores,
@@ -544,9 +511,9 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * the event of trouble.
  *
  * Locking: we hold the pool mutex throughout, both to keep a queue from
- * being destroyed out from under us while we score or claim from it, and
- * because it is the mutex for tp_work_available. Individual queues are
- * locked for only as long as it takes to score or claim from them.
+ * being destroyed out from under us while we score it or claim from it, and
+ * because it is the mutex for tp_wake_worker. Individual queues are locked
+ * for only as long as it takes to score or claim from them.
  */
 static int
 assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
@@ -630,10 +597,10 @@ queue_worker(void *dummy)
 }
 
 /*
- * Body of the enqueue pacing thread, which converts a request from
+ * The enqueue notification pacing thread, which converts a request from
  * request_dispatch() into a worker wakeup ENQUEUE_DELAY_NSEC later. The
- * delay facilitates larger batch sizes an keeps enqueuers from having to
- * lock the pool.
+ * delay facilitates larger batch sizes and keeps enqueuers on the fast
+ * path.
  */
 static void *
 dispatch_worker(void *nope)
@@ -653,10 +620,9 @@ dispatch_worker(void *nope)
 }
 
 /*
- * Body of the heartbeat thread. It samples tp_generation once per
- * HEARTBEAT_NSEC and intervenes only if no dispatch has occurred in the
- * meantime and there is still unclaimed work. That combination that a
- * dispatch notification has gone unnoticed.
+ * This is the heartbeat thread, which samples tp_generation once per HEARTBEAT_NSEC
+ * and intervenes only if 1) no dispatch has occurred and 2) there is still
+ * unclaimed work.
  */
 static void *
 heartbeat_worker(void *nope)
@@ -724,10 +690,12 @@ zstream_queue_fini(zstream_queue_t *queue) {
 /*
  * This function is not public. The only way to destroy a queue through the
  * public API is to call zstream_queue_fini(), wait for all items to be
- * processed, and then dequeue all items.
+ * processed, and then dequeue all items. As a consequence, threads are
+ * entitled to assume that any queue with unprocessed work will not be
+ * removed without locking the pool mutex.
  *
- * Locking: the caller must NOT hold the queue lock. The pool mutex is
- * held while destroying the queue.
+ * Locking: the caller must NOT hold the queue lock. The pool mutex is held
+ * while destroying the queue.
  */
 static void
 zstream_queue_destroy(zstream_queue_t *queue)
