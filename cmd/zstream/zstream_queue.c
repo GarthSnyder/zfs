@@ -55,9 +55,9 @@
 /*
  * OVERVIEW
  *
- * A zstream_queue is a ring buffer with four indexes: enqueue, claim,
+ * A zstream_queue is a ring buffer with four indices: enqueue, claim,
  * complete, and dequeue, in that order. No index can move beyond its
- * preceding index. Every interval between indexes contains work items in a
+ * preceding index. Every interval between indices contains work items in a
  * particular state: enqueued, claimed for work, or completed. Items never
  * leave the ring buffer, so FIFO order is guaranteed on dequeueing.
  *
@@ -87,7 +87,7 @@
  * - One lock for each queue
  *
  * Any operation that adds or removes queues or threads should hold the pool
- * lock. Any operation that moves a queue's indexes should hold the queue
+ * lock. Any operation that moves a queue's indices should hold the queue
  * lock. Any thread waiting for work waits on tp_wake_worker.
  *
  * Worker threads hold no locks while they are actually processing items.
@@ -141,7 +141,7 @@ typedef struct {
 	uint64_t	claim;
 	uint64_t	complete;
 	uint64_t	dequeue;
-} zq_indexes_t;
+} zq_indices_t;
 
 typedef struct {
 	pthread_cond_t	completed;
@@ -157,7 +157,7 @@ struct zstream_queue {
 	int		zq_id;
 	queue_slot_t	*zq_slots;
 	pthread_mutex_t	zq_mutex;
-	zq_indexes_t	zq_ix;
+	zq_indices_t	zq_ix;
 	zq_conditions_t	zq_cond;
 	zq_params_t	zq_params;
 	zq_stats_t	zq_stats;
@@ -335,7 +335,7 @@ zstream_queue_create(zq_params_t *params)
 }
 
 /*
- * Try to advance the "claim" and "complete" indexes as far as possible by
+ * Try to advance the "claim" and "complete" indices as far as possible by
  * examining the qs_completed flag on each item. This can't be done directly
  * by the threads that complete work, for a couple of reasons:
  *
@@ -369,7 +369,7 @@ zstream_queue_create(zq_params_t *params)
  * Locking: the caller must hold the queue mutex.
  */
 static inline void
-advance_indexes(zstream_queue_t *queue)
+advance_indices(zstream_queue_t *queue)
 {
 	boolean_t any_completed = B_FALSE;
 
@@ -526,7 +526,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 	if (passed > 0) {
 		atomic_sub_64(&pool.tp_unclaimed, passed);
 	}
-	advance_indexes(queue);
+	advance_indices(queue);
 	return (count);
 }
 
@@ -612,7 +612,7 @@ queue_worker(void *dummy)
 			 * We complete the batch without holding any locks.
 			 * However, we can't mark items completed without
 			 * holding the queue lock because that creates a
-			 * potential race condition with advance_indexes()
+			 * potential race condition with advance_indices()
 			 * being called on another thread.
 			 */
 			for (int i = 0; i < count; i++) {
@@ -622,7 +622,7 @@ queue_worker(void *dummy)
 			for (int i = 0; i < count; i++) {
 				batch[i]->qs_completed = B_TRUE;
 			}
-			advance_indexes(queue);
+			advance_indices(queue);
 			pthread_mutex_unlock(&queue->zq_mutex);
 		}
 	}
@@ -705,7 +705,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 	queue->zq_ix.enqueue++;
 	atomic_inc_64(&pool.tp_unclaimed);
 	if (slot->qs_cost == 0)
-		advance_indexes(queue);
+		advance_indices(queue);
 
 	/* Maintain queue usage data per monitor interval */
 	int depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
