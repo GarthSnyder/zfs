@@ -81,8 +81,8 @@
  * There are two types of lock:
  *
  * - One global lock that gates changes to the thread pool and queue cohort.
- * This lock also acts as the mutex for three pool-level conditions:
- * tp_request_dispatch, tp_wake_worker, and tp_queue_created.
+ * This lock also acts as the mutex for two pool-level conditions:
+ * tp_request_dispatch and tp_wake_worker.
  *
  * - One lock for each queue
  *
@@ -177,7 +177,6 @@ typedef struct {
 	pthread_mutex_t		tp_pool_mutex;
 	pthread_cond_t		tp_wake_worker;		/* Awaited by workers */
 	pthread_cond_t		tp_request_dispatch;	/* By dispatch thread */
-	pthread_cond_t		tp_queue_created;	/* By the heartbeat */
 	zstream_queue_t		*tp_queues[MAX_QUEUES];
 	int			tp_num_queues;
 	boolean_t		tp_threads_created;
@@ -228,7 +227,6 @@ thread_pool_init(void)
 	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
 	pthread_cond_init(&pool.tp_wake_worker, NULL);
 	pthread_cond_init(&pool.tp_request_dispatch, NULL);
-	pthread_cond_init(&pool.tp_queue_created, NULL);
 
 	safe_create_thread(dispatch_worker, NULL, "dispatch", B_TRUE);
 	safe_create_thread(heartbeat_worker, NULL, "heartbeat", B_TRUE);
@@ -332,7 +330,6 @@ zstream_queue_create(zq_params_t *params)
 	pthread_cond_init(&queue->zq_cond.dequeued, NULL);
 
 	pool.tp_num_queues++;
-	pthread_cond_signal(&pool.tp_queue_created);
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
 	return (queue);
 }
