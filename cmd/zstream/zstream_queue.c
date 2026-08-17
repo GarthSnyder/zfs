@@ -60,16 +60,16 @@
 	    (queue)->zq_params.qp_queue_length)
 
 /*
- * A zstream_queue is a ring buffer with four indices: enqueue, claim,
+ * A zstream_queue is a ring buffer with four indexes: enqueue, claim,
  * complete, and dequeue, in that order. No index can move beyond its
- * preceding index. Every interval between indices contains work items in a
+ * preceding index. Every interval between indexes contains work items in a
  * particular state: enqueued, claimed for work, or completed. Items never
  * leave the ring buffer, so FIFO order is guaranteed on dequeueing.
  *
  * In concept, every index has a corresponding condition that threads can
  * wait on if they are interested in knowing when that index moves:
- * enqueued, claimed, completed, dequeued. However, the exact reality
- * deviates from this model in two ways:
+ * enqueued, claimed, completed, dequeued. However, the reality deviates
+ * from this model in two ways:
  *
  * - There is no "claimed" condition, because no thread would wait on it.
  * Claiming and processing are one unified operation. Dequeuers await the
@@ -77,64 +77,68 @@
  *
  * - All queues share one thread pool, so idle threads are not bound to any
  * particular queue. Instead of having queue-specific "enqueued" conditions,
- * one condition is shared by all queues. On awakening, each worker thread
- * is dynamically assigned to a queue using a scoring mechanism described
- * in the comments at score_queue().
+ * queues share a centralized dispatch system that has several conditions of
+ * its own. On being awakened, worker threads assign themselves to a queue
+ * through a scoring mechanism described in the comments at score_queue().
  *
- * THREAD SAFETY STRATEGY
+ * LOCKING
  *
  * There are two types of lock:
  *
- * - One global lock that gates changes to the thread pool and queue cohort,
- *   and that is also the mutex for all three pool-level conditions
+ * - One global lock that gates changes to the thread pool and queue cohort.
+ * This lock also acts as the mutex for three pool-level conditions:
+ * tp_work_available, XXX and that is also the mutex for all three
+ * pool-level conditions
+ *
  * - One lock for each queue
  *
  * Any operation that adds or removes queues or threads should hold the pool
- * lock. Any operation that moves a queue's indices should hold the queue
+ * lock. Any operation that moves a queue's indexes should hold the queue
  * lock. Any thread waiting for work should wait on tp_work_available.
  *
  * Worker threads hold no locks while they are actually processing items.
  *
- * Operations that require both locks always take them in the same order, so
- * deadlocks should not occur:
+ * Operations that require two locks acquire them in the order
  *
- *   pool -> queue
+ * pool -> queue
  *
  * DISPATCH
  *
- * A "dispatch" is one pass of a worker through assign_queue_and_get_work().
- * Three things provoke one, in descending order of how much of the traffic
- * they carry:
+ * A "dispatch" is a worker thread loop. In this context, it's a pass
+ * through assign_queue_and_get_work(). If no work is available, worker
+ * threads sleep within that function.
  *
- * 1) A worker looping around in queue_worker() after finishing a batch, and
- * the handoff signal a worker sends when it could not claim everything it
- * found. This is the system running on its own inertia and accounts for the
- * overwhelming majority of dispatches under load.
+ * Four events trigger dispatch loops:
  *
- * 2) An enqueue. zstream_enqueue() does not signal a worker directly; it
- * asks for a dispatch ENQUEUE_DELAY_NSEC from now, so that a burst of
- * enqueues costs one wakeup rather than one per item. dispatch_beat_worker()
- * serves these.
+ * 1) A worker thread completing its batch. Threads always check to see if
+ * there's more claimable work before going to sleep.
  *
- * 3) The backup heartbeat, heartbeat_worker(). Neither of the paths above is
- * airtight: a worker can decide there is no work, and only then have an item
- * enqueued underneath it, and if every other worker is parked at that moment
- * nothing is left to notice. Rather than lock enqueues against scoring to
- * make that impossible, we let it happen and bound how long it lasts. The
- * heartbeat wakes a worker if tp_generation has not moved since it last
- * looked and there is unclaimed work outstanding, so a missed wakeup costs
- * one HEARTBEAT_NSEC of latency instead of a hang.
+ * 2) A worker thread discovering more work than it can handle on its own.
+ * Before starting work on its own batch, the worker signals another thread
+ * to wake up and assess the current state.
  *
- * This is deliberately modelled on cardiac conduction: enqueues normally
- * pace the system, the heartbeat takes over at a slower rate only when they
- * stop arriving, and the workers keep contracting on their own regardless.
+ * 3) Enqueues. These are batched. ENQUEUE_DELAY_NSEC after an enqueue (on
+ * any queue), the dispatch_beat_worker() thread signals a dispatch.
  *
- * Two atomics keep the common paths off the pool lock entirely.
- * tp_unclaimed is the total number of enqueued-but-unclaimed items across
- * all queues, so a worker can skip a scoring pass it can already tell will
- * find nothing, and the beat and heartbeat threads can skip a wakeup nobody
- * needs. tp_generation counts dispatches and is what the heartbeat samples
- * to decide whether the system still has a pulse.
+ * 4) A backup heartbeat. Prior versions of this code fussed about ensuring
+ * that no new-work signal could possibly be dropped, at a nontrivial
+ * expense of time and complexity. In this version, the edge cases (which
+ * generally won't occur at all) are handled by a backup heartbeat
+ * implemented by heartbeat_worker(). The heartbeat ensures that dispatch
+ * loops happen at least once every HEARBEAT_NSEC while queues are active.
+ * As long as things are running smoothly, the heartbeat does not trigger at
+ * all.
+ *
+ * Two atomics keep major thoroughfares off the pool lock:
+ *
+ * tp_unclaimed tracks the total number of enqueued-but-unclaimed items
+ * across all queues. When zero, it's a hint to workers that they needn't
+ * bother performing a queue-scoring pass since it's unlikely to be
+ * fruitful. This value can be out of date, but at worst, any overlooked
+ * items are bundled into the next dispatch loop.
+ *
+ * tp_generation counts dispatch loops. It's the basis on which the
+ * heartbeat thread requests dispatches.
  */
 
 typedef struct {
@@ -149,7 +153,7 @@ typedef struct {
 	uint64_t	claim;
 	uint64_t	complete;
 	uint64_t	dequeue;
-} zq_indices_t;
+} zq_indexes_t;
 
 typedef struct {
 	pthread_cond_t	completed;
@@ -165,7 +169,7 @@ struct zstream_queue {
 	int		zq_id;
 	queue_slot_t	*zq_slots;
 	pthread_mutex_t	zq_mutex;
-	zq_indices_t	zq_ix;
+	zq_indexes_t	zq_ix;
 	zq_conditions_t	zq_cond;
 	zq_params_t	zq_params;
 	zq_stats_t	zq_stats;
@@ -183,16 +187,15 @@ struct zstream_queue {
  */
 typedef struct {
 	pthread_mutex_t		tp_pool_mutex;
-	pthread_cond_t		tp_work_available;	/* Awaited by workers */
-	pthread_cond_t		tp_beat_requested;	/* By the beat thread */
-	pthread_cond_t		tp_queues_exist;	/* By the heartbeat */
+	pthread_cond_t		tp_wake_worker;		/* Awaited by workers */
+	pthread_cond_t		tp_request_dispatch;	/* By dispatch thread */
+	pthread_cond_t		tp_queue_created;	/* By the heartbeat */
 	zstream_queue_t		*tp_queues[MAX_QUEUES];
 	int			tp_num_queues;
 	boolean_t		tp_threads_created;
 	int			tp_num_threads;
-	uint64_t		tp_unclaimed;		/* Atomic */
-	uint64_t		tp_generation;		/* Atomic */
-	uint64_t		tp_beat_pending;	/* Atomic; boolean */
+	uint64_t		tp_unclaimed;		/* Atomic, all queues */
+	uint64_t		tp_generation;		/* Atomic, dispatches */
 } thread_pool_t;
 
 typedef union {
@@ -203,7 +206,7 @@ typedef union {
 } worst_case_alignment_t;
 
 static void *queue_worker(void *);
-static void *dispatch_beat_worker(void *);
+static void *dispatch_delay_worker(void *);
 static void *heartbeat_worker(void *);
 
 #ifdef MONITOR_QUEUES
@@ -215,14 +218,8 @@ static thread_pool_t	pool = {0};
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 
 /*
- * Sleep for the given number of nanoseconds, resuming if interrupted.
- *
- * Both the delay and the heartbeat need sub-millisecond accuracy. POSIX
- * timers cannot supply it on FreeBSD, whose per-process timers are still
- * scheduled through tvtohz() and so round up to a whole hardclock tick plus
- * one: a 100us request becomes 1-2ms at the usual hz of 1000. nanosleep()
- * and pthread_cond_timedwait() go through the calloutng path instead and
- * honor the request on both platforms.
+ * Both the dispatch timer and the heartbeat need sub-millisecond accuracy.
+ * POSIX timers on FreeBSD don't implement that, but nanosleep() works fine.
  */
 static void
 sleep_nsec(uint64_t nsec)
@@ -231,55 +228,21 @@ sleep_nsec(uint64_t nsec)
 		.tv_sec = nsec / NANOSEC,
 		.tv_nsec = nsec % NANOSEC
 	};
-
 	while (nanosleep(&ts, &ts) != 0) {
 		if (errno != EINTR)
 			err(1, "nanosleep failed");
 	}
 }
 
-/*
- * Wait on a condition for at most nsec nanoseconds. The pool conditions are
- * created against CLOCK_MONOTONIC, so the deadline is immune to wall clock
- * adjustments.
- *
- * Locking: the caller must hold the pool mutex.
- */
-static void
-cond_wait_nsec(pthread_cond_t *cond, uint64_t nsec)
-{
-	struct timespec deadline;
-
-	clock_gettime(CLOCK_MONOTONIC, &deadline);
-	deadline.tv_sec += nsec / NANOSEC;
-	deadline.tv_nsec += nsec % NANOSEC;
-	if (deadline.tv_nsec >= NANOSEC) {
-		deadline.tv_nsec -= NANOSEC;
-		deadline.tv_sec++;
-	}
-	(void) pthread_cond_timedwait(cond, &pool.tp_pool_mutex, &deadline);
-}
-
 static void
 thread_pool_init(void)
 {
-	pthread_condattr_t attr;
-
 	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
+	pthread_cond_init(&pool.tp_wake_worker, NULL);
+	pthread_cond_init(&pool.tp_request_dispatch, NULL);
+	pthread_cond_init(&pool.tp_queue_created, NULL);
 
-	/*
-	 * cond_wait_nsec() computes deadlines from CLOCK_MONOTONIC, so the
-	 * conditions must agree; the default is CLOCK_REALTIME.
-	 */
-	pthread_condattr_init(&attr);
-	if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0)
-		err(1, "could not select a monotonic condition clock");
-	pthread_cond_init(&pool.tp_work_available, &attr);
-	pthread_cond_init(&pool.tp_beat_requested, &attr);
-	pthread_cond_init(&pool.tp_queues_exist, &attr);
-	pthread_condattr_destroy(&attr);
-
-	safe_create_thread(dispatch_beat_worker, NULL, "beat", B_TRUE);
+	safe_create_thread(dispatch_delay_worker, NULL, "dispatch", B_TRUE);
 	safe_create_thread(heartbeat_worker, NULL, "heartbeat", B_TRUE);
 }
 
@@ -381,7 +344,7 @@ zstream_queue_create(zq_params_t *params)
 	pthread_cond_init(&queue->zq_cond.dequeued, NULL);
 
 	pool.tp_num_queues++;
-	pthread_cond_signal(&pool.tp_queues_exist);
+	pthread_cond_signal(&pool.tp_queue_created);
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
 	return (queue);
 }
@@ -424,20 +387,16 @@ static inline void
 advance_indexes(zstream_queue_t *queue)
 {
 	boolean_t any_completed = B_FALSE;
-	uint64_t swept = 0;
 
 	while (queue->zq_ix.claim < queue->zq_ix.enqueue &&
 	    Q_SLOT(queue, queue->zq_ix.claim).qs_completed) {
 		queue->zq_ix.claim++;
-		swept++;
+		atomic_dec_64(&pool.tp_unclaimed);
 	}
 	while (queue->zq_ix.complete < queue->zq_ix.claim &&
 	    Q_SLOT(queue, queue->zq_ix.complete).qs_completed) {
 		queue->zq_ix.complete++;
 		any_completed = B_TRUE;
-	}
-	if (swept > 0) {
-		atomic_sub_64(&pool.tp_unclaimed, swept);
 	}
 	if (any_completed) {
 		pthread_cond_signal(&queue->zq_cond.completed);
@@ -606,7 +565,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * for as long as it takes to score or claim from them.
  */
 static int
-assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
+dispatch_thread(zstream_queue_t **queue, queue_slot_t **batch)
 {
 	pthread_mutex_lock(&pool.tp_pool_mutex);
 
@@ -626,7 +585,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			}
 		}
 		if (!queues_with_work) {
-			pthread_cond_wait(&pool.tp_work_available,
+			pthread_cond_wait(&pool.tp_wake_worker,
 			    &pool.tp_pool_mutex);
 		} else {
 			int q = select_stochastic(weights, num_queues);
@@ -641,7 +600,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			    (*queue)->zq_ix.enqueue;
 			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			if (more_here || queues_with_work > 1) {
-				pthread_cond_signal(&pool.tp_work_available);
+				pthread_cond_signal(&pool.tp_wake_worker);
 			}
 			atomic_inc_64(&pool.tp_generation);
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
@@ -659,14 +618,14 @@ queue_worker(void *dummy)
 	int count;
 
 	while (B_TRUE) {
-		count = assign_queue_and_get_work(&queue, batch);
+		count = dispatch_thread(&queue, batch);
 		queue->zq_histogram[count]++;
 		if (count) {
 			zq_process_item_f *process =
 			    queue->zq_params.qp_process;
 			void *context = queue->zq_params.qp_context;
 			/*
-			 * Locking note: we complete the whole batch without
+			 * Locking: we complete the whole batch without
 			 * holding any locks. However, we can't mark items
 			 * as completed without holding the queue lock
 			 * because that creates a race condition with
@@ -687,38 +646,6 @@ queue_worker(void *dummy)
 }
 
 /*
- * Wake one worker if there is anything for it to do. Both pacing threads
- * funnel through here.
- *
- * Locking: the caller must hold the pool mutex.
- */
-static inline void
-dispatch_if_work_available(void)
-{
-	if (atomic_load_64(&pool.tp_unclaimed) > 0) {
-		pthread_cond_signal(&pool.tp_work_available);
-	}
-}
-
-/*
- * Ask for a dispatch ENQUEUE_DELAY_NSEC from now. Called by every enqueue,
- * so the cost of the common case matters: once a beat is already pending
- * this is a single failed compare-and-swap, with no lock and no syscall.
- * Only the request that flips tp_beat_pending pays for waking the beat
- * thread, which is what collapses a burst of enqueues into one wakeup.
- */
-static inline void
-request_dispatch_beat(void)
-{
-	if (atomic_cas_64(&pool.tp_beat_pending, B_FALSE, B_TRUE) != B_FALSE)
-		return;
-
-	pthread_mutex_lock(&pool.tp_pool_mutex);
-	pthread_cond_signal(&pool.tp_beat_requested);
-	pthread_mutex_unlock(&pool.tp_pool_mutex);
-}
-
-/*
  * Body of the enqueue pacing thread, which converts a request from
  * request_dispatch_beat() into a worker wakeup one ENQUEUE_DELAY_NSEC
  * later. Delaying is the entire point: enqueues arrive far faster than
@@ -731,22 +658,18 @@ request_dispatch_beat(void)
  * and forgotten.
  */
 static void *
-dispatch_beat_worker(void *nope)
+dispatch_delay_worker(void *nope)
 {
 	(void) nope;
-
-	pthread_mutex_lock(&pool.tp_pool_mutex);
 	while (B_TRUE) {
-		while (!atomic_load_64(&pool.tp_beat_pending)) {
-			pthread_cond_wait(&pool.tp_beat_requested,
-			    &pool.tp_pool_mutex);
-		}
+		pthread_mutex_lock(&pool.tp_pool_mutex);
+		pthread_cond_wait(&pool.tp_request_dispatch,
+		    &pool.tp_pool_mutex);
 		pthread_mutex_unlock(&pool.tp_pool_mutex);
 		sleep_nsec(ENQUEUE_DELAY_NSEC);
-		pthread_mutex_lock(&pool.tp_pool_mutex);
-
-		(void) atomic_swap_64(&pool.tp_beat_pending, B_FALSE);
-		dispatch_if_work_available();
+		if (atomic_load_64(&pool.tp_unclaimed) > 0) {
+			pthread_cond_signal(&pool.tp_wake_worker);
+		}
 	}
 	return (NULL);
 }
@@ -769,22 +692,15 @@ static void *
 heartbeat_worker(void *nope)
 {
 	(void) nope;
-
-	uint64_t last_seen = 0;
-
-	pthread_mutex_lock(&pool.tp_pool_mutex);
+	uint64_t prior_generation = atomic_load_64(&pool.tp_generation);
 	while (B_TRUE) {
-		while (pool.tp_num_queues == 0) {
-			pthread_cond_wait(&pool.tp_queues_exist,
-			    &pool.tp_pool_mutex);
-		}
-		cond_wait_nsec(&pool.tp_queues_exist, HEARTBEAT_NSEC);
-
+		sleep_nsec(HEARTBEAT_NSEC);
 		uint64_t generation = atomic_load_64(&pool.tp_generation);
-		if (generation == last_seen) {
-			dispatch_if_work_available();
+		if (generation == prior_generation) {
+			if (atomic_load_64(&pool.tp_unclaimed) > 0)
+				pthread_cond_signal(&pool.tp_wake_worker);
 		}
-		last_seen = generation;
+		prior_generation = generation;
 	}
 	return (NULL);
 }
@@ -818,14 +734,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 	}
 	queue->zq_ix.enqueue++;
 	atomic_inc_64(&pool.tp_unclaimed);
-	if (slot->qs_completed) {
-		/*
-		 * A zero-cost item is claimed and completed on the spot, so
-		 * advance_indexes() takes it straight back out of the count
-		 * we just added it to.
-		 */
-		advance_indexes(queue);
-	}
+	advance_indexes(queue);
 
 	/* Maintain queue usage data per monitor interval */
 	int depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
@@ -833,7 +742,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
 
 	pthread_mutex_unlock(&queue->zq_mutex);
-	request_dispatch_beat();
+	pthread_cond_signal(&pool.tp_request_dispatch);
 }
 
 void
