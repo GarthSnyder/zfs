@@ -48,7 +48,7 @@ extern "C" {
  * Dispatch granularity is specified as a per-batch budget that is set for
  * each queue in the same (arbitrary) units used for item costs. Threads
  * claim items until the budget is met, there are no more items available,
- * or MAX_BATCH items have been claimed. When claiming items to work on,
+ * or ZQ_MAX_BATCH items have been claimed. When claiming items to work on,
  * threads never block waiting for additional work to arrive. They start
  * work as quickly as possible even if the budget has not been reached.
  *
@@ -63,7 +63,8 @@ extern "C" {
  * The shared thread pool persists until the process exits.
  */
 
-#define	MAX_BATCH 32	/* The most items that can be claimed at once */
+#define	ZQ_MAX_BATCH	32	/* The most items that can be claimed at once */
+#define ZQ_MAX_QUEUES	16	/* The maximum number of simultaneous queues */
 
 typedef void queue_item_t;
 
@@ -82,10 +83,10 @@ zq_process_item_f(queue_item_t *item, void *context);
  * Set the number of threads to be spawned for queue work. Since all queues
  * share a thread pool, this value affects all queues. The value must be set
  * before any queues are created. By default, one thread is spawned for
- * every CPU core.
+ * every CPU core, but always at least 6 threads.
  */
 void
-zstream_queue_set_num_threads(uint_t num_threads);
+zstream_queue_set_num_threads(int num_threads);
 
 /*
  * Create a queue. The qp_context field is passed to the cost and processing

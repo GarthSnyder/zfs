@@ -37,10 +37,8 @@
 #include "zstream_util.h"
 
 #define	MIN_THREADS		6
-#define	MAX_QUEUES		16	/* Maximum simultaneously active */
 
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
-#define	HEARTBEAT_NSEC		(1000 * 1000)		/* 1ms */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			0.0001	/* No-work score threshold */
@@ -94,7 +92,7 @@
  *
  * DISPATCH
  *
- * Four events trigger dispatch loops:
+ * Three events trigger dispatch loops:
  *
  * 1) A worker thread completing its batch. Threads always check to see if
  * there's more claimable work before going to sleep.
@@ -103,24 +101,21 @@
  * Before starting work on its own batch, the worker signals another thread
  * to wake up and assess the current state.
  *
- * 3) Enqueues. These are batched. ENQUEUE_DELAY_NSEC after an enqueue (on
- * any queue), the dispatch thread wakes up a worker.
- *
- * 4) A backup heartbeat that jump-starts normal dispatching if it has
- * stalled. It's theoretically possible for an enqueue notification to be
- * overlooked because of time skew. Rather than trying to ensure that this
- * pattern doesn't occur (which is expensive), we monitor and correct. In
- * normal operation, the heartbeat does not trigger at all.
+ * 3) Enqueues. These are batched. Roughly ENQUEUE_DELAY_NSEC after an
+ * enqueue (on any queue), the dispatch thread reviews the state of the
+ * system to determine if it should wake up a worker.
  *
  * Two atomics keep major thoroughfares off the pool lock:
  *
- * tp_unclaimed tracks the total number of enqueued-but-unclaimed items
+ * - tp_unclaimed tracks the total number of enqueued-but-unclaimed items
  * across all queues. When zero, it's a hint to workers that they needn't
  * bother performing a queue-scoring pass since it's unlikely to be
- * fruitful. This value can be out of date, but at worst, any overlooked
- * items are bundled into the next dispatch loop.
+ * fruitful. Observing a value of 0 guarantees that any enqueue in flight
+ * will generate a subsequent dispatch request.
  *
- * tp_generation counts dispatch loops. It's part of the heartbeat monitor.
+ * - tp_dispatch_requested is 1 if any enqueuer has requested a dispatch.
+ * The dispatch thread will miss most tp_request_dispatch signals (because
+ * it's sleeping), but it will always honor this value.
  */
 
 typedef struct {
@@ -154,33 +149,34 @@ struct zstream_queue {
 	zq_indexes_t	zq_ix;
 	zq_conditions_t	zq_cond;
 	zq_params_t	zq_params;
-	zq_stats_t	zq_stats;
 	boolean_t	zq_disallow_enqueue;
-	uint64_t	zq_histogram[MAX_BATCH+1];	/* Batch sizes */
+#ifdef MONITOR_QUEUES
+	zq_stats_t	zq_stats;
+	uint64_t	zq_histogram[ZQ_MAX_BATCH+1];	/* Batch sizes */
+#endif
 };
 
 typedef struct {
-	pthread_mutex_t		tp_pool_mutex;
-	pthread_cond_t		tp_wake_worker;		/* Awaited by workers */
-	pthread_cond_t		tp_request_dispatch;	/* By dispatch thread */
-	zstream_queue_t		*tp_queues[MAX_QUEUES];
-	int			tp_num_queues;
-	boolean_t		tp_threads_created;
-	int			tp_num_threads;
-	uint64_t		tp_unclaimed;		/* Atomic, all queues */
-	uint64_t		tp_generation;		/* Atomic, dispatches */
+	pthread_mutex_t	tp_pool_mutex;
+	pthread_cond_t	tp_wake_worker;		/* Awaited by workers */
+	pthread_cond_t	tp_request_dispatch;	/* By dispatch thread */
+	zstream_queue_t	*tp_queues[ZQ_MAX_QUEUES];
+	int		tp_num_queues;
+	boolean_t	tp_threads_created;
+	int		tp_num_threads;
+	uint64_t	tp_unclaimed;		/* Atomic, all queues */
+	uint32_t	tp_dispatch_requested;	/* Atomic, boolean */
 } thread_pool_t;
 
 typedef union {
-	long		long ll;
-	long		double ld;
+	long long	ll;
+	long double	ld;
 	void		*p;
 	void		(*fp)(void);
 } worst_case_alignment_t;
 
 static void *queue_worker(void *);
 static void *dispatch_worker(void *);
-static void *heartbeat_worker(void *);
 
 #ifdef MONITOR_QUEUES
 static void *cpu_and_queue_monitor(void *);
@@ -215,7 +211,6 @@ thread_pool_init(void)
 	pthread_cond_init(&pool.tp_request_dispatch, NULL);
 
 	safe_create_thread(dispatch_worker, NULL, "dispatch", B_TRUE);
-	safe_create_thread(heartbeat_worker, NULL, "heartbeat", B_TRUE);
 }
 
 /*
@@ -223,7 +218,7 @@ thread_pool_init(void)
  * queues have been created.
  */
 void
-zstream_queue_set_num_threads(uint_t n)
+zstream_queue_set_num_threads(int n)
 {
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
@@ -246,11 +241,11 @@ zstream_queue_set_num_threads(uint_t n)
  * Locking: the caller must hold the pool mutex.
  *
  * If tp_num_threads is nonzero, it sets the number of threads to spawn.
- * Otherwise, one thread is spawned per core.
+ * Otherwise, one thread is spawned per core, with a minimum of 6 threads.
  *
- * sched_affinity() is a better estimate of available threads than sysconf
- * because sysconf doesn't account for limits that might be set on, e.g., a
- * container.
+ * sched_getaffinity() is a better estimate of available threads than
+ * sysconf because sysconf doesn't account for limits that might be set on,
+ * e.g., a container.
  */
 static void
 thread_pool_spinup(void)
@@ -258,8 +253,12 @@ thread_pool_spinup(void)
 	if (pool.tp_num_threads == 0) {
 #ifdef	CPU_COUNT
 		cpu_set_t cpu_set;
-		sched_getaffinity(0, sizeof (cpu_set_t), &cpu_set);
-		pool.tp_num_threads = CPU_COUNT(&cpu_set);
+		if (sched_getaffinity(0, sizeof (cpu_set_t), &cpu_set) != 0) {
+			warn("sched_getaffinity failed, using sysconf");
+			pool.tp_num_threads = sysconf(_SC_NPROCESSORS_ONLN);
+		} else {
+			pool.tp_num_threads = CPU_COUNT(&cpu_set);
+		}
 #else
 		pool.tp_num_threads = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
@@ -283,11 +282,10 @@ zstream_queue_create(zq_params_t *params)
 	VERIFY3P(params->qp_process, !=, NULL);
 	VERIFY3P(params->qp_cost, !=, NULL);
 	VERIFY3U(params->qp_item_size, >, 0);
-	VERIFY3U(params->qp_queue_length, >, 0);
 
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
-	VERIFY3S(pool.tp_num_queues, <, MAX_QUEUES);
+	VERIFY3S(pool.tp_num_queues, <, ZQ_MAX_QUEUES);
 
 	if (!pool.tp_threads_created) {
 		thread_pool_spinup();
@@ -300,13 +298,16 @@ zstream_queue_create(zq_params_t *params)
 		.zq_id = next_queue_id++,
 		.zq_params = *params,
 		.zq_slots = safe_malloc(params->qp_queue_length *
-		    (sizeof (queue_slot_t)))
+		    (sizeof (queue_slot_t))),
+#ifdef MONITOR_QUEUES
+		.zq_stats.min_depth = INT_MAX
+#endif
 	};
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size,
 	    _Alignof(worst_case_alignment_t));
 	uint8_t *items = safe_malloc(params->qp_queue_length * qpis_rounded);
-	for (int i = 0; i < params->qp_queue_length; i++) {
+	for (size_t i = 0; i < params->qp_queue_length; i++) {
 		queue->zq_slots[i].qs_item =
 		    (queue_item_t *)(items + i * qpis_rounded);
 	}
@@ -337,8 +338,7 @@ zstream_queue_create(zq_params_t *params)
  *
  * This function is called:
  *
- * - Whenever a thread completes a batch
- * - Whenever a thread claims a batch
+ * - Whenever a thread completes a batch - Whenever a thread claims a batch
  * - Whenever an item of cost 0 is enqueued
  *
  * Strictly speaking, advancing on claiming a batch is not logically
@@ -353,6 +353,9 @@ zstream_queue_create(zq_params_t *params)
  * wasted claim cycle.
  *
  * Locking: the caller must hold the queue mutex.
+ *
+ * It is an invariant that after this function is called, either claim ==
+ * enqueue or Q_SLOT(claim) is not completed.
  */
 static inline void
 advance_indexes(zstream_queue_t *queue)
@@ -366,6 +369,11 @@ advance_indexes(zstream_queue_t *queue)
 		claimed++;
 	}
 	if (claimed > 0) {
+		/*
+		 * tp_unclaimed is decremented both here and in
+		 * claim_batch(). The conditions are mutually exclusive, so
+		 * double counting will not occur.
+		 */
 		atomic_sub_64(&pool.tp_unclaimed, claimed);
 	}
 	while (queue->zq_ix.complete < queue->zq_ix.claim &&
@@ -414,7 +422,8 @@ score_queue(zstream_queue_t *queue)
 
 /*
  * Return a random index from an array of doubles, with the likelihood of
- * index i being selected equal to weights[i] / sum(weights).
+ * index i being selected equal to weights[i] / sum(weights). Returns index
+ * 0 if no weight is greater than 0.
  */
 static inline int
 select_stochastic(double weights[], int num_values)
@@ -429,15 +438,20 @@ select_stochastic(double weights[], int num_values)
 	random_get_pseudo_bytes((uint8_t *)&numerator, sizeof (uint32_t));
 	double select_val = total * numerator / denominator;
 	for (int i = 0; i < num_values; i++) {
-		if (select_val <= weights[i])
+		if (select_val < weights[i])
 			return (i);
 		select_val -= weights[i];
 	}
-	return (num_values - 1);
+	/* Fallback in case of FP rounding not producing a winner */
+	for (int i = num_values - 1; i >= 0; i--) {
+		if (weights[i] != 0.0)
+			return (i);
+	}
+	return (0);
 }
 
 /*
- * Claim up to MAX_BATCH work items from the given queue, trying to
+ * Claim up to ZQ_MAX_BATCH work items from the given queue, trying to
  * accumulate at least queue->qp_batch_budget worth of work data (==
  * "cost"). All items in a batch will be drawn from the same queue.
  *
@@ -468,7 +482,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 
 	while (B_TRUE) {
 		more_to_claim = queue->zq_ix.claim < queue->zq_ix.enqueue;
-		more_slots = count < MAX_BATCH;
+		more_slots = count < ZQ_MAX_BATCH;
 		more_budget = cost_claimed < queue->zq_params.qp_batch_budget;
 		first_and_only = queue->zq_params.qp_batch_budget == 0 &&
 		    count == 0;
@@ -494,6 +508,9 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 		atomic_sub_64(&pool.tp_unclaimed, passed);
 	}
 	advance_indexes(queue);
+#ifdef MONITOR_QUEUES
+	atomic_inc_64(&queue->zq_histogram[count]);
+#endif
 	return (count);
 }
 
@@ -502,13 +519,10 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * dynamically to follow available work. Idle threads will typically be
  * waiting on the tp_wake_worker condition within this function.
  *
- * If tp_unclaimed is 0, we can skip queue scoring entirely. Because of time
- * skew in reading this value, and because of time skew among queue scores,
- * it's possible that any given trip through this function will fail to
- * perceive newly-enqueued work. However, cycles are frequent and the edge
- * cases are rare, so this generally causes only one missed dispatch. The
- * backup is the separate heartbeat thread, which restarts dispatching in
- * the event of trouble.
+ * If tp_unclaimed is 0, we can skip queue scoring entirely. This value is
+ * managed as an atomic and is incremented before the tp_request_dispatch
+ * condition is signaled, so we know that any subsequent enqueue will
+ * generate a dispatch cycle.
  *
  * Locking: we hold the pool mutex throughout, both to keep a queue from
  * being destroyed out from under us while we score it or claim from it, and
@@ -522,7 +536,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 
 	while (B_TRUE) {
 		int num_queues = pool.tp_num_queues;
-		double weights[MAX_QUEUES];
+		double weights[ZQ_MAX_QUEUES];
 		int queues_with_work = 0;
 
 		if (atomic_load_64(&pool.tp_unclaimed) > 0) {
@@ -553,35 +567,35 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			if (more_here || queues_with_work > 1) {
 				pthread_cond_signal(&pool.tp_wake_worker);
 			}
-			atomic_inc_64(&pool.tp_generation);
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
 			return (count);
 		}
 	}
 }
 
+/*
+ * Batches are processed without holding any locks. The existence of the
+ * items we're working on guarantees that the queue can't be destroyed out
+ * from under us.
+ *
+ * However, we can't mark items completed without holding the queue lock
+ * because that creates a potential race condition with advance_indexes()
+ * being called on another thread.
+ */
 static void *
 queue_worker(void *dummy)
 {
 	(void) dummy;
 	zstream_queue_t *queue;
-	queue_slot_t *batch[MAX_BATCH];
+	queue_slot_t *batch[ZQ_MAX_BATCH];
 	int count;
 
 	while (B_TRUE) {
 		count = assign_queue_and_get_work(&queue, batch);
-		queue->zq_histogram[count]++;
 		if (count) {
 			zq_process_item_f *process =
 			    queue->zq_params.qp_process;
 			void *context = queue->zq_params.qp_context;
-			/*
-			 * We complete the batch without holding any locks.
-			 * However, we can't mark items completed without
-			 * holding the queue lock because that creates a
-			 * potential race condition with advance_indexes()
-			 * being called on another thread.
-			 */
 			for (int i = 0; i < count; i++) {
 				process(batch[i]->qs_item, context);
 			}
@@ -597,46 +611,28 @@ queue_worker(void *dummy)
 }
 
 /*
- * The enqueue notification pacing thread, which converts a request from
- * request_dispatch() into a worker wakeup ENQUEUE_DELAY_NSEC later. The
- * delay facilitates larger batch sizes and keeps enqueuers on the fast
- * path.
+ * The enqueue notification pacing thread, which converts a notification
+ * from an enqueuer into a possible worker wakeup roughly ENQUEUE_DELAY_NSEC
+ * later. The delay facilitates larger batch sizes and keeps enqueuers on
+ * the fast path.
  */
 static void *
 dispatch_worker(void *nope)
 {
 	(void) nope;
+	pthread_mutex_lock(&pool.tp_pool_mutex);
 	while (B_TRUE) {
-		pthread_mutex_lock(&pool.tp_pool_mutex);
-		pthread_cond_wait(&pool.tp_request_dispatch,
-		    &pool.tp_pool_mutex);
+		while (atomic_load_32(&pool.tp_dispatch_requested) == 0) {
+			pthread_cond_wait(&pool.tp_request_dispatch,
+			    &pool.tp_pool_mutex);
+		}
 		pthread_mutex_unlock(&pool.tp_pool_mutex);
 		sleep_nsec(ENQUEUE_DELAY_NSEC);
+		pthread_mutex_lock(&pool.tp_pool_mutex);
+		atomic_store_64(&pool.tp_dispatch_requested, 0);
 		if (atomic_load_64(&pool.tp_unclaimed) > 0) {
 			pthread_cond_signal(&pool.tp_wake_worker);
 		}
-	}
-	return (NULL);
-}
-
-/*
- * This is the heartbeat thread, which samples tp_generation once per HEARTBEAT_NSEC
- * and intervenes only if 1) no dispatch has occurred and 2) there is still
- * unclaimed work.
- */
-static void *
-heartbeat_worker(void *nope)
-{
-	(void) nope;
-	uint64_t prior_generation = atomic_load_64(&pool.tp_generation);
-	while (B_TRUE) {
-		sleep_nsec(HEARTBEAT_NSEC);
-		uint64_t generation = atomic_load_64(&pool.tp_generation);
-		if (generation == prior_generation) {
-			if (atomic_load_64(&pool.tp_unclaimed) > 0)
-				pthread_cond_signal(&pool.tp_wake_worker);
-		}
-		prior_generation = generation;
 	}
 	return (NULL);
 }
@@ -649,12 +645,11 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 {
 	VERIFY(queue != NULL);
 	pthread_mutex_lock(&queue->zq_mutex);
-	VERIFY3B(queue->zq_disallow_enqueue, ==, B_FALSE);
 
 	while (Q_FULL(queue)) {
 		pthread_cond_wait(&queue->zq_cond.dequeued, &queue->zq_mutex);
 	}
-
+	VERIFY3B(queue->zq_disallow_enqueue, ==, B_FALSE);
 	queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.enqueue);
 	if (item) {
 		slot->qs_cost =
@@ -673,17 +668,28 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 	if (slot->qs_cost == 0)
 		advance_indexes(queue);
 
+#ifdef MONITOR_QUEUES
 	/* Maintain queue usage data per monitor interval */
 	int depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
 	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
 	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
+#endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
+
+	/*
+	 * To send this notification reliably but locklessly, we need both
+	 * the atomic and the condition. The dispatcher thread uses the
+	 * atomic as its predicate while waiting.
+	 */
+	if (atomic_load_32(&pool.tp_dispatch_requested) == 0)
+		atomic_store_32(&pool.tp_dispatch_requested, 1);
 	pthread_cond_signal(&pool.tp_request_dispatch);
 }
 
 void
-zstream_queue_fini(zstream_queue_t *queue) {
+zstream_queue_fini(zstream_queue_t *queue)
+{
 	zstream_enqueue(queue, NULL);
 }
 
@@ -713,20 +719,20 @@ zstream_queue_destroy(zstream_queue_t *queue)
 		    "are you attempting to dequeue from multiple threads "
 		    "simultaneously?");
 	}
-
-	free(queue->zq_slots[0].qs_item);
-	free(queue->zq_slots);
-	queue->zq_slots = NULL;
-	free(queue);
 	pool.tp_num_queues--;
-
 	if (pool.tp_num_queues > 0) {
 		/* Gaps are not allowed in the tp_queues array */
 		zstream_queue_t **qscan = &pool.tp_queues[0];
 		int i = pool.tp_num_queues;
 		while (*qscan != queue) { qscan++; i--; }
-		memmove(qscan, qscan + 1, i * sizeof (*qscan));
+		if (i > 0)
+		    memmove(qscan, qscan + 1, i * sizeof (*qscan));
 	}
+	free(queue->zq_slots[0].qs_item);
+	free(queue->zq_slots);
+	queue->zq_slots = NULL;
+	free(queue);
+
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
@@ -770,6 +776,10 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 #define	SAMPLE_DURATION_US	1000000
 #define	CPU_FIELD_WIDTH		14
 
+/*
+ * Called only during zstream_queue_destroy(), so we know that we have
+ * uncontested access to the queue's params.
+ */
 static void
 print_batch_size_histogram(zstream_queue_t *queue)
 {
@@ -778,7 +788,7 @@ print_batch_size_histogram(zstream_queue_t *queue)
 
 	if (lines_printed++ == 0)
 		fprintf(stderr, "\nBatch size histograms:\n");
-	for (last_nonzero = MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
+	for (last_nonzero = ZQ_MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
 		if (queue->zq_histogram[last_nonzero] > 0)
 			break;
 	}
