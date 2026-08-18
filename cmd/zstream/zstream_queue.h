@@ -64,7 +64,7 @@ extern "C" {
  */
 
 #define	ZQ_MAX_BATCH	32	/* The most items that can be claimed at once */
-#define ZQ_MAX_QUEUES	16	/* The maximum number of simultaneous queues */
+#define	ZQ_MAX_QUEUES	16	/* The maximum number of simultaneous queues */
 
 typedef void queue_item_t;
 

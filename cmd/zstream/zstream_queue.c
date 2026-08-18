@@ -39,6 +39,7 @@
 #define	MIN_THREADS		6
 
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
+#define	TIMEOUT_NSEC		(1000 * 1000)		/* 1ms */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			0.0001	/* No-work score threshold */
@@ -74,11 +75,13 @@
  *
  * LOCKING
  *
- * There are two types of lock:
+ * There are three types of lock:
  *
  * - One global lock that gates changes to the thread pool and queue cohort.
- * This lock also acts as the mutex for two pool-level conditions:
- * tp_request_dispatch and tp_wake_worker.
+ * This lock also acts as the mutex for two pool-level conditions: the
+ * tp_wake_worker mutex.
+ *
+ * - A second, low-contention global lock that protects the dispatch system
  *
  * - One lock for each queue
  *
@@ -88,34 +91,31 @@
  *
  * Worker threads hold no locks while they are actually processing items.
  *
- * The global locking order is pool -> queue.
+ * The global locking order is dispatch -> pool -> queue.
  *
  * DISPATCH
  *
- * Three events trigger dispatch loops:
+ * Four events trigger dispatch loops:
  *
  * 1) A worker thread completing its batch. Threads always check to see if
  * there's more claimable work before going to sleep.
  *
  * 2) A worker thread discovering more work than it can handle on its own.
- * Before starting work on its own batch, the worker signals another thread
- * to wake up and assess the current state.
+ * Before starting work on its own batch, the worker attempts to signal
+ * another thread to wake up and assess the current state.
  *
- * 3) Enqueues. These are batched. Roughly ENQUEUE_DELAY_NSEC after an
- * enqueue (on any queue), the dispatch thread reviews the state of the
- * system to determine if it should wake up a worker.
+ * 3) Enqueues. These go through the dispatch system and are batched.
+ * Roughly ENQUEUE_DELAY_NSEC after an enqueue (on any queue), the dispatch
+ * thread attempts to awaken a worker.
  *
- * Two atomics keep major thoroughfares off the pool lock:
- *
- * - tp_unclaimed tracks the total number of enqueued-but-unclaimed items
- * across all queues. When zero, it's a hint to workers that they needn't
- * bother performing a queue-scoring pass since it's unlikely to be
- * fruitful. Observing a value of 0 guarantees that any enqueue in flight
- * will generate a subsequent dispatch request.
- *
- * - tp_dispatch_requested is 1 if any enqueuer has requested a dispatch.
- * The dispatch thread will miss most tp_request_dispatch signals (because
- * it's sleeping), but it will always honor this value.
+ * 4) The expiration of a backup timer. The atomic value tp_unclaimed tracks
+ * the total number of enqueued-but-unclaimed items across all queues. When
+ * zero, it's a hint to workers that they needn't bother performing a
+ * queue-scoring pass since it is unlikely to be fruitful. This value is
+ * rigorously maintained, but it's not protected by a lock or by memory
+ * barriers, so it's subject to inter-core memory timing issues. In the
+ * event that a critical worker wakeup is dropped, the timer intervenes to
+ * keep dispatches running.
  */
 
 typedef struct {
@@ -159,13 +159,18 @@ struct zstream_queue {
 typedef struct {
 	pthread_mutex_t	tp_pool_mutex;
 	pthread_cond_t	tp_wake_worker;		/* Awaited by workers */
+
+	pthread_mutex_t	tp_dispatch_mutex;
 	pthread_cond_t	tp_request_dispatch;	/* By dispatch thread */
+	boolean_t	tp_dispatch_requested;
+
 	zstream_queue_t	*tp_queues[ZQ_MAX_QUEUES];
 	int		tp_num_queues;
+
 	boolean_t	tp_threads_created;
 	int		tp_num_threads;
+
 	uint64_t	tp_unclaimed;		/* Atomic, all queues */
-	uint32_t	tp_dispatch_requested;	/* Atomic, boolean */
 } thread_pool_t;
 
 typedef union {
@@ -208,6 +213,8 @@ thread_pool_init(void)
 {
 	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
 	pthread_cond_init(&pool.tp_wake_worker, NULL);
+
+	pthread_mutex_init(&pool.tp_dispatch_mutex, NULL);
 	pthread_cond_init(&pool.tp_request_dispatch, NULL);
 
 	safe_create_thread(dispatch_worker, NULL, "dispatch", B_TRUE);
@@ -282,6 +289,7 @@ zstream_queue_create(zq_params_t *params)
 	VERIFY3P(params->qp_process, !=, NULL);
 	VERIFY3P(params->qp_cost, !=, NULL);
 	VERIFY3U(params->qp_item_size, >, 0);
+	VERIFY3U(params->qp_queue_length, >, 0);
 
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
@@ -338,7 +346,8 @@ zstream_queue_create(zq_params_t *params)
  *
  * This function is called:
  *
- * - Whenever a thread completes a batch - Whenever a thread claims a batch
+ * - Whenever a thread completes a batch
+ * - Whenever a thread claims a batch
  * - Whenever an item of cost 0 is enqueued
  *
  * Strictly speaking, advancing on claiming a batch is not logically
@@ -428,14 +437,14 @@ score_queue(zstream_queue_t *queue)
 static inline int
 select_stochastic(double weights[], int num_values)
 {
-	uint32_t numerator;
-	uint32_t denominator = UINT32_MAX;
+	static double denominator = (double)UINT64_MAX;
+	uint64_t numerator;
 	double total = 0.0;
 
 	for (int i = 0; i < num_values; i++) {
 		total += weights[i];
 	}
-	random_get_pseudo_bytes((uint8_t *)&numerator, sizeof (uint32_t));
+	random_get_pseudo_bytes((uint8_t *)&numerator, sizeof (numerator));
 	double select_val = total * numerator / denominator;
 	for (int i = 0; i < num_values; i++) {
 		if (select_val < weights[i])
@@ -509,7 +518,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 	}
 	advance_indexes(queue);
 #ifdef MONITOR_QUEUES
-	atomic_inc_64(&queue->zq_histogram[count]);
+	queue->zq_histogram[count]++;
 #endif
 	return (count);
 }
@@ -518,11 +527,6 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
  * Threads are assigned to a queue on each loop so they can be shifted
  * dynamically to follow available work. Idle threads will typically be
  * waiting on the tp_wake_worker condition within this function.
- *
- * If tp_unclaimed is 0, we can skip queue scoring entirely. This value is
- * managed as an atomic and is incremented before the tp_request_dispatch
- * condition is signaled, so we know that any subsequent enqueue will
- * generate a dispatch cycle.
  *
  * Locking: we hold the pool mutex throughout, both to keep a queue from
  * being destroyed out from under us while we score it or claim from it, and
@@ -539,15 +543,13 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 		double weights[ZQ_MAX_QUEUES];
 		int queues_with_work = 0;
 
-		if (atomic_load_64(&pool.tp_unclaimed) > 0) {
-			for (int i = 0; i < num_queues; i++) {
-				zstream_queue_t *to_score = pool.tp_queues[i];
-				pthread_mutex_lock(&to_score->zq_mutex);
-				weights[i] = score_queue(to_score);
-				pthread_mutex_unlock(&to_score->zq_mutex);
-				if (weights[i] > NO_WORK)
-					queues_with_work++;
-			}
+		for (int i = 0; i < num_queues; i++) {
+			zstream_queue_t *to_score = pool.tp_queues[i];
+			pthread_mutex_lock(&to_score->zq_mutex);
+			weights[i] = score_queue(to_score);
+			pthread_mutex_unlock(&to_score->zq_mutex);
+			if (weights[i] > NO_WORK)
+				queues_with_work++;
 		}
 		if (!queues_with_work) {
 			pthread_cond_wait(&pool.tp_wake_worker,
@@ -557,14 +559,12 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			*queue = pool.tp_queues[q];
 			pthread_mutex_lock(&(*queue)->zq_mutex);
 			int count = claim_batch(*queue, batch);
+			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			/*
 			 * If we didn't claim all available work, wake up
 			 * another worker thread.
 			 */
-			boolean_t more_here = (*queue)->zq_ix.claim <
-			    (*queue)->zq_ix.enqueue;
-			pthread_mutex_unlock(&(*queue)->zq_mutex);
-			if (more_here || queues_with_work > 1) {
+			if (atomic_load_64(&pool.tp_unclaimed) > 0) {
 				pthread_cond_signal(&pool.tp_wake_worker);
 			}
 			pthread_mutex_unlock(&pool.tp_pool_mutex);
@@ -610,29 +610,63 @@ queue_worker(void *dummy)
 	return (NULL);
 }
 
+static inline void
+wake_worker(void)
+{
+	pthread_mutex_lock(&pool.tp_pool_mutex);
+	pool.tp_dispatch_requested = B_FALSE;
+	pthread_cond_signal(&pool.tp_wake_worker);
+	pthread_mutex_unlock(&pool.tp_pool_mutex);
+}
+
+static inline struct timespec
+timeout_timespec(void)
+{
+	struct timespec expire;
+	struct timeval tv;
+
+	if (gettimeofday(&tv, NULL) != 0)
+		err(1, "couldn't gettimeofday()");
+	uint64_t nsec = tv.tv_usec * 1000 + TIMEOUT_NSEC;
+	expire.tv_sec = tv.tv_sec + nsec / NANOSEC;
+	expire.tv_nsec = nsec % NANOSEC;
+	return (expire);
+}
+
 /*
  * The enqueue notification pacing thread, which converts a notification
  * from an enqueuer into a possible worker wakeup roughly ENQUEUE_DELAY_NSEC
- * later. The delay facilitates larger batch sizes and keeps enqueuers on
- * the fast path.
+ * later. The delay facilitates larger batch sizes and keeps enqueuers on a
+ * less-contested mutex.
+ *
+ * The condwait timeout is necessary because the tp_unclaimed count is not
+ * the final word on whether there is actually any work to claim. It is
+ * calculated rigorously. However, it's a bare atomic and therefore
+ * potentially out of date at any given moment. A backup strategy is
+ * necessary to restart processing in the event of a race.
  */
 static void *
 dispatch_worker(void *nope)
 {
 	(void) nope;
-	pthread_mutex_lock(&pool.tp_pool_mutex);
+	int rc;
+
 	while (B_TRUE) {
-		while (atomic_load_32(&pool.tp_dispatch_requested) == 0) {
-			pthread_cond_wait(&pool.tp_request_dispatch,
-			    &pool.tp_pool_mutex);
+		pthread_mutex_lock(&pool.tp_dispatch_mutex);
+		while (!pool.tp_dispatch_requested) {
+			struct timespec expire = timeout_timespec();
+			rc = pthread_cond_timedwait(&pool.tp_request_dispatch,
+			    &pool.tp_dispatch_mutex, &expire);
+			if (rc == ETIMEDOUT) {
+				pthread_mutex_unlock(&pool.tp_dispatch_mutex);
+				wake_worker();
+				pthread_mutex_lock(&pool.tp_dispatch_mutex);
+			}
 		}
-		pthread_mutex_unlock(&pool.tp_pool_mutex);
+		pthread_mutex_unlock(&pool.tp_dispatch_mutex);
 		sleep_nsec(ENQUEUE_DELAY_NSEC);
-		pthread_mutex_lock(&pool.tp_pool_mutex);
-		atomic_store_64(&pool.tp_dispatch_requested, 0);
-		if (atomic_load_64(&pool.tp_unclaimed) > 0) {
-			pthread_cond_signal(&pool.tp_wake_worker);
-		}
+		if (atomic_load_64(&pool.tp_unclaimed) != 0)
+			wake_worker();
 	}
 	return (NULL);
 }
@@ -677,14 +711,10 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 
 	pthread_mutex_unlock(&queue->zq_mutex);
 
-	/*
-	 * To send this notification reliably but locklessly, we need both
-	 * the atomic and the condition. The dispatcher thread uses the
-	 * atomic as its predicate while waiting.
-	 */
-	if (atomic_load_32(&pool.tp_dispatch_requested) == 0)
-		atomic_store_32(&pool.tp_dispatch_requested, 1);
+	pthread_mutex_lock(&pool.tp_dispatch_mutex);
+	pool.tp_dispatch_requested = B_TRUE;
 	pthread_cond_signal(&pool.tp_request_dispatch);
+	pthread_mutex_unlock(&pool.tp_dispatch_mutex);
 }
 
 void
@@ -726,8 +756,12 @@ zstream_queue_destroy(zstream_queue_t *queue)
 		int i = pool.tp_num_queues;
 		while (*qscan != queue) { qscan++; i--; }
 		if (i > 0)
-		    memmove(qscan, qscan + 1, i * sizeof (*qscan));
+			memmove(qscan, qscan + 1, i * sizeof (*qscan));
 	}
+	/*
+	 * Items are allocated as a single block. The address of the first
+	 * item field is in fact the start of the block.
+	 */
 	free(queue->zq_slots[0].qs_item);
 	free(queue->zq_slots);
 	queue->zq_slots = NULL;
@@ -824,7 +858,6 @@ cpu_and_queue_monitor(void *dummy)
 	uint64_t delta_jif, delta_cpu_jif;
 	long unsigned int utime, stime;
 	char buff[1024];
-	boolean_t interrupt = B_FALSE;
 	FILE *fp;
 
 	fprintf(stderr, "Queue depths:\n");
@@ -852,7 +885,6 @@ cpu_and_queue_monitor(void *dummy)
 		clock_gettime(CLOCK_MONOTONIC, &clock);
 		end_us = clock.tv_sec * 1000000 + clock.tv_nsec / 1000;
 
-		boolean_t stop = B_FALSE;
 		if (cpu_jif_prior > 0) {
 			delta_cpu_jif = utime + stime - cpu_jif_prior;
 			delta_jif = (end_us - start_us) /
@@ -861,8 +893,6 @@ cpu_and_queue_monitor(void *dummy)
 			    (pool.tp_num_threads * delta_jif);
 			cpu_pct = MIN(cpu_pct, 0.9999); /* Don't print 100% */
 			fprintf(stderr, "CPU: %5.2f%%   ", 100 * cpu_pct);
-			/* Stop to investigate low CPU usage? */
-			stop = interrupt && cpu_pct < 0.85 && cpu_pct > 0.1;
 		} else {
 			/* No CPU data available for the first interval */
 			fprintf(stderr, "%*s", CPU_FIELD_WIDTH, "");
@@ -886,9 +916,6 @@ cpu_and_queue_monitor(void *dummy)
 
 		fprintf(stderr, "\n");
 		fflush(stderr);
-
-		if (stop)
-			kill(getpid(), SIGSTOP);
 
 		cpu_jif_prior = utime + stime;
 		start_us = end_us;
