@@ -41,8 +41,8 @@ extern "C" {
  * If an item's cost is 0, it is fast-tracked and never presented to the
  * processing function.
  *
- * The cost function is run as items enter the queue, so it's
- * single-threaded and should return a value promptly. If cost estimation is
+ * The cost function is run as items enter the queue, so it's a blocking
+ * operation and should return a value promptly. If cost estimation is
  * expensive and important, use a separate queue to implement it.
  *
  * Dispatch granularity is specified as a per-batch budget that is set for
@@ -55,16 +55,16 @@ extern "C" {
  * A batch budget of 0 means that all batches will have a size of 1.
  *
  * All queues share a single thread pool that is managed to avoid
- * contention. Threads are assigned to queues dynamically according to
- * where work is available. When multiple queues have work, threads are
- * allocated among them stochastically with an eye toward preventing
- * pipeline stalls.
+ * contention. Threads are assigned to queues dynamically according to where
+ * work is available. When multiple queues have work, threads are allocated
+ * among them stochastically with an eye toward preventing pipeline stalls.
  *
  * The shared thread pool persists until the process exits.
  */
 
 #define	ZQ_MAX_BATCH	32	/* The most items that can be claimed at once */
 #define	ZQ_MAX_QUEUES	16	/* The maximum number of simultaneous queues */
+#define	ZQ_MIN_THREADS	6
 
 typedef void queue_item_t;
 
@@ -83,7 +83,7 @@ zq_process_item_f(queue_item_t *item, void *context);
  * Set the number of threads to be spawned for queue work. Since all queues
  * share a thread pool, this value affects all queues. The value must be set
  * before any queues are created. By default, one thread is spawned for
- * every CPU core, but always at least 6 threads.
+ * every CPU core, but always at least ZQ_MIN_THREADS threads.
  */
 void
 zstream_queue_set_num_threads(int num_threads);

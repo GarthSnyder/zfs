@@ -36,13 +36,11 @@
 #include "zstream_queue.h"
 #include "zstream_util.h"
 
-#define	MIN_THREADS		6
-
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
 #define	TIMEOUT_NSEC		(1000 * 1000)		/* 1ms */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
-#define	NO_WORK			0.0001	/* No-work score threshold */
+#define	NO_WORK			1.0E-6	/* No-work score threshold */
 #define	DEQUEUE_SCORE_WEIGHT	0.3	/* Dequeue score relative weight */
 
 #define	Q_MOD(queue, index)	((index) % (queue)->zq_params.qp_queue_length)
@@ -78,8 +76,7 @@
  * There are three types of lock:
  *
  * - One global lock that gates changes to the thread pool and queue cohort.
- * This lock also acts as the mutex for two pool-level conditions: the
- * tp_wake_worker mutex.
+ * This lock also acts as the mutex for the tp_wake_worker condition.
  *
  * - A second, low-contention global lock that protects the dispatch system
  *
@@ -110,12 +107,11 @@
  *
  * 4) The expiration of a backup timer. The atomic value tp_unclaimed tracks
  * the total number of enqueued-but-unclaimed items across all queues. When
- * zero, it's a hint to workers that they needn't bother performing a
- * queue-scoring pass since it is unlikely to be fruitful. This value is
- * rigorously maintained, but it's not protected by a lock or by memory
- * barriers, so it's subject to inter-core memory timing issues. In the
- * event that a critical worker wakeup is dropped, the timer intervenes to
- * keep dispatches running.
+ * zero, it indicates that no worker dispatch is currently necessary. This
+ * value is rigorously maintained and the increments and decrements are
+ * sequentially consistent. However, the reads are relaxed, so a reader may
+ * see a stale value. In the event that a critical worker wakeup is dropped,
+ * the backup timer intervenes to keep dispatches running.
  */
 
 typedef struct {
@@ -231,13 +227,13 @@ zstream_queue_set_num_threads(int n)
 	pthread_mutex_lock(&pool.tp_pool_mutex);
 	if (pool.tp_threads_created) {
 		errx(1, "thread pool size must be set before creating queues");
-	} else if (n == 0) {
+	} else if (n < 1) {
 		errx(1, "number of threads must be at least 1");
-	} else if (n < MIN_THREADS) {
-		warnx("using only %u threads may limit performance, setting "
+	} else if (n < ZQ_MIN_THREADS) {
+		warnx("using only %d threads may limit performance, setting "
 		    "anyway...", n);
 	} else if (n > 256) {
-		warnx("num_threads = %u seems suspiciously high, setting "
+		warnx("num_threads = %d seems suspiciously high, setting "
 		    "anyway...", n);
 	}
 	pool.tp_num_threads = n;
@@ -269,7 +265,7 @@ thread_pool_spinup(void)
 #else
 		pool.tp_num_threads = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
-		pool.tp_num_threads = MAX(pool.tp_num_threads, MIN_THREADS);
+		pool.tp_num_threads = MAX(pool.tp_num_threads, ZQ_MIN_THREADS);
 	}
 	for (int i = 0; i < pool.tp_num_threads; i++) {
 		char name[32];
@@ -290,6 +286,7 @@ zstream_queue_create(zq_params_t *params)
 	VERIFY3P(params->qp_cost, !=, NULL);
 	VERIFY3U(params->qp_item_size, >, 0);
 	VERIFY3U(params->qp_queue_length, >, 0);
+	VERIFY3U(params->qp_queue_length, <, 1 << 18);
 
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
@@ -362,9 +359,6 @@ zstream_queue_create(zq_params_t *params)
  * wasted claim cycle.
  *
  * Locking: the caller must hold the queue mutex.
- *
- * It is an invariant that after this function is called, either claim ==
- * enqueue or Q_SLOT(claim) is not completed.
  */
 static inline void
 advance_indexes(zstream_queue_t *queue)
@@ -423,7 +417,7 @@ score_queue(zstream_queue_t *queue)
 
 	double open_score = (open_slots > 0) ? (1.0 / open_slots) : 2.0;
 	double dq_score = (dequeueable > 0) ? (1.0 / dequeueable) : 2.0;
-	double claim_factor = MIN(claimable, PLENTY_OF_WORK) /
+	double claim_factor = MIN(claimable, (uint64_t)PLENTY_OF_WORK) /
 	    (double)PLENTY_OF_WORK;
 	double need = open_score + dq_score * DEQUEUE_SCORE_WEIGHT;
 	return (need * claim_factor);
@@ -437,7 +431,7 @@ score_queue(zstream_queue_t *queue)
 static inline int
 select_stochastic(double weights[], int num_values)
 {
-	static double denominator = (double)UINT64_MAX;
+	const double denominator = (double)UINT64_MAX;
 	uint64_t numerator;
 	double total = 0.0;
 
@@ -461,13 +455,13 @@ select_stochastic(double weights[], int num_values)
 
 /*
  * Claim up to ZQ_MAX_BATCH work items from the given queue, trying to
- * accumulate at least queue->qp_batch_budget worth of work data (==
- * "cost"). All items in a batch will be drawn from the same queue.
+ * accumulate at least qp_batch_budget worth of work data (== "cost"). All
+ * items in a batch will be drawn from the same queue.
  *
  * Does not block waiting to fill the budget; returns whatever is available.
  *
- * Locking: this function must be called with both the queue mutex and
- * the thread pool mutex held. zstream_queue_destroy() can't hold a queue's
+ * Locking: this function must be called with both the queue mutex and the
+ * thread pool mutex held. zstream_queue_destroy() can't hold a queue's
  * mutex while destroying it (because destruction entails destroying the
  * queue mutex, which must be unlocked), so holding the queue mutex while
  * attempting to claim work is not a sufficient guarantee of correctness.
@@ -610,13 +604,20 @@ queue_worker(void *dummy)
 	return (NULL);
 }
 
+/*
+ * Locking: must be called with the dispatch mutex held
+ *
+ * Skips the wakeup if tp_unclaimed == 0.
+ */
 static inline void
-wake_worker(void)
+maybe_wake_worker(void)
 {
-	pthread_mutex_lock(&pool.tp_pool_mutex);
 	pool.tp_dispatch_requested = B_FALSE;
-	pthread_cond_signal(&pool.tp_wake_worker);
-	pthread_mutex_unlock(&pool.tp_pool_mutex);
+	if (atomic_load_64(&pool.tp_unclaimed) > 0) {
+		pthread_mutex_lock(&pool.tp_pool_mutex);
+		pthread_cond_signal(&pool.tp_wake_worker);
+		pthread_mutex_unlock(&pool.tp_pool_mutex);
+	}
 }
 
 static inline struct timespec
@@ -649,24 +650,20 @@ static void *
 dispatch_worker(void *nope)
 {
 	(void) nope;
-	int rc;
-
+	pthread_mutex_lock(&pool.tp_dispatch_mutex);
 	while (B_TRUE) {
-		pthread_mutex_lock(&pool.tp_dispatch_mutex);
+		int rc;
 		while (!pool.tp_dispatch_requested) {
 			struct timespec expire = timeout_timespec();
 			rc = pthread_cond_timedwait(&pool.tp_request_dispatch,
 			    &pool.tp_dispatch_mutex, &expire);
-			if (rc == ETIMEDOUT) {
-				pthread_mutex_unlock(&pool.tp_dispatch_mutex);
-				wake_worker();
-				pthread_mutex_lock(&pool.tp_dispatch_mutex);
-			}
+			if (rc == ETIMEDOUT)
+				maybe_wake_worker();
 		}
 		pthread_mutex_unlock(&pool.tp_dispatch_mutex);
 		sleep_nsec(ENQUEUE_DELAY_NSEC);
-		if (atomic_load_64(&pool.tp_unclaimed) != 0)
-			wake_worker();
+		pthread_mutex_lock(&pool.tp_dispatch_mutex);
+		maybe_wake_worker();
 	}
 	return (NULL);
 }
@@ -704,7 +701,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 
 #ifdef MONITOR_QUEUES
 	/* Maintain queue usage data per monitor interval */
-	int depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
+	uint64_t depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
 	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
 	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
 #endif
@@ -736,12 +733,13 @@ zstream_queue_fini(zstream_queue_t *queue)
 static void
 zstream_queue_destroy(zstream_queue_t *queue)
 {
+	pthread_mutex_lock(&pool.tp_pool_mutex);
+
 #ifdef MONITOR_QUEUES
 	print_batch_size_histogram(queue);
 #endif
-	pthread_mutex_lock(&pool.tp_pool_mutex);
 
-	pthread_mutex_destroy(&queue->zq_mutex);
+	VERIFY0(pthread_mutex_destroy(&queue->zq_mutex));
 	pthread_cond_destroy(&queue->zq_cond.dequeued);
 
 	if (pthread_cond_destroy(&queue->zq_cond.completed) != 0) {
@@ -773,11 +771,11 @@ zstream_queue_destroy(zstream_queue_t *queue)
 /*
  * Locking: if more than one thread attempts to dequeue items
  * simultaneously, disaster is likely. It will work fine until the end of
- * the stream, at which point it's a tossup between a race condition with
- * multiple attempts to destroy the whole queue vs. an attempt to delete a
- * condition that another thread is waiting on. The latter will be trapped
- * in zstream_queue_destroy(), but the former will likely just crash. Hence
- * the warning not to do multithreaded dequeues in zstream_queue.h.
+ * the stream, at which point it becomes a tossup between a race condition
+ * with multiple attempts to destroy the whole queue vs. an attempt to
+ * delete a condition that another thread is waiting on. A crash or deadlock
+ * is likiely. Hence the warning not to do multithreaded dequeues in
+ * zstream_queue.h.
  *
  * Returns B_TRUE if real data is returned, B_FALSE if the end of the queue
  * has been reached.
@@ -806,13 +804,12 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 
 #ifdef	MONITOR_QUEUES
 
-#define	JIFFIES_PER_SEC		100
-#define	SAMPLE_DURATION_US	1000000
+#define	USEC_PER_JIFFY		10000
+#define	SAMPLE_DURATION_USEC	1000000
 #define	CPU_FIELD_WIDTH		14
 
 /*
- * Called only during zstream_queue_destroy(), so we know that we have
- * uncontested access to the queue's params.
+ * Called only during zstream_queue_destroy(), under the pool mutex
  */
 static void
 print_batch_size_histogram(zstream_queue_t *queue)
@@ -851,7 +848,7 @@ static void *
 cpu_and_queue_monitor(void *dummy)
 {
 	(void) dummy;
-	uint64_t period = SAMPLE_DURATION_US;
+	uint64_t period = SAMPLE_DURATION_USEC;
 	struct timespec clock = {0};
 	uint64_t start_us, end_us;
 	uint64_t cpu_jif_prior = 0;
@@ -887,8 +884,7 @@ cpu_and_queue_monitor(void *dummy)
 
 		if (cpu_jif_prior > 0) {
 			delta_cpu_jif = utime + stime - cpu_jif_prior;
-			delta_jif = (end_us - start_us) /
-			    (JIFFIES_PER_SEC * 100);
+			delta_jif = (end_us - start_us) / USEC_PER_JIFFY;
 			double cpu_pct = (double)delta_cpu_jif /
 			    (pool.tp_num_threads * delta_jif);
 			cpu_pct = MIN(cpu_pct, 0.9999); /* Don't print 100% */
