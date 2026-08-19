@@ -37,7 +37,7 @@
 #include "zstream_util.h"
 
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
-#define	TIMEOUT_NSEC		(1000 * 1000)		/* 1ms */
+#define	DISPATCH_BACKUP_NSEC	(1000 * 1000)		/* 1ms */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			1.0E-6	/* No-work score threshold */
@@ -296,9 +296,8 @@ zstream_queue_create(zq_params_t *params)
 		thread_pool_spinup();
 		pool.tp_threads_created = B_TRUE;
 	}
-	zstream_queue_t *queue = safe_malloc(sizeof (zstream_queue_t));
-	pool.tp_queues[pool.tp_num_queues] = queue;
 
+	zstream_queue_t *queue = safe_malloc(sizeof (zstream_queue_t));
 	*queue = (zstream_queue_t) {
 		.zq_id = next_queue_id++,
 		.zq_params = *params,
@@ -308,6 +307,7 @@ zstream_queue_create(zq_params_t *params)
 		.zq_stats.min_depth = INT_MAX
 #endif
 	};
+	pool.tp_queues[pool.tp_num_queues] = queue;
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size,
 	    _Alignof(worst_case_alignment_t));
@@ -555,8 +555,8 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			int count = claim_batch(*queue, batch);
 			pthread_mutex_unlock(&(*queue)->zq_mutex);
 			/*
-			 * If we didn't claim all available work, wake up
-			 * another worker thread.
+			 * Try to wake up another worker thread if there
+			 * still seems to be work available (on any queue).
 			 */
 			if (atomic_load_64(&pool.tp_unclaimed) > 0) {
 				pthread_cond_signal(&pool.tp_wake_worker);
@@ -628,7 +628,7 @@ timeout_timespec(void)
 
 	if (gettimeofday(&tv, NULL) != 0)
 		err(1, "couldn't gettimeofday()");
-	uint64_t nsec = tv.tv_usec * 1000 + TIMEOUT_NSEC;
+	uint64_t nsec = tv.tv_usec * 1000 + DISPATCH_BACKUP_NSEC;
 	expire.tv_sec = tv.tv_sec + nsec / NANOSEC;
 	expire.tv_nsec = nsec % NANOSEC;
 	return (expire);
@@ -652,8 +652,8 @@ dispatch_worker(void *nope)
 	(void) nope;
 	pthread_mutex_lock(&pool.tp_dispatch_mutex);
 	while (B_TRUE) {
-		int rc;
 		while (!pool.tp_dispatch_requested) {
+			int rc;
 			struct timespec expire = timeout_timespec();
 			rc = pthread_cond_timedwait(&pool.tp_request_dispatch,
 			    &pool.tp_dispatch_mutex, &expire);
@@ -674,9 +674,10 @@ dispatch_worker(void *nope)
 void
 zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 {
-	VERIFY(queue != NULL);
+	VERIFY3P(queue, !=, NULL);
 	pthread_mutex_lock(&queue->zq_mutex);
 
+	VERIFY3B(queue->zq_disallow_enqueue, ==, B_FALSE);
 	while (Q_FULL(queue)) {
 		pthread_cond_wait(&queue->zq_cond.dequeued, &queue->zq_mutex);
 	}
@@ -740,8 +741,7 @@ zstream_queue_destroy(zstream_queue_t *queue)
 #endif
 
 	VERIFY0(pthread_mutex_destroy(&queue->zq_mutex));
-	pthread_cond_destroy(&queue->zq_cond.dequeued);
-
+	VERIFY0(pthread_cond_destroy(&queue->zq_cond.dequeued));
 	if (pthread_cond_destroy(&queue->zq_cond.completed) != 0) {
 		errx(1, "cannot destroy zstream_queue completed condition - "
 		    "are you attempting to dequeue from multiple threads "
@@ -773,9 +773,8 @@ zstream_queue_destroy(zstream_queue_t *queue)
  * simultaneously, disaster is likely. It will work fine until the end of
  * the stream, at which point it becomes a tossup between a race condition
  * with multiple attempts to destroy the whole queue vs. an attempt to
- * delete a condition that another thread is waiting on. A crash or deadlock
- * is likiely. Hence the warning not to do multithreaded dequeues in
- * zstream_queue.h.
+ * delete a condition that another thread is waiting on. Hence the warning
+ * not to do multithreaded dequeues in zstream_queue.h.
  *
  * Returns B_TRUE if real data is returned, B_FALSE if the end of the queue
  * has been reached.

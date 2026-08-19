@@ -41,8 +41,8 @@ extern "C" {
  * If an item's cost is 0, it is fast-tracked and never presented to the
  * processing function.
  *
- * The cost function is run as items enter the queue, so it's a blocking
- * operation and should return a value promptly. If cost estimation is
+ * The cost function is run as items enter the queue, with the queue mutex
+ * held, so it should return a value promptly. If cost estimation is
  * expensive and important, use a separate queue to implement it.
  *
  * Dispatch granularity is specified as a per-batch budget that is set for
