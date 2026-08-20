@@ -82,7 +82,6 @@ typedef struct {
 typedef struct {
 	uint32_t	qc_producers;		/* Number of producers */
 	uint64_t	qc_items;		/* Items per producer */
-	size_t		qc_queue_length;
 	size_t		qc_batch_budget;
 	size_t		qc_pattern_len;		/* Extra payload bytes */
 	uint32_t	qc_zero_cost_pct;	/* % of items fast-tracked */
@@ -314,7 +313,6 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 			.qp_item_size =
 			    sizeof (qtest_item_t) + cfgs[i].qc_pattern_len,
 			.qp_batch_budget = cfgs[i].qc_batch_budget,
-			.qp_queue_length = cfgs[i].qc_queue_length,
 		};
 		runs[i].qr_queue = zstream_queue_create(&params);
 	}
@@ -355,7 +353,6 @@ queue_basic(void)
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 5000,
-		.qc_queue_length = 64,
 		.qc_batch_budget = 256,
 		.qc_pattern_len = 32,
 		.qc_zero_cost_pct = 20,
@@ -376,7 +373,6 @@ queue_torture(void)
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 100000,
-		.qc_queue_length = 512,
 		.qc_batch_budget = 2048,
 		.qc_pattern_len = 64,
 		.qc_zero_cost_pct = 30,
@@ -411,7 +407,6 @@ queue_edge_cases(void)
 				qtest_config_t cfg = {
 					.qc_producers = 1,
 					.qc_items = counts[n],
-					.qc_queue_length = lengths[l],
 					.qc_batch_budget = budgets[b],
 					.qc_pattern_len =
 					    (lengths[l] & 1) ? 0 : 24,
@@ -438,7 +433,6 @@ queue_zero_cost(void)
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 20000,
-		.qc_queue_length = 128,
 		.qc_batch_budget = 1024,
 		.qc_pattern_len = 16,
 		.qc_zero_cost_pct = 100,
@@ -458,7 +452,6 @@ queue_multi_producer(void)
 	qtest_config_t cfg = {
 		.qc_producers = 8,
 		.qc_items = 15000,
-		.qc_queue_length = 256,
 		.qc_batch_budget = 512,
 		.qc_pattern_len = 24,
 		.qc_zero_cost_pct = 25,
@@ -486,7 +479,6 @@ queue_multi_queue(void)
 		qtest_config_t cfg = {
 			.qc_producers = producers,
 			.qc_items = 4000 / producers,
-			.qc_queue_length = (size_t)4 << (i % 6),
 			.qc_batch_budget =
 			    (i % 4 == 0) ? 0 : (size_t)64 << (i % 5),
 			.qc_pattern_len = 8 * (i % 5),
@@ -523,8 +515,6 @@ queue_stress(void)
 				.qc_items = (2000 +
 				    selftest_rng_below(&rng, 8000)) /
 				    producers,
-				.qc_queue_length = (size_t)1 <<
-				    selftest_rng_below(&rng, 10),
 				.qc_batch_budget =
 				    (selftest_rng_below(&rng, 3) == 0) ? 0 :
 				    selftest_rng_below(&rng, 4096),

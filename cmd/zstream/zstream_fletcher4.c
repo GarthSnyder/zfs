@@ -281,14 +281,13 @@ chain_fletcher4(queue_item_t *item_in, void *context_in)
  * are fast.
  */
 chain_step_t
-parallel_calc_fletcher4(int queue_length)
+parallel_calc_fletcher4(void)
 {
 	chain_step_t step = {
 	    .cs_type = CS_PARALLEL,
 	    .cs_in_size = sizeof (drr_packet_t),
 	    .cs_out_size = sizeof (drr_fletcher4_t),
 	    .cs_parallel = {
-		.queue_length = queue_length,
 		.batch_budget = 256 * 1024,
 		.process = chain_calc_fletcher4,
 		.cost = payload_size_as_cost

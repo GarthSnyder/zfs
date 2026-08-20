@@ -245,7 +245,6 @@ parallel_decompress_writes(compression_spec_t *target)
 	    .cs_out_size = sizeof (drr_packet_t),
 	    .cs_context = context,
 	    .cs_parallel = {
-		.queue_length = 256,
 		.batch_budget = 256 * 1024,
 		.process = chain_decompress_writes,
 		.cost = chain_decompress_cost
@@ -269,7 +268,6 @@ parallel_compress_writes(compression_spec_t *target)
 	    .cs_out_size = sizeof (drr_packet_t),
 	    .cs_context = context,
 	    .cs_parallel = {
-		.queue_length = 1024,
 		.batch_budget = 32 * 1024,
 		.process = chain_compress_writes,
 		.cost = chain_compress_cost

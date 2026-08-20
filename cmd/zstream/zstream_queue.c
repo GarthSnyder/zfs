@@ -38,16 +38,17 @@
 
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
 #define	DISPATCH_BACKUP_NSEC	(1000 * 1000)		/* 1ms */
+#define SLOTS_PER_QUEUE		4192
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			1.0E-6	/* No-work score threshold */
 #define	DEQUEUE_SCORE_WEIGHT	0.3	/* Dequeue score relative weight */
 
-#define	Q_MOD(queue, index)	((index) % (queue)->zq_params.qp_queue_length)
+#define	Q_MOD(queue, index)	((index) % SLOTS_PER_QUEUE)
 #define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD((queue), (index))])
 
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
-	    (queue)->zq_params.qp_queue_length)
+	    SLOTS_PER_QUEUE)
 
 /*
  * A zstream_queue is a ring buffer with four indexes: enqueue, claim,
@@ -285,8 +286,6 @@ zstream_queue_create(zq_params_t *params)
 	VERIFY3P(params->qp_process, !=, NULL);
 	VERIFY3P(params->qp_cost, !=, NULL);
 	VERIFY3U(params->qp_item_size, >, 0);
-	VERIFY3U(params->qp_queue_length, >, 0);
-	VERIFY3U(params->qp_queue_length, <, 1 << 18);
 
 	pthread_once(&once_control, thread_pool_init);
 	pthread_mutex_lock(&pool.tp_pool_mutex);
@@ -301,7 +300,7 @@ zstream_queue_create(zq_params_t *params)
 	*queue = (zstream_queue_t) {
 		.zq_id = next_queue_id++,
 		.zq_params = *params,
-		.zq_slots = safe_malloc(params->qp_queue_length *
+		.zq_slots = safe_malloc(SLOTS_PER_QUEUE *
 		    (sizeof (queue_slot_t))),
 #ifdef MONITOR_QUEUES
 		.zq_stats.min_depth = INT_MAX
@@ -311,8 +310,8 @@ zstream_queue_create(zq_params_t *params)
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size,
 	    _Alignof(worst_case_alignment_t));
-	uint8_t *items = safe_malloc(params->qp_queue_length * qpis_rounded);
-	for (size_t i = 0; i < params->qp_queue_length; i++) {
+	uint8_t *items = safe_malloc(SLOTS_PER_QUEUE * qpis_rounded);
+	for (int i = 0; i < SLOTS_PER_QUEUE; i++) {
 		queue->zq_slots[i].qs_item =
 		    (queue_item_t *)(items + i * qpis_rounded);
 	}
@@ -413,7 +412,7 @@ score_queue(zstream_queue_t *queue)
 	uint64_t claimable = queue->zq_ix.enqueue - queue->zq_ix.claim;
 	uint64_t dequeueable = queue->zq_ix.complete - queue->zq_ix.dequeue;
 	uint64_t in_queue = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
-	uint64_t open_slots = queue->zq_params.qp_queue_length - in_queue;
+	uint64_t open_slots = SLOTS_PER_QUEUE - in_queue;
 
 	double open_score = (open_slots > 0) ? (1.0 / open_slots) : 2.0;
 	double dq_score = (dequeueable > 0) ? (1.0 / dequeueable) : 2.0;

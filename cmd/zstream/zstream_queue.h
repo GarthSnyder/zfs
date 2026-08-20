@@ -99,7 +99,6 @@ typedef struct {
 	void			*qp_context;
 	size_t			qp_item_size;
 	size_t			qp_batch_budget;
-	size_t			qp_queue_length;
 } zq_params_t;
 
 zstream_queue_t *
