@@ -18,7 +18,6 @@
 #include <atomic.h>
 #include <err.h>
 #include <errno.h>
-#include <limits.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stddef.h>
@@ -636,10 +635,10 @@ timeout_timespec(void)
 }
 
 /*
- * This function is the body of the dispatch thread, which converts a
- * notification from an enqueuer into a possible worker wakeup roughly
- * ENQUEUE_DELAY_NSEC later. The delay facilitates larger batch sizes and
- * keeps enqueuers on a less-contested mutex.
+ * The enqueue notification pacing thread, which converts a notification
+ * from an enqueuer into a possible worker wakeup roughly ENQUEUE_DELAY_NSEC
+ * later. The delay facilitates larger batch sizes and keeps enqueuers on a
+ * less-contested mutex.
  *
  * The condwait timeout is necessary because the tp_unclaimed count is not
  * the final word on whether there is actually any work to claim. It is
@@ -658,8 +657,12 @@ dispatch_worker(void *nope)
 			struct timespec expire = timeout_timespec();
 			rc = pthread_cond_timedwait(&pool.tp_request_dispatch,
 			    &pool.tp_dispatch_mutex, &expire);
-			if (rc == ETIMEDOUT)
+			if (rc == ETIMEDOUT) {
 				maybe_wake_worker();
+			} else if (rc != 0) {
+ 				errx(1, "pthread_cond_timedwait() failed: %s",
+ 				    strerror(rc));
+ 			}
 		}
 		pthread_mutex_unlock(&pool.tp_dispatch_mutex);
 		sleep_nsec(ENQUEUE_DELAY_NSEC);
