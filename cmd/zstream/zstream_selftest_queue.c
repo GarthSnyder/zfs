@@ -82,7 +82,6 @@ typedef struct {
 typedef struct {
 	uint32_t	qc_producers;		/* Number of producers */
 	uint64_t	qc_items;		/* Items per producer */
-	size_t		qc_batch_budget;
 	size_t		qc_pattern_len;		/* Extra payload bytes */
 	uint32_t	qc_zero_cost_pct;	/* % of items fast-tracked */
 	size_t		qc_max_cost;		/* Nonzero costs are 1..max */
@@ -311,8 +310,7 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 			.qp_cost = qtest_cost,
 			.qp_context = &runs[i],
 			.qp_item_size =
-			    sizeof (qtest_item_t) + cfgs[i].qc_pattern_len,
-			.qp_batch_budget = cfgs[i].qc_batch_budget,
+			    sizeof (qtest_item_t) + cfgs[i].qc_pattern_len
 		};
 		runs[i].qr_queue = zstream_queue_create(&params);
 	}
@@ -353,7 +351,6 @@ queue_basic(void)
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 5000,
-		.qc_batch_budget = 256,
 		.qc_pattern_len = 32,
 		.qc_zero_cost_pct = 20,
 		.qc_max_cost = 64,
@@ -373,7 +370,6 @@ queue_torture(void)
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 100000,
-		.qc_batch_budget = 2048,
 		.qc_pattern_len = 64,
 		.qc_zero_cost_pct = 30,
 		.qc_max_cost = 4096,
@@ -396,7 +392,6 @@ queue_edge_cases(void)
 {
 	static const size_t lengths[] =
 	    { 1, 2, ZQ_MAX_BATCH - 1, ZQ_MAX_BATCH, ZQ_MAX_BATCH + 1, 64 };
-	static const size_t budgets[] = { 0, 1, 16, SIZE_MAX / 2 };
 	uint64_t stream = 200;
 
 	for (int l = 0; l < 6; l++) {
@@ -407,7 +402,6 @@ queue_edge_cases(void)
 				qtest_config_t cfg = {
 					.qc_producers = 1,
 					.qc_items = counts[n],
-					.qc_batch_budget = budgets[b],
 					.qc_pattern_len =
 					    (lengths[l] & 1) ? 0 : 24,
 					.qc_zero_cost_pct = 25,
@@ -433,7 +427,6 @@ queue_zero_cost(void)
 	qtest_config_t cfg = {
 		.qc_producers = 1,
 		.qc_items = 20000,
-		.qc_batch_budget = 1024,
 		.qc_pattern_len = 16,
 		.qc_zero_cost_pct = 100,
 		.qc_max_cost = 8,
@@ -452,7 +445,6 @@ queue_multi_producer(void)
 	qtest_config_t cfg = {
 		.qc_producers = 8,
 		.qc_items = 15000,
-		.qc_batch_budget = 512,
 		.qc_pattern_len = 24,
 		.qc_zero_cost_pct = 25,
 		.qc_max_cost = 512,
@@ -479,8 +471,6 @@ queue_multi_queue(void)
 		qtest_config_t cfg = {
 			.qc_producers = producers,
 			.qc_items = 4000 / producers,
-			.qc_batch_budget =
-			    (i % 4 == 0) ? 0 : (size_t)64 << (i % 5),
 			.qc_pattern_len = 8 * (i % 5),
 			.qc_zero_cost_pct = 10 * (i % 6),
 			.qc_max_cost = (size_t)16 << (i % 8),
@@ -515,9 +505,6 @@ queue_stress(void)
 				.qc_items = (2000 +
 				    selftest_rng_below(&rng, 8000)) /
 				    producers,
-				.qc_batch_budget =
-				    (selftest_rng_below(&rng, 3) == 0) ? 0 :
-				    selftest_rng_below(&rng, 4096),
 				.qc_pattern_len =
 				    selftest_rng_below(&rng, 64),
 				.qc_zero_cost_pct =

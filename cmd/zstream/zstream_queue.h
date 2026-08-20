@@ -45,14 +45,7 @@ extern "C" {
  * held, so it should return a value promptly. If cost estimation is
  * expensive and important, use a separate queue to implement it.
  *
- * Dispatch granularity is specified as a per-batch budget that is set for
- * each queue in the same (arbitrary) units used for item costs. Threads
- * claim items until the budget is met, there are no more items available,
- * or ZQ_MAX_BATCH items have been claimed. When claiming items to work on,
- * threads never block waiting for additional work to arrive. They start
- * work as quickly as possible even if the budget has not been reached.
- *
- * A batch budget of 0 means that all batches will have a size of 1.
+ * Work is processed in batches, the size of which is tuned automatically.
  *
  * All queues share a single thread pool that is managed to avoid
  * contention. Threads are assigned to queues dynamically according to where
@@ -98,7 +91,6 @@ typedef struct {
 	zq_estimate_cost_f	*qp_cost;
 	void			*qp_context;
 	size_t			qp_item_size;
-	size_t			qp_batch_budget;
 } zq_params_t;
 
 zstream_queue_t *

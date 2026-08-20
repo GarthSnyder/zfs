@@ -38,7 +38,11 @@
 
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
 #define	DISPATCH_BACKUP_NSEC	(1000 * 1000)		/* 1ms */
-#define SLOTS_PER_QUEUE		4192
+
+#define	MAX_BATCH		2048
+#define	SLOTS_PER_QUEUE		4192
+#define	STARTING_NS_PER_COST	1.0
+#define	BATCH_TIME_NSEC		((double)500 * 1000)	/* 500us */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			1.0E-6	/* No-work score threshold */
@@ -137,6 +141,8 @@ typedef struct {
 typedef struct {
 	int		min_depth;
 	int		max_depth;
+	uint64_t	nsec_used;
+	size_t		cost_processed;
 } zq_stats_t;
 
 struct zstream_queue {
@@ -146,10 +152,11 @@ struct zstream_queue {
 	zq_indexes_t	zq_ix;
 	zq_conditions_t	zq_cond;
 	zq_params_t	zq_params;
+	double		zq_ns_per_cost;
 	boolean_t	zq_disallow_enqueue;
-#ifdef MONITOR_QUEUES
 	zq_stats_t	zq_stats;
-	uint64_t	zq_histogram[ZQ_MAX_BATCH+1];	/* Batch sizes */
+#ifdef MONITOR_QUEUES
+	uint64_t	zq_histogram[MAX_BATCH+1];	/* Batch sizes */
 #endif
 };
 
@@ -302,6 +309,7 @@ zstream_queue_create(zq_params_t *params)
 		.zq_params = *params,
 		.zq_slots = safe_malloc(SLOTS_PER_QUEUE *
 		    (sizeof (queue_slot_t))),
+		.zq_ns_per_cost = STARTING_NS_PER_COST,
 #ifdef MONITOR_QUEUES
 		.zq_stats.min_depth = INT_MAX
 #endif
@@ -453,7 +461,7 @@ select_stochastic(double weights[], int num_values)
 }
 
 /*
- * Claim up to ZQ_MAX_BATCH work items from the given queue, trying to
+ * Claim up to MAX_BATCH work items from the given queue, trying to
  * accumulate at least qp_batch_budget worth of work data (== "cost"). All
  * items in a batch will be drawn from the same queue.
  *
@@ -476,21 +484,26 @@ select_stochastic(double weights[], int num_values)
 static int
 claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 {
-	size_t cost_claimed = 0;
+	size_t cost_to_claim, cost_claimed = 0;
 	int count = 0;
 	uint64_t passed = 0;
 	boolean_t more_to_claim, more_slots, more_budget;
-	boolean_t first_and_only, ok_to_claim;
+
+	if (queue->zq_stats.cost_processed == 0) {
+		cost_to_claim = 1;
+	} else {
+		double ns_per_cost = (double)queue->zq_stats.nsec_used /
+			queue->zq_stats.cost_processed;
+		cost_to_claim = BATCH_TIME_NSEC / ns_per_cost;
+		cost_to_claim = MAX(1, cost_to_claim);
+	}
 
 	while (B_TRUE) {
 		more_to_claim = queue->zq_ix.claim < queue->zq_ix.enqueue;
-		more_slots = count < ZQ_MAX_BATCH;
-		more_budget = cost_claimed < queue->zq_params.qp_batch_budget;
-		first_and_only = queue->zq_params.qp_batch_budget == 0 &&
-		    count == 0;
-		ok_to_claim = first_and_only || more_budget;
+		more_slots = count < MAX_BATCH;
+		more_budget = cost_claimed < cost_to_claim;
 
-		if (!more_to_claim || !more_slots || !ok_to_claim) {
+		if (!more_to_claim || !more_slots || !more_budget) {
 			break;
 		}
 		queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.claim);
@@ -566,6 +579,14 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 	}
 }
 
+static inline uint64_t
+time_now_ns(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ((uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec);
+}
+
 /*
  * Batches are processed without holding any locks. The existence of the
  * items we're working on guarantees that the queue can't be destroyed out
@@ -580,22 +601,31 @@ queue_worker(void *dummy)
 {
 	(void) dummy;
 	zstream_queue_t *queue;
-	queue_slot_t *batch[ZQ_MAX_BATCH];
+	queue_slot_t *batch[MAX_BATCH];
 	int count;
 
 	while (B_TRUE) {
 		count = assign_queue_and_get_work(&queue, batch);
 		if (count) {
+			size_t batch_cost = 0;
+			uint64_t start = time_now_ns();
 			zq_process_item_f *process =
 			    queue->zq_params.qp_process;
 			void *context = queue->zq_params.qp_context;
 			for (int i = 0; i < count; i++) {
 				process(batch[i]->qs_item, context);
+				batch_cost += batch[i]->qs_cost;
 			}
 			pthread_mutex_lock(&queue->zq_mutex);
 			for (int i = 0; i < count; i++) {
 				batch[i]->qs_completed = B_TRUE;
 			}
+			/*
+			 * Update the queue's observed processing rate. The
+			 * first observation seeds the EWMA directly.
+			 */
+			queue->zq_stats.cost_processed += batch_cost;
+			queue->zq_stats.nsec_used += time_now_ns() - start;
 			advance_indexes(queue);
 			pthread_mutex_unlock(&queue->zq_mutex);
 		}
@@ -821,7 +851,7 @@ print_batch_size_histogram(zstream_queue_t *queue)
 
 	if (lines_printed++ == 0)
 		fprintf(stderr, "\nBatch size histograms:\n");
-	for (last_nonzero = ZQ_MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
+	for (last_nonzero = MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
 		if (queue->zq_histogram[last_nonzero] > 0)
 			break;
 	}

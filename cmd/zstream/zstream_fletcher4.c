@@ -288,7 +288,6 @@ parallel_calc_fletcher4(void)
 	    .cs_in_size = sizeof (drr_packet_t),
 	    .cs_out_size = sizeof (drr_fletcher4_t),
 	    .cs_parallel = {
-		.batch_budget = 256 * 1024,
 		.process = chain_calc_fletcher4,
 		.cost = payload_size_as_cost
 	    }
