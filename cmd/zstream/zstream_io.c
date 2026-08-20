@@ -63,11 +63,21 @@ typedef struct {
 	uint64_t	cc_last_bytes;
 } checkpoint_context_t;
 
+/*
+ * Payload accounting is updated on the hot path by whichever thread adds,
+ * replaces, or frees a payload, so dif_current is manipulated with atomics
+ * rather than under dif_mutex. The mutex and condition variable are used
+ * only for the rare handshake in which chain_read() parks to wait for
+ * memory; dif_waiting tells the threads that free payloads whether such a
+ * handshake is in progress and is the only reason they ever take the mutex.
+ */
 typedef struct {
 	pthread_mutex_t	dif_mutex;
 	pthread_cond_t	dif_cond;
-	uint64_t	dif_current;
-	size_t		dif_allowed;
+	uint64_t	dif_current;	/* atomic access only */
+	boolean_t	dif_waiting;	/* atomic access only */
+	uint64_t	dif_allowed;
+	uint64_t	dif_resume;	/* dif_allowed - MEMORY_HYSTERESIS */
 } data_in_flight_t;
 
 static io_context_t io_contexts[MAX_IO_STREAMS];
@@ -103,6 +113,7 @@ initialize_memory_tracking(void)
 		int64_t addl = (double)flex * MEMORY_PCT / 100;
 		payloads.dif_allowed = MEMORY_BASE + MAX(addl, 0);
 	}
+	payloads.dif_resume = payloads.dif_allowed - MEMORY_HYSTERESIS;
 }
 
 /*
@@ -266,21 +277,41 @@ set_stream_attributes(drr_packet_t *item)
  * thread. However, multiple other steps in the chain may want to modify or
  * free payloads, so memory has to be managed with proper multithreading
  * safeguards.
+ *
+ * The common case is that we are nowhere near the limit, which costs only a
+ * single unsynchronized read of dif_current. We take the mutex only when we
+ * are actually going to park.
+ *
+ * The store to dif_waiting and the subsequent load of dif_current are the
+ * mirror image of the sequence in set_payload_impl(), which stores
+ * dif_current and then loads dif_waiting. Both halves must be sequentially
+ * consistent: if either were weaker, the two threads could each miss the
+ * other's store and we would sleep through the wakeup that releases us.
  */
 static inline void
 maybe_wait_for_memory(size_t bytes_wanted)
 {
+	uint64_t current = __atomic_load_n(&payloads.dif_current,
+	    __ATOMIC_RELAXED);
+
+	if (current + bytes_wanted <= payloads.dif_allowed)
+		return;
+
+	fprintf(stderr, "Reached memory limit of %llu bytes, "
+	    "pausing input...\n", (u_longlong_t)payloads.dif_allowed);
+
 	pthread_mutex_lock(&payloads.dif_mutex);
-	uint64_t mem_once_read = payloads.dif_current + bytes_wanted;
-	if (mem_once_read > payloads.dif_allowed) {
-		uint64_t target = payloads.dif_allowed - MEMORY_HYSTERESIS;
-		fprintf(stderr, "Reached memory limit of %llu bytes,"
-		    "pausing input...\n",(u_longlong_t)payloads.dif_allowed);
-		while (payloads.dif_current > target) {
-			pthread_cond_wait(&payloads.dif_cond,
-			    &payloads.dif_mutex);
-		}
+	__atomic_store_n(&payloads.dif_waiting, B_TRUE, __ATOMIC_SEQ_CST);
+	while (__atomic_load_n(&payloads.dif_current, __ATOMIC_SEQ_CST) >
+	    payloads.dif_resume) {
+		pthread_cond_wait(&payloads.dif_cond, &payloads.dif_mutex);
 	}
+	/*
+	 * A freeing thread that sees a stale B_TRUE here just takes the
+	 * mutex for a broadcast that no one is waiting for, so this store
+	 * needs no ordering of its own.
+	 */
+	__atomic_store_n(&payloads.dif_waiting, B_FALSE, __ATOMIC_RELAXED);
 	pthread_mutex_unlock(&payloads.dif_mutex);
 }
 
@@ -393,7 +424,8 @@ chain_write(void *item_in, void *context_in)
 				err(1, "error closing output stream");
 			context->ic_fp = NULL;
 		}
-		VERIFY0(payloads.dif_current);
+		VERIFY0(__atomic_load_n(&payloads.dif_current,
+		    __ATOMIC_RELAXED));
 		return (D_OK);
 	}
 
@@ -438,6 +470,10 @@ chain_null_output(void *item_in, void *context)
 {
 	(void) context;
 	drr_packet_t *item = (drr_packet_t *)item_in;
+
+	if (item == NULL)
+		return (D_OK);
+
 	set_payload(item, NULL, 0);
 	return (D_OK);
 }
@@ -619,16 +655,38 @@ set_payload_impl(void *item_in, void *payload_in, uint64_t size,
 	VERIFY(payload != NULL || size == 0);
 	VERIFY(payload == NULL || payload != item->dp_payload);
 
-	pthread_mutex_lock(&payloads.dif_mutex);
-	payloads.dif_current -= item->dp_payload_size;
 	if (free_old && item->dp_payload != NULL) {
 		free(item->dp_payload);
 	}
+	int64_t delta = (int64_t)size - (int64_t)item->dp_payload_size;
 	item->dp_payload = payload;
 	item->dp_payload_size = size;
-	payloads.dif_current += size;
-	pthread_cond_signal(&payloads.dif_cond);
-	pthread_mutex_unlock(&payloads.dif_mutex);
+
+	/*
+	 * This is the hot path: every record that carries a payload passes
+	 * through here at least twice, once on the way in and once on the
+	 * way out. Keep it to a single atomic update of dif_current. The
+	 * update is sequentially consistent (which on most architectures
+	 * costs no more than a relaxed one, since either way it compiles to
+	 * a single atomic add) because the load of dif_waiting below must
+	 * not be hoisted above it. See maybe_wait_for_memory().
+	 *
+	 * dif_waiting shares a cache line with dif_current, which we have
+	 * just acquired exclusively, so reading it is essentially free.
+	 */
+	uint64_t current = __atomic_add_fetch(&payloads.dif_current, delta,
+	    __ATOMIC_SEQ_CST);
+
+	/*
+	 * Only a net reduction can release a parked reader, and only if it
+	 * brings us back under the hysteresis threshold.
+	 */
+	if (delta < 0 && current <= payloads.dif_resume &&
+	    __atomic_load_n(&payloads.dif_waiting, __ATOMIC_SEQ_CST)) {
+		pthread_mutex_lock(&payloads.dif_mutex);
+		pthread_cond_broadcast(&payloads.dif_cond);
+		pthread_mutex_unlock(&payloads.dif_mutex);
+	}
 }
 
 inline void
