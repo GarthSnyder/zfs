@@ -295,6 +295,9 @@ maybe_wait_for_memory(size_t bytes_wanted)
 	if (current + bytes_wanted <= payloads.dif_allowed)
 		return;
 
+	fprintf(stderr, "Waiting for memory...\n");
+	fflush(stderr);
+
 	pthread_mutex_lock(&payloads.dif_mutex);
 	__atomic_store_n(&payloads.dif_waiting, B_TRUE, __ATOMIC_SEQ_CST);
 	while (__atomic_load_n(&payloads.dif_current, __ATOMIC_SEQ_CST) >

@@ -39,10 +39,10 @@
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
 #define	DISPATCH_BACKUP_NSEC	(1000 * 1000)		/* 1ms */
 
-#define	MAX_BATCH		2048
-#define	SLOTS_PER_QUEUE		4192
+#define	MAX_BATCH		512
+#define	SLOTS_PER_QUEUE		4096
 #define	STARTING_NS_PER_COST	1.0
-#define	BATCH_TIME_NSEC		((double)500 * 1000)	/* 500us */
+#define	BATCH_TIME_NSEC		(400 * 1000)		/* 500us */
 
 #define	PLENTY_OF_WORK		6	/* "Many" items to claim */
 #define	NO_WORK			1.0E-6	/* No-work score threshold */
@@ -53,6 +53,8 @@
 
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
 	    SLOTS_PER_QUEUE)
+
+// #define MONITOR_QUEUES
 
 /*
  * A zstream_queue is a ring buffer with four indexes: enqueue, claim,
@@ -494,7 +496,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 	} else {
 		double ns_per_cost = (double)queue->zq_stats.nsec_used /
 			queue->zq_stats.cost_processed;
-		cost_to_claim = BATCH_TIME_NSEC / ns_per_cost;
+		cost_to_claim = (double)BATCH_TIME_NSEC / ns_per_cost;
 		cost_to_claim = MAX(1, cost_to_claim);
 	}
 
