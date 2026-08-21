@@ -41,7 +41,7 @@
  * When memory is exhausted, chain_read() waits until memory in use is
  * MEMORY_HYSTERESIS bytes lower than the nominal limit.
  */
-#define	MEMORY_BASE		(512 << 20)	/* 512MB*/
+#define	MEMORY_BASE		(512 << 20)	/* 512MB */
 #define	MEMORY_BASE_CUTOFF	(4ULL << 30)	/* 4GB */
 #define	MEMORY_PCT		10		/* % beyond the base region */
 #define	MEMORY_HYSTERESIS 	(128 << 20)	/* 128MB */
@@ -64,12 +64,10 @@ typedef struct {
 } checkpoint_context_t;
 
 /*
- * Payload accounting is updated on the hot path by whichever thread adds,
- * replaces, or frees a payload, so dif_current is manipulated with atomics
- * rather than under dif_mutex. The mutex and condition variable are used
- * only for the rare handshake in which chain_read() parks to wait for
- * memory; dif_waiting tells the threads that free payloads whether such a
- * handshake is in progress and is the only reason they ever take the mutex.
+ * See comments at set_payload() for more information about locking and
+ * performance considerations for data-in-flight tracking. Briefly, access
+ * patterns make the mutex expensive, so it's reserved for awakening threads
+ * that are waiting for memory.
  */
 typedef struct {
 	pthread_mutex_t	dif_mutex;
@@ -97,7 +95,7 @@ static data_in_flight_t payloads = {
 static pthread_once_t	dif_init_control = PTHREAD_ONCE_INIT;
 
 /*
- * Called through chain_read() -> pthread_once()
+ * Called through setup_io() -> pthread_once()
  */
 static void
 initialize_memory_tracking(void)
@@ -271,22 +269,22 @@ set_stream_attributes(drr_packet_t *item)
 
 /*
  * Given a desired payload size, determine whether we can read it in
- * immediately. If not, we must wait for memory to become available.
+ * immediately. If not, we have to wait for memory to become available.
  *
  * chain_read() is a serial chain step and will always be called by the same
  * thread. However, multiple other steps in the chain may want to modify or
- * free payloads, so memory has to be managed with proper multithreading
- * safeguards.
+ * free payloads, so memory tracking has to be managed with multithreading
+ * in mind.
  *
  * The common case is that we are nowhere near the limit, which costs only a
- * single unsynchronized read of dif_current. We take the mutex only when we
- * are actually going to park.
+ * single unsynchronized read of dif_current. We lock the mutex only when we
+ * are actually going to await the condition.
  *
  * The store to dif_waiting and the subsequent load of dif_current are the
  * mirror image of the sequence in set_payload_impl(), which stores
  * dif_current and then loads dif_waiting. Both halves must be sequentially
- * consistent: if either were weaker, the two threads could each miss the
- * other's store and we would sleep through the wakeup that releases us.
+ * consistent: if either were weaker, the two threads could miss each
+ * other's store.
  */
 static inline void
 maybe_wait_for_memory(size_t bytes_wanted)
@@ -296,9 +294,6 @@ maybe_wait_for_memory(size_t bytes_wanted)
 
 	if (current + bytes_wanted <= payloads.dif_allowed)
 		return;
-
-	fprintf(stderr, "Reached memory limit of %llu bytes, "
-	    "pausing input...\n", (u_longlong_t)payloads.dif_allowed);
 
 	pthread_mutex_lock(&payloads.dif_mutex);
 	__atomic_store_n(&payloads.dif_waiting, B_TRUE, __ATOMIC_SEQ_CST);
@@ -358,10 +353,8 @@ chain_read(void *item_in, void *context_in)
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 
-	pthread_once(&dif_init_control, initialize_memory_tracking);
-	if (!context->ic_fp) {
+	if (!context->ic_fp)
 		open_file(context);
-	}
 
 	item->dp_payload = NULL;
 	item->dp_payload_size = 0;
@@ -425,7 +418,7 @@ chain_write(void *item_in, void *context_in)
 			context->ic_fp = NULL;
 		}
 		VERIFY0(__atomic_load_n(&payloads.dif_current,
-		    __ATOMIC_RELAXED));
+		    __ATOMIC_SEQ_CST));
 		return (D_OK);
 	}
 
@@ -484,6 +477,7 @@ chain_null_output(void *item_in, void *context)
 static chain_step_t
 setup_io(const char *filename, boolean_t for_reading)
 {
+	pthread_once(&dif_init_control, initialize_memory_tracking);
 	int context_num = next_io_context++ % MAX_IO_STREAMS;
 
 	io_context_t context = {
@@ -646,6 +640,21 @@ serial_drop_record_types(uint32_t drop_mask)
 	return (step);
 }
 
+/*
+ * Every record that carries a payload passes through here at least twice,
+ * once on the way in and once on the way out. Those calls are also made by
+ * different threads, which unfortunately is something of an adversarial
+ * pattern for a pthreads mutex. The cache line containing the lock
+ * structure ping-pongs among cores, and each move is performed with
+ * restrictive memory barriers. We use atomic operations instead and reserve
+ * the mutex for waking up a sleeping memory consumer.
+ *
+ * The atomic update is done in sequentially consistent mode because the
+ * (potential) load of dif_waiting beneath must not be hoisted above the
+ * update to dif_current. dif_waiting shares a cache line with dif_current,
+ * which we have just acquired exclusively, so reading it is essentially
+ * free.
+ */
 static void
 set_payload_impl(void *item_in, void *payload_in, uint64_t size,
     boolean_t free_old)
@@ -663,16 +672,8 @@ set_payload_impl(void *item_in, void *payload_in, uint64_t size,
 	item->dp_payload_size = size;
 
 	/*
-	 * This is the hot path: every record that carries a payload passes
-	 * through here at least twice, once on the way in and once on the
-	 * way out. Keep it to a single atomic update of dif_current. The
-	 * update is sequentially consistent (which on most architectures
-	 * costs no more than a relaxed one, since either way it compiles to
-	 * a single atomic add) because the load of dif_waiting below must
-	 * not be hoisted above it. See maybe_wait_for_memory().
-	 *
-	 * dif_waiting shares a cache line with dif_current, which we have
-	 * just acquired exclusively, so reading it is essentially free.
+	 * Atomics are nominally unsigned operations, but because of twos
+	 * complement arithmetic it's fine to add a "negative" value.
 	 */
 	uint64_t current = __atomic_add_fetch(&payloads.dif_current, delta,
 	    __ATOMIC_SEQ_CST);
