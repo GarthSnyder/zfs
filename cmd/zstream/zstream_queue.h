@@ -97,6 +97,14 @@ zstream_queue_t *
 zstream_queue_create(zq_params_t *params);
 
 /*
+ * If two queues are in a pipeline together, scheduling can be improved if
+ * the upstream queue can see the state of the queue it's feeding. This is
+ * purely advisory information.
+ */
+void
+zstream_queue_set_downstream(zstream_queue_t *queue, zstream_queue_t *down);
+
+/*
  * Submit a work item. Blocks if the queue is full. The work item is
  * shallow-copied into the queue. Multiple threads may enqueue at once.
  */

@@ -238,6 +238,11 @@ zstream_chain_exec(zstream_chain_t chain, chain_attrs_t *attrs)
 			};
 			queue = zstream_queue_create(&queue_params);
 			contexts[worker].wc_out_queue = queue;
+			if (contexts[worker].wc_in_queue != NULL) {
+				zstream_queue_set_downstream(
+				    contexts[worker].wc_in_queue,
+				    contexts[worker].wc_out_queue);
+			}
 			worker++;
 			worker_context_t next_context = {
 			    .wc_steps = cs,
