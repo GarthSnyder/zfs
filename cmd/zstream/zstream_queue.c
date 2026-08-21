@@ -660,9 +660,9 @@ dispatch_worker(void *nope)
 			if (rc == ETIMEDOUT) {
 				maybe_wake_worker();
 			} else if (rc != 0) {
- 				errx(1, "pthread_cond_timedwait() failed: %s",
- 				    strerror(rc));
- 			}
+				errx(1, "pthread_cond_timedwait() failed: %s",
+				    strerror(rc));
+			}
 		}
 		pthread_mutex_unlock(&pool.tp_dispatch_mutex);
 		sleep_nsec(ENQUEUE_DELAY_NSEC);
