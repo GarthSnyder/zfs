@@ -44,10 +44,6 @@
 #define	STARTING_NS_PER_COST	1.0
 #define	BATCH_TIME_NSEC		(400 * 1000)		/* 500us */
 
-#define	PLENTY_OF_WORK		6	/* "Many" items to claim */
-#define	NO_WORK			1.0E-6	/* No-work score threshold */
-#define	DEQUEUE_SCORE_WEIGHT	0.3	/* Dequeue score relative weight */
-
 #define	Q_MOD(queue, index)	((index) % SLOTS_PER_QUEUE)
 #define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD((queue), (index))])
 
@@ -423,20 +419,18 @@ advance_indexes(zstream_queue_t *queue)
  *
  * Locking: the caller must hold the thread pool mutex and the queue mutex.
  */
-static inline double
+static inline uint32_t
 score_queue(zstream_queue_t *queue)
 {
-	uint64_t claimable = queue->zq_ix.enqueue - queue->zq_ix.claim;
-	uint64_t dequeueable = queue->zq_ix.complete - queue->zq_ix.dequeue;
-	uint64_t in_queue = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
-	uint64_t open_slots = SLOTS_PER_QUEUE - in_queue;
-
-	double open_score = (open_slots > 0) ? (1.0 / open_slots) : 2.0;
-	double dq_score = (dequeueable > 0) ? (1.0 / dequeueable) : 2.0;
-	double claim_factor = MIN(claimable, (uint64_t)PLENTY_OF_WORK) /
-	    (double)PLENTY_OF_WORK;
-	double need = open_score + dq_score * DEQUEUE_SCORE_WEIGHT;
-	return (need * claim_factor);
+	int32_t unclaimed = queue->zq_ix.enqueue - queue->zq_ix.claim;
+	zstream_queue_t *down = queue->zq_downstream;
+	if (down != NULL) {
+		pthread_mutex_lock(&queue->zq_downstream->zq_mutex);
+		unclaimed -= down->zq_ix.enqueue - down->zq_ix.claim;
+		pthread_mutex_unlock(&queue->zq_downstream->zq_mutex);
+		unclaimed = MAX(0, unclaimed);
+	}
+	return (unclaimed);
 }
 
 /*
@@ -445,28 +439,22 @@ score_queue(zstream_queue_t *queue)
  * 0 if no weight is greater than 0.
  */
 static inline int
-select_stochastic(double weights[], int num_values)
+select_stochastic(uint32_t weights[], int num_values)
 {
-	const double denominator = (double)UINT64_MAX;
-	uint64_t numerator;
-	double total = 0.0;
+	uint32_t randval;
+	uint32_t total = 0;
 
 	for (int i = 0; i < num_values; i++) {
 		total += weights[i];
 	}
-	random_get_pseudo_bytes((uint8_t *)&numerator, sizeof (numerator));
-	double select_val = total * numerator / denominator;
+	random_get_pseudo_bytes((uint8_t *)&randval, sizeof (randval));
+	int32_t select_val = randval % total;
 	for (int i = 0; i < num_values; i++) {
 		if (select_val < weights[i])
 			return (i);
 		select_val -= weights[i];
 	}
-	/* Fallback in case of FP rounding not producing a winner */
-	for (int i = num_values - 1; i >= 0; i--) {
-		if (weights[i] != 0.0)
-			return (i);
-	}
-	return (0);
+	return (num_values - 1);
 }
 
 /*
@@ -555,7 +543,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 
 	while (B_TRUE) {
 		int num_queues = pool.tp_num_queues;
-		double weights[ZQ_MAX_QUEUES];
+		uint32_t weights[ZQ_MAX_QUEUES];
 		int queues_with_work = 0;
 
 		for (int i = 0; i < num_queues; i++) {
@@ -563,7 +551,7 @@ assign_queue_and_get_work(zstream_queue_t **queue, queue_slot_t **batch)
 			pthread_mutex_lock(&to_score->zq_mutex);
 			weights[i] = score_queue(to_score);
 			pthread_mutex_unlock(&to_score->zq_mutex);
-			if (weights[i] > NO_WORK)
+			if (weights[i] > 0)
 				queues_with_work++;
 		}
 		if (!queues_with_work) {
