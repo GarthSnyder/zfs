@@ -152,7 +152,6 @@ struct zstream_queue {
 	zq_params_t	zq_params;
 	boolean_t	zq_disallow_enqueue;
 	zq_stats_t	zq_stats;
-	zstream_queue_t	*zq_downstream;
 #ifdef MONITOR_QUEUES
 	uint64_t	zq_histogram[MAX_BATCH+1];	/* Batch sizes */
 #endif
@@ -328,12 +327,6 @@ zstream_queue_create(zq_params_t *params)
 	pool.tp_num_queues++;
 	pthread_mutex_unlock(&pool.tp_pool_mutex);
 	return (queue);
-}
-
-void
-zstream_queue_set_downstream(zstream_queue_t *queue, zstream_queue_t *down)
-{
-	queue->zq_downstream = down;
 }
 
 /*
