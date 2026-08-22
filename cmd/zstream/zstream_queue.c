@@ -38,11 +38,11 @@
 
 #define	ENQUEUE_DELAY_NSEC	(100 * 1000)		/* 100us */
 #define	DISPATCH_BACKUP_NSEC	(1000 * 1000)		/* 1ms */
+#define	BATCH_TIME_NSEC		(400 * 1000)		/* 400us */
 
 #define	MAX_BATCH		512
 #define	SLOTS_PER_QUEUE		4096
 #define	STARTING_NS_PER_COST	1.0
-#define	BATCH_TIME_NSEC		(400 * 1000)		/* 500us */
 
 #define	Q_MOD(queue, index)	((index) % SLOTS_PER_QUEUE)
 #define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD((queue), (index))])
@@ -150,7 +150,6 @@ struct zstream_queue {
 	zq_indexes_t	zq_ix;
 	zq_conditions_t	zq_cond;
 	zq_params_t	zq_params;
-	double		zq_ns_per_cost;
 	boolean_t	zq_disallow_enqueue;
 	zq_stats_t	zq_stats;
 	zstream_queue_t	*zq_downstream;
@@ -308,7 +307,6 @@ zstream_queue_create(zq_params_t *params)
 		.zq_params = *params,
 		.zq_slots = safe_malloc(SLOTS_PER_QUEUE *
 		    (sizeof (queue_slot_t))),
-		.zq_ns_per_cost = STARTING_NS_PER_COST,
 #ifdef MONITOR_QUEUES
 		.zq_stats.min_depth = INT_MAX
 #endif
@@ -424,7 +422,7 @@ score_queue(zstream_queue_t *queue)
 {
 	int32_t unclaimed = queue->zq_ix.enqueue - queue->zq_ix.claim;
 	zstream_queue_t *down = queue->zq_downstream;
-	if (down != NULL) {
+	if (B_FALSE && down != NULL) {
 		pthread_mutex_lock(&queue->zq_downstream->zq_mutex);
 		unclaimed -= down->zq_ix.enqueue - down->zq_ix.claim;
 		pthread_mutex_unlock(&queue->zq_downstream->zq_mutex);
@@ -485,14 +483,16 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 	int count = 0;
 	uint64_t passed = 0;
 	boolean_t more_to_claim, more_slots, more_budget;
+	boolean_t have_cost_data = queue->zq_stats.nsec_used != 0 &&
+	    queue->zq_stats.cost_processed != 0;
 
-	if (queue->zq_stats.cost_processed == 0) {
-		cost_to_claim = 1;
-	} else {
+	if (have_cost_data) {
 		double ns_per_cost = (double)queue->zq_stats.nsec_used /
 			queue->zq_stats.cost_processed;
-		cost_to_claim = (double)BATCH_TIME_NSEC / ns_per_cost;
+		cost_to_claim = BATCH_TIME_NSEC / ns_per_cost;
 		cost_to_claim = MAX(1, cost_to_claim);
+	} else {
+		cost_to_claim = 1;
 	}
 
 	while (B_TRUE) {
