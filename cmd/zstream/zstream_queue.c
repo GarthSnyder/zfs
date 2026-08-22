@@ -393,20 +393,7 @@ advance_indexes(zstream_queue_t *queue)
 }
 
 /*
- * Score a queue according to its need for workers. Higher is better. The
- * scoring tries to assign threads to queues that are running out of space
- * for new enqueuements or that have little completed work available to
- * dequeue. The broader goal is to try to avoid pipeline stalls.
- *
- * Two measures are used for scoring. The "open score" is 1/M where M is the
- * number of slots available to receive new items. The "dequeue score" is
- * 1/N where N is the number of completed items available to dequeue. These
- * two measures are added together with the dequeue score scaled by
- * DEQUEUE_SCORE_WEIGHT.
- *
- * The composite score is scaled by a factor that reflects how much work is
- * actually available to be claimed on the queue; there's no point assigning
- * threads to queues that have no work.
+ * Score a queue according to its need for workers. Higher is better.
  *
  * Locking: the caller must hold the thread pool mutex and the queue mutex.
  */
@@ -441,11 +428,15 @@ select_stochastic(uint32_t weights[], int num_values)
 }
 
 /*
- * Claim up to MAX_BATCH work items from the given queue, trying to
- * accumulate at least qp_batch_budget worth of work data (== "cost"). All
- * items in a batch will be drawn from the same queue.
+ * Claim up to MAX_BATCH work items from the given queue. All items in a
+ * batch will be drawn from the same queue.
  *
- * Does not block waiting to fill the budget; returns whatever is available.
+ * Queues track the historical relationship between cost values and
+ * processing times, which is assumed to be roughly linear. The goal is for
+ * each batch to have a processing time of BATCH_TIME_NSEC. However, most
+ * batches fall short of this goal because of the availability of work.
+ * claim_batch() does not block waiting to fill the budget; it returns
+ * whatever is available.
  *
  * Locking: this function must be called with both the queue mutex and the
  * thread pool mutex held. zstream_queue_destroy() can't hold a queue's
@@ -602,10 +593,7 @@ queue_worker(void *dummy)
 			for (int i = 0; i < count; i++) {
 				batch[i]->qs_completed = B_TRUE;
 			}
-			/*
-			 * Update the queue's observed processing rate. The
-			 * first observation seeds the EWMA directly.
-			 */
+			/* Collect processing rate data */
 			queue->zq_stats.cost_processed += batch_cost;
 			queue->zq_stats.nsec_used += time_now_ns() - start;
 			advance_indexes(queue);
@@ -632,7 +620,7 @@ maybe_wake_worker(void)
 }
 
 static inline struct timespec
-timeout_timespec(void)
+timeout_deadline(void)
 {
 	struct timespec expire;
 	struct timeval tv;
@@ -665,7 +653,7 @@ dispatch_worker(void *nope)
 	while (B_TRUE) {
 		while (!pool.tp_dispatch_requested) {
 			int rc;
-			struct timespec expire = timeout_timespec();
+			struct timespec expire = timeout_deadline();
 			rc = pthread_cond_timedwait(&pool.tp_request_dispatch,
 			    &pool.tp_dispatch_mutex, &expire);
 			if (rc == ETIMEDOUT) {

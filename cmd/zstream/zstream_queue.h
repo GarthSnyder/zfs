@@ -34,8 +34,8 @@ extern "C" {
  * they wish.
  *
  * The cost function assigns a size_t cost that estimates the amount of work
- * needed to process an item. For operations like hashing and data
- * compression, the natural cost is typically payload length.
+ * needed to process an item. Payload length is a natural cost basis for
+ * operations such as hashing and data compression.
  *
  * It's expected that only a subset of input items will require processing.
  * If an item's cost is 0, it is fast-tracked and never presented to the
@@ -43,9 +43,11 @@ extern "C" {
  *
  * The cost function is run as items enter the queue, with the queue mutex
  * held, so it should return a value promptly. If cost estimation is
- * expensive and important, use a separate queue to implement it.
+ * expensive and important, use a separate queue to implement it. Cost
+ * values should have a roughly linear relationship to processing time.
  *
- * Work is processed in batches, the size of which is tuned automatically.
+ * Work is processed in batches, the size of which are tuned automatically
+ * to maximize throughput.
  *
  * All queues share a single thread pool that is managed to avoid
  * contention. Threads are assigned to queues dynamically according to where
