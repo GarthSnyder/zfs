@@ -420,15 +420,7 @@ advance_indexes(zstream_queue_t *queue)
 static inline uint32_t
 score_queue(zstream_queue_t *queue)
 {
-	int32_t unclaimed = queue->zq_ix.enqueue - queue->zq_ix.claim;
-	zstream_queue_t *down = queue->zq_downstream;
-	if (B_FALSE && down != NULL) {
-		pthread_mutex_lock(&queue->zq_downstream->zq_mutex);
-		unclaimed -= down->zq_ix.enqueue - down->zq_ix.claim;
-		pthread_mutex_unlock(&queue->zq_downstream->zq_mutex);
-		unclaimed = MAX(0, unclaimed);
-	}
-	return (unclaimed);
+	return (queue->zq_ix.enqueue - queue->zq_ix.claim);
 }
 
 /*
