@@ -342,7 +342,7 @@ chain_replay_raw(void *item_in, void *context_in)
 			 * The buffer is no longer owned by the chain.  We will
 			 * free it when safe.
 			 */
-			item->dp_payload = NULL;
+			export_payload(item);
 		} else if (context->volume.isreg && context->stream.inprop) {
 			ASSERT0(drrw->drr_offset);
 			context->volume.size = apply_properties(context,
