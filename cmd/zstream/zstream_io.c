@@ -690,7 +690,7 @@ set_payload_impl(void *item_in, void *payload_in, uint64_t size,
 	}
 }
 
-inline void
+void
 set_payload(void *item_in, void *payload_in, uint64_t size)
 {
 	set_payload_impl(item_in, payload_in, size, B_TRUE);
@@ -700,7 +700,7 @@ set_payload(void *item_in, void *payload_in, uint64_t size)
  * Remove a payload from the chain's management without freeing. It's up to
  * the recipient to free the buffer.
  */
-inline void
+void
 export_payload(void *item_in)
 {
 	set_payload_impl(item_in, NULL, 0, B_FALSE);
