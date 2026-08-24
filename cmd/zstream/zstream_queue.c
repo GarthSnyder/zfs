@@ -18,6 +18,7 @@
 #include <atomic.h>
 #include <err.h>
 #include <errno.h>
+#include <math.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stddef.h>
@@ -40,9 +41,8 @@
 #define	DISPATCH_BACKUP_NSEC	(1000 * 1000)		/* 1ms */
 #define	BATCH_TIME_NSEC		(400 * 1000)		/* 400us */
 
-#define	MAX_BATCH		512
-#define	SLOTS_PER_QUEUE		4096
-#define	STARTING_NS_PER_COST	1.0
+#define	MAX_BATCH		1024
+#define	SLOTS_PER_QUEUE		8192
 
 #define	Q_MOD(queue, index)	((index) % SLOTS_PER_QUEUE)
 #define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD((queue), (index))])
@@ -50,7 +50,7 @@
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
 	    SLOTS_PER_QUEUE)
 
-// #define MONITOR_QUEUES
+#define MONITOR_QUEUES
 
 /*
  * A zstream_queue is a ring buffer with four indexes: enqueue, claim,
@@ -137,8 +137,18 @@ typedef struct {
 } zq_conditions_t;
 
 typedef struct {
+	uint64_t	n_samples;
+	int64_t		base;		/* subtracted from every sample */
+	int64_t		sum;		/* sum of (x − base) */
+	int64_t		sumsq;		/* sum of (x − base)^2 */
+} stream_stdev_t;
+
+typedef struct {
+#ifdef MONITOR_QUEUES
 	int		min_depth;
 	int		max_depth;
+	stream_stdev_t	stdev;
+#endif
 	uint64_t	nsec_used;
 	size_t		cost_processed;
 } zq_stats_t;
@@ -187,6 +197,8 @@ static void *dispatch_worker(void *);
 #ifdef MONITOR_QUEUES
 static void *cpu_and_queue_monitor(void *);
 static void print_batch_size_histogram(zstream_queue_t *);
+static inline void initialize_monitor_data(zstream_queue_t *);
+static inline void update_monitor_data(zstream_queue_t *);
 #endif
 
 static thread_pool_t	pool = {0};
@@ -305,12 +317,13 @@ zstream_queue_create(zq_params_t *params)
 		.zq_id = next_queue_id++,
 		.zq_params = *params,
 		.zq_slots = safe_malloc(SLOTS_PER_QUEUE *
-		    (sizeof (queue_slot_t))),
-#ifdef MONITOR_QUEUES
-		.zq_stats.min_depth = INT_MAX
-#endif
+		    (sizeof (queue_slot_t)))
 	};
 	pool.tp_queues[pool.tp_num_queues] = queue;
+
+#ifdef MONITOR_QUEUES
+	initialize_monitor_data(queue);
+#endif
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size,
 	    _Alignof(worst_case_alignment_t));
@@ -704,10 +717,7 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 		advance_indexes(queue);
 
 #ifdef MONITOR_QUEUES
-	/* Maintain queue usage data per monitor interval */
-	uint64_t depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
-	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
-	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
+	update_monitor_data(queue);
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
@@ -791,6 +801,11 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 	}
 	queue_slot_t *slot = &Q_SLOT(queue, queue->zq_ix.dequeue);
 	queue->zq_ix.dequeue++;
+
+#ifdef MONITOR_QUEUES
+	update_monitor_data(queue);
+#endif
+
 	if (slot->qs_end_of_stream) {
 		pthread_mutex_unlock(&queue->zq_mutex);
 		/* Potential multi-dequeuer race point */
@@ -809,6 +824,55 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 #define	USEC_PER_JIFFY		10000
 #define	SAMPLE_DURATION_USEC	1000000
 #define	CPU_FIELD_WIDTH		14
+
+static inline void
+update_stream_stdev(stream_stdev_t *stdev, uint64_t value)
+{
+	int64_t delta;
+
+	if (stdev->n_samples++ == 0)
+		stdev->base = value;
+	delta = value - stdev->base;
+	stdev->sum += delta;
+	stdev->sumsq += (__int128)delta * delta;
+}
+
+static inline double
+stream_stdev(const stream_stdev_t *stdev)
+{
+	if (stdev->n_samples < 2)
+		return (0.0);
+	__int128 m2 = (__int128)stdev->n_samples * stdev->sumsq -
+	    (__int128)stdev->sum * stdev->sum;
+	double variance = (double)m2 /
+	    ((double)stdev->n_samples * (stdev->n_samples - 1));
+	return sqrt(variance);
+}
+
+static inline double
+stream_avg(const stream_stdev_t *stdev)
+{
+	return ((double)stdev->sum / stdev->n_samples) + stdev->base;
+}
+
+static inline void
+initialize_monitor_data(zstream_queue_t *queue)
+{
+	zq_stats_t *stats = &queue->zq_stats;
+	stats->min_depth = INT_MAX;
+	stats->max_depth = 0;
+	stats->stdev = (stream_stdev_t) {0};
+}
+
+static inline void
+update_monitor_data(zstream_queue_t *queue)
+{
+	/* Maintain queue usage data per monitor interval */
+	uint64_t depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
+	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
+	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
+	update_stream_stdev(&queue->zq_stats.stdev, depth);
+}
 
 /*
  * Called only during zstream_queue_destroy(), under the pool mutex
@@ -899,14 +963,17 @@ cpu_and_queue_monitor(void *dummy)
 		for (int i = 0; i < pool.tp_num_queues; i++) {
 			zstream_queue_t *q = pool.tp_queues[i];
 			pthread_mutex_lock(&q->zq_mutex);
-			int min = q->zq_stats.min_depth;
-			int max = q->zq_stats.max_depth;
-			if (min > max)
-				min = max = 0;
-			fprintf(stderr, "Queue %d: %4d-%-4d   ",
-			    q->zq_id, min, max);
-			q->zq_stats.min_depth = INT_MAX;
-			q->zq_stats.max_depth = 0;
+			zq_stats_t *stats = &q->zq_stats;
+			stream_stdev_t *ss = &stats->stdev;
+			double stdev = stream_stdev(ss);
+			double avg = stream_avg(ss);
+			if (stats->min_depth > stats->max_depth)
+				stats->min_depth = stats->max_depth = 0;
+			fprintf(stderr, "Queue %d: %4d-%-4d (%4d ± %-4d)   ",
+			    q->zq_id, stats->min_depth, stats->max_depth,
+			    (int)avg, (int)stdev);
+			fflush(stderr);
+			initialize_monitor_data(q);
 			pthread_mutex_unlock(&q->zq_mutex);
 		}
 

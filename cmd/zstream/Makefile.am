@@ -41,7 +41,8 @@ zstream_LDADD = \
 	libzfs.la \
 	libzfs_core.la \
 	libzpool.la \
-	libnvpair.la
+	libnvpair.la \
+	-lm
 
 cmd-zstream-install-exec-hook:
 	cd $(DESTDIR)$(sbindir) && $(LN_S) -f zstream zstreamdump
