@@ -106,7 +106,7 @@ initialize_memory_tracking(void)
 		warnx("unable to read system memory info");
 		payloads.dif_allowed = UINT64_MAX; /* no limit */
 	} else {
-		uint64_t total_mem = pagesize * pages;
+		uint64_t total_mem = (uint64_t)pagesize * (uint64_t)pages;
 		int64_t flex = total_mem - MEMORY_BASE_CUTOFF;
 		int64_t addl = (double)flex * MEMORY_PCT / 100;
 		payloads.dif_allowed = MEMORY_BASE + MAX(addl, 0);
@@ -374,7 +374,7 @@ chain_read(void *item_in, void *context_in)
 
 	size_t payload_size = calc_payload_size(drr);
 	if (payload_size > UINT32_MAX) {
-		errx(1, "stated packet size is greater than uint32_t"
+		errx(1, "stated packet size is greater than uint32_t "
 		    "at offset %llu", (u_longlong_t)context->ic_offset);
 	} else if (payload_size > 0) {
 		uint8_t *buff = read_payload(context, payload_size);
@@ -436,7 +436,6 @@ chain_write(void *item_in, void *context_in)
 		if (n_written != 1) {
 			err(1, "error writing payload");
 		}
-		set_payload(item, NULL, 0);
 	}
 
 	uint32_t drr_type = OPTION_ENABLED(CA_BYTESWAP_ON_OUTPUT) ?
@@ -452,6 +451,7 @@ chain_write(void *item_in, void *context_in)
 	stats->rs_total_header_bytes += sizeof (dmu_replay_record_t);
 	stats->rs_total_payload_bytes += item->dp_payload_size;
 
+	set_payload(item, NULL, 0);
 	return (D_OK);
 }
 
@@ -668,8 +668,9 @@ set_payload_impl(void *item_in, void *payload_in, uint64_t size,
 		free(item->dp_payload);
 	}
 	int64_t delta = (int64_t)size - (int64_t)item->dp_payload_size;
+	VERIFY3U(size, <=, UINT32_MAX);
 	item->dp_payload = payload;
-	item->dp_payload_size = size;
+	item->dp_payload_size = (uint32_t)size;
 
 	/*
 	 * Atomics are nominally unsigned operations, but because of twos
