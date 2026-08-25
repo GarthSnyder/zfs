@@ -45,20 +45,33 @@ extern "C" {
  * held, so it should return a value promptly. If cost estimation is
  * expensive and important, use a separate queue to implement it. Cost
  * values should have a roughly linear relationship to processing time.
+ * Only the ratio between costs matters, so choose units that keep the sum
+ * of a batch's costs comfortably inside a size_t.
  *
- * Work is processed in batches, the size of which are tuned automatically
- * to maximize throughput.
+ * Work is processed in batches whose size is tuned automatically. Each
+ * queue observes how long its own work actually takes per unit of cost,
+ * and claims enough items to fill a fixed slice of processing time. No
+ * batch exceeds ZQ_MAX_BATCH items.
  *
  * All queues share a single thread pool that is managed to avoid
  * contention. Threads are assigned to queues dynamically according to where
  * work is available. When multiple queues have work, threads are allocated
- * among them stochastically with an eye toward preventing pipeline stalls.
+ * among them stochastically, in proportion to the amount of unclaimed work
+ * each queue is holding.
  *
  * The shared thread pool persists until the process exits.
  */
 
-#define	ZQ_MAX_QUEUES	16	/* The maximum number of simultaneous queues */
-#define	ZQ_MIN_THREADS	6
+/*
+ * Implementation constants, exposed only so that tests and diagnostics can
+ * reason about the real boundaries. Except for ZQ_MIN_THREADS, these values
+ * are not caller-tunable. ZQ_MIN_THREADS can be overridden by calling
+ * zstream_queue_set_num_threads().
+ */
+#define	ZQ_SLOTS_PER_QUEUE	4096	/* Ring buffer slots, every queue */
+#define	ZQ_MAX_BATCH		1024	/* Most items claimable at once */
+#define	ZQ_MAX_QUEUES		16	/* Max number of simultaneous queues */
+#define	ZQ_MIN_THREADS		6
 
 typedef void queue_item_t;
 

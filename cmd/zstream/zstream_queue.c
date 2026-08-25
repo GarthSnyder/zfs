@@ -41,14 +41,11 @@
 #define	DISPATCH_BACKUP_NSEC	(1000 * 1000)		/* 1ms */
 #define	BATCH_TIME_NSEC		(400 * 1000)		/* 400us */
 
-#define	MAX_BATCH		1024
-#define	SLOTS_PER_QUEUE		8192
-
-#define	Q_MOD(queue, index)	((index) % SLOTS_PER_QUEUE)
-#define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD((queue), (index))])
+#define	Q_MOD(index)		((index) % ZQ_SLOTS_PER_QUEUE)
+#define	Q_SLOT(queue, index)	((queue)->zq_slots[Q_MOD(index)])
 
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
-	    SLOTS_PER_QUEUE)
+	    ZQ_SLOTS_PER_QUEUE)
 
 // #define	MONITOR_QUEUES		/* Queue tenancy data per interval */
 // #define	SHOW_BATCH_HISTOGRAMS	/* Batch size histograms per queue */
@@ -137,18 +134,24 @@ typedef struct {
 	pthread_cond_t	dequeued;
 } zq_conditions_t;
 
+#ifdef MONITOR_QUEUES
+/*
+ * Running mean and standard deviation of queue depth, accumulated by
+ * Welford's online algorithm. Welford is numerically stable and doesn't
+ * need wider-than-platform integers.
+ */
 typedef struct {
-	uint64_t	n_samples;
-	int64_t		base;		/* subtracted from every sample */
-	int64_t		sum;		/* sum of (x − base) */
-	int64_t		sumsq;		/* sum of (x − base)^2 */
-} stream_stdev_t;
+	int		min;
+	int		max;
+	uint64_t	ds_samples;
+	double		ds_mean;
+	double		ds_m2;		/* Sum of squared deviations */
+} depth_stats_t;
+#endif
 
 typedef struct {
 #ifdef MONITOR_QUEUES
-	int		min_depth;
-	int		max_depth;
-	stream_stdev_t	stdev;
+	depth_stats_t	depth;
 #endif
 	uint64_t	nsec_used;
 	size_t		cost_processed;
@@ -164,7 +167,7 @@ struct zstream_queue {
 	boolean_t	zq_disallow_enqueue;
 	zq_stats_t	zq_stats;
 #ifdef SHOW_BATCH_HISTOGRAMS
-	uint64_t	zq_histogram[MAX_BATCH+1];	/* Batch sizes */
+	uint64_t	zq_histogram[ZQ_MAX_BATCH+1];	/* Batch sizes */
 #endif
 };
 
@@ -320,7 +323,7 @@ zstream_queue_create(zq_params_t *params)
 	*queue = (zstream_queue_t) {
 		.zq_id = next_queue_id++,
 		.zq_params = *params,
-		.zq_slots = safe_malloc(SLOTS_PER_QUEUE *
+		.zq_slots = safe_malloc(ZQ_SLOTS_PER_QUEUE *
 		    (sizeof (queue_slot_t)))
 	};
 	pool.tp_queues[pool.tp_num_queues] = queue;
@@ -331,8 +334,8 @@ zstream_queue_create(zq_params_t *params)
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size,
 	    _Alignof(worst_case_alignment_t));
-	uint8_t *items = safe_malloc(SLOTS_PER_QUEUE * qpis_rounded);
-	for (int i = 0; i < SLOTS_PER_QUEUE; i++) {
+	uint8_t *items = safe_malloc(ZQ_SLOTS_PER_QUEUE * qpis_rounded);
+	for (int i = 0; i < ZQ_SLOTS_PER_QUEUE; i++) {
 		queue->zq_slots[i].qs_item =
 		    (queue_item_t *)(items + i * qpis_rounded);
 	}
@@ -412,6 +415,20 @@ advance_indexes(zstream_queue_t *queue)
 /*
  * Score a queue according to its need for workers. Higher is better.
  *
+ * The score is simply the number of enqueued items that no thread has yet
+ * claimed. Threads are then distributed among the queues in proportion to
+ * their scores (see select_stochastic()), so a queue with twice as much
+ * outstanding work attracts twice as many workers. Queues with no
+ * claimable work score 0 and are never selected.
+ *
+ * More elaborate scoring is possible; earlier versions of this code also
+ * weighted queues by how close they were to being full and by how little
+ * completed work they had available to dequeue. Benchmarking showed no
+ * benefit over the simple count, so the count is what we use.
+ *
+ * The result is bounded by ZQ_SLOTS_PER_QUEUE and therefore always fits in a
+ * uint32_t, and the sum over all queues fits as well.
+ *
  * Locking: the caller must hold the thread pool mutex and the queue mutex.
  */
 static inline uint32_t
@@ -421,9 +438,12 @@ score_queue(zstream_queue_t *queue)
 }
 
 /*
- * Return a random index from an array of doubles, with the likelihood of
- * index i being selected equal to weights[i] / sum(weights). Returns index
- * 0 if no weight is greater than 0.
+ * Return a random index into weights[], with the likelihood of index i
+ * being selected equal to weights[i] / sum(weights).
+ *
+ * The caller must guarantee that at least one weight is nonzero;
+ * a uniformly zero array has no meaningful answer and would divide by
+ * zero. assign_queue_and_get_work() checks this before calling.
  */
 static inline int
 select_stochastic(uint32_t weights[], int num_values)
@@ -434,8 +454,9 @@ select_stochastic(uint32_t weights[], int num_values)
 	for (int i = 0; i < num_values; i++) {
 		total += weights[i];
 	}
+	VERIFY3U(total, >, 0);
 	random_get_pseudo_bytes((uint8_t *)&randval, sizeof (randval));
-	int32_t select_val = randval % total;
+	uint32_t select_val = randval % total;
 	for (int i = 0; i < num_values; i++) {
 		if (select_val < weights[i])
 			return (i);
@@ -445,7 +466,7 @@ select_stochastic(uint32_t weights[], int num_values)
 }
 
 /*
- * Claim up to MAX_BATCH work items from the given queue. All items in a
+ * Claim up to ZQ_MAX_BATCH work items from the given queue. All items in a
  * batch will be drawn from the same queue.
  *
  * Queues track the historical relationship between cost values and
@@ -454,6 +475,19 @@ select_stochastic(uint32_t weights[], int num_values)
  * batches fall short of this goal because of the availability of work.
  * claim_batch() does not block waiting to fill the budget; it returns
  * whatever is available.
+ *
+ * The cost/time relationship is a cumulative average over the life of the
+ * queue, so it converges early and then changes only slowly. That's the
+ * intent: the target is the queue's characteristic work rate, not its
+ * instantaneous one. A queue whose per-item work changes character partway
+ * through a stream will continue to size batches for the blend of the two.
+ *
+ * Cost values come from the caller, so the implied budget is not bounded
+ * by anything the queue controls. A caller that reports large costs for
+ * work that takes almost no time yields a budget too large to represent as
+ * a size_t, and converting such a value is undefined behavior. Saturate
+ * instead; a budget of SIZE_MAX simply means "batch size is limited by
+ * ZQ_MAX_BATCH and by the work on hand," which is the correct outcome.
  *
  * Locking: this function must be called with both the queue mutex and the
  * thread pool mutex held. zstream_queue_destroy() can't hold a queue's
@@ -481,16 +515,19 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 
 	if (have_cost_data) {
 		double ns_per_cost = (double)queue->zq_stats.nsec_used /
-			queue->zq_stats.cost_processed;
-		cost_to_claim = BATCH_TIME_NSEC / ns_per_cost;
-		cost_to_claim = MAX(1, cost_to_claim);
+		    (double)queue->zq_stats.cost_processed;
+		double budget = BATCH_TIME_NSEC / ns_per_cost;
+		if (budget >= (double)SIZE_MAX)
+			cost_to_claim = SIZE_MAX;
+		else
+			cost_to_claim = MAX(1, (size_t)budget);
 	} else {
 		cost_to_claim = 1;
 	}
 
 	while (B_TRUE) {
 		more_to_claim = queue->zq_ix.claim < queue->zq_ix.enqueue;
-		more_slots = count < MAX_BATCH;
+		more_slots = count < ZQ_MAX_BATCH;
 		more_budget = cost_claimed < cost_to_claim;
 
 		if (!more_to_claim || !more_slots || !more_budget) {
@@ -591,7 +628,7 @@ queue_worker(void *dummy)
 {
 	(void) dummy;
 	zstream_queue_t *queue;
-	queue_slot_t *batch[MAX_BATCH];
+	queue_slot_t *batch[ZQ_MAX_BATCH];
 	int count;
 
 	while (B_TRUE) {
@@ -606,13 +643,20 @@ queue_worker(void *dummy)
 				process(batch[i]->qs_item, context);
 				batch_cost += batch[i]->qs_cost;
 			}
+			/*
+			 * Sample the clock before contending for the queue
+			 * mutex. Lock wait time is not processing time, and
+			 * including it would bias batches smaller, which in
+			 * turn increases the rate of lock acquisition.
+			 */
+			uint64_t nsec = time_now_ns() - start;
 			pthread_mutex_lock(&queue->zq_mutex);
 			for (int i = 0; i < count; i++) {
 				batch[i]->qs_completed = B_TRUE;
 			}
 			/* Collect processing rate data */
 			queue->zq_stats.cost_processed += batch_cost;
-			queue->zq_stats.nsec_used += time_now_ns() - start;
+			queue->zq_stats.nsec_used += nsec;
 			advance_indexes(queue);
 			pthread_mutex_unlock(&queue->zq_mutex);
 		}
@@ -827,6 +871,13 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 
 /*
  * Called only during zstream_queue_destroy(), under the pool mutex
+ *
+ * Prints one dense line per queue: the bucket counts for batch sizes 0
+ * through the largest batch observed. Now that ZQ_MAX_BATCH is 1024 and
+ * batches routinely reach the cap, that line can run to a thousand
+ * comma-separated values, which is unreadable in a terminal but still
+ * pastes cleanly into a plotting tool. Redirect stderr if you want to keep
+ * it.
  */
 static void
 print_batch_size_histogram(zstream_queue_t *queue)
@@ -836,7 +887,7 @@ print_batch_size_histogram(zstream_queue_t *queue)
 
 	if (lines_printed++ == 0)
 		fprintf(stderr, "\nBatch size histograms:\n");
-	for (last_nonzero = MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
+	for (last_nonzero = ZQ_MAX_BATCH; last_nonzero >= 0; last_nonzero--) {
 		if (queue->zq_histogram[last_nonzero] > 0)
 			break;
 	}
@@ -860,65 +911,55 @@ print_batch_size_histogram(zstream_queue_t *queue)
 #define	CPU_FIELD_WIDTH		14
 
 static inline void
-update_stream_stdev(stream_stdev_t *stdev, int64_t value)
+update_depth_stats(depth_stats_t *ds, uint64_t depth)
 {
-	int64_t delta;
+	double delta = (double)depth - ds->ds_mean;
 
-	if (stdev->n_samples++ == 0)
-		stdev->base = value;
-	delta = value - stdev->base;
-	stdev->sum += delta;
-	stdev->sumsq += delta * delta;
+	ds->ds_samples++;
+	ds->ds_mean += delta / (double)ds->ds_samples;
+	ds->ds_m2 += delta * ((double)depth - ds->ds_mean);
 }
 
 static inline double
-stream_stdev(const stream_stdev_t *stdev)
+depth_stdev(const depth_stats_t *ds)
 {
-	if (stdev->n_samples < 2)
+	if (ds->ds_samples < 2)
 		return (0.0);
-	__int128 m2 = (__int128)stdev->n_samples * stdev->sumsq -
-	    (__int128)stdev->sum * stdev->sum;
-	double variance = (double)m2 /
-	    ((double)stdev->n_samples * (stdev->n_samples - 1));
-	return sqrt(variance);
-}
-
-static inline double
-stream_avg(const stream_stdev_t *stdev)
-{
-	if (stdev->n_samples < 1)
-		return stdev->base;
-	return ((double)stdev->sum / stdev->n_samples) + stdev->base;
+	return (sqrt(ds->ds_m2 / (double)(ds->ds_samples - 1)));
 }
 
 static inline void
 initialize_monitor_data(zstream_queue_t *queue)
 {
 	zq_stats_t *stats = &queue->zq_stats;
-	stats->min_depth = INT_MAX;
-	stats->max_depth = 0;
-	stats->stdev = (stream_stdev_t) {0};
+	stats->depth = (depth_stats_t) {0};
+	stats->depth.min = INT_MAX;
 }
 
+/*
+ * Sample the current depth. Called on every enqueue and every dequeue, so
+ * the statistics are per-operation rather than per-unit-time; a queue that
+ * sits full while nothing moves contributes no samples.
+ */
 static inline void
 update_monitor_data(zstream_queue_t *queue)
 {
-	/* Maintain queue usage data per monitor interval */
 	uint64_t depth = queue->zq_ix.enqueue - queue->zq_ix.dequeue;
-	queue->zq_stats.max_depth = MAX(queue->zq_stats.max_depth, depth);
-	queue->zq_stats.min_depth = MIN(queue->zq_stats.min_depth, depth);
-	update_stream_stdev(&queue->zq_stats.stdev, depth);
+
+	queue->zq_stats.depth.max = MAX(queue->zq_stats.depth.max, depth);
+	queue->zq_stats.depth.min = MIN(queue->zq_stats.depth.min, depth);
+	update_depth_stats(&queue->zq_stats.depth, depth);
 }
 
 /*
  * Monitor queue and CPU usage from a separate thread. This is all
  * Linux-specific, but it's needed only while tuning queue lengths and
- * batch sizes. Prints the minimum and maximum queue depth observed
- * during each period.
+ * batch sizes. For each period, prints the minimum and maximum queue depth
+ * observed, followed by the mean depth and its standard deviation.
  *
  * Example output:
  *
- *     CPU: 99.85%   Queue 0:  745-1024   Queue 1:  183-256
+ *     CPU: 99.85%   Queue 0:  745-4096 (2553 +/- 994)   Queue 1: ...
  */
 static void *
 cpu_and_queue_monitor(void *dummy)
@@ -974,13 +1015,12 @@ cpu_and_queue_monitor(void *dummy)
 			zstream_queue_t *q = pool.tp_queues[i];
 			pthread_mutex_lock(&q->zq_mutex);
 			zq_stats_t *stats = &q->zq_stats;
-			stream_stdev_t *ss = &stats->stdev;
-			double stdev = stream_stdev(ss);
-			double avg = stream_avg(ss);
-			if (stats->min_depth > stats->max_depth)
-				stats->min_depth = stats->max_depth = 0;
-			fprintf(stderr, "Queue %d: %4d-%-4d (%4d ± %-4d)   ",
-			    q->zq_id, stats->min_depth, stats->max_depth,
+			double avg = stats->depth.ds_mean;
+			double stdev = depth_stdev(&stats->depth);
+			if (stats->depth.min > stats->depth.max)
+				stats->depth.min = stats->depth.max = 0;
+			fprintf(stderr, "Queue %d: %4d-%-4d (%4d +/- %-4d)   ",
+			    q->zq_id, stats->depth.min, stats->depth.max,
 			    (int)avg, (int)stdev);
 			fflush(stderr);
 			initialize_monitor_data(q);

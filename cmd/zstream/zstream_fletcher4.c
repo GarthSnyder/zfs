@@ -276,9 +276,13 @@ chain_fletcher4(queue_item_t *item_in, void *context_in)
 
 /*
  * Since checksumming is either very early or very late in the chain, these
- * queues effectively double as I/O buffers. Ergo, the default queue length
- * is long. The batch budget is also large because Fletcher 4 calculations
- * are fast.
+ * queues effectively double as I/O buffers, absorbing irregularity in the
+ * rate at which the stream arrives or drains.
+ *
+ * Payload length is the cost basis. Fletcher 4 runs at a nearly constant
+ * rate per byte, so cost tracks processing time closely and the queue's
+ * automatic batch sizing has an easy job of it. Batches end up large,
+ * because the per-byte cost is small.
  */
 chain_step_t
 parallel_calc_fletcher4(void)
