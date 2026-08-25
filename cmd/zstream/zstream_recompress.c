@@ -179,17 +179,15 @@ chain_compress_writes(queue_item_t *item_in, void *context_in)
 }
 
 /*
- * A cost of zero waives processing for the current item, so these two
- * functions are mostly determining which packets need attention. A packet
- * that's already compressed with the target compression profile can be
- * ignored.
+ * A cost of zero waives processing for the current item, so the following
+ * two functions are mostly determining which packets need attention. A
+ * packet that's already compressed with the target compression profile can
+ * be ignored.
  *
  * When a packet does need work, the cost is the number of bytes the
- * (de)compressor will actually have to chew through: the logical size for
+ * compressor or decompressor will have to process: the logical size for
  * compression, since that's what goes in, and the stored payload size for
- * decompression, since that's what comes out of the stream. Queues use cost
- * to predict processing time, so it needs to name the side of the
- * transformation that sets the pace.
+ * decompression, since that's what comes out.
  */
 static size_t
 chain_compress_cost(queue_item_t *item_in, void *context_in)

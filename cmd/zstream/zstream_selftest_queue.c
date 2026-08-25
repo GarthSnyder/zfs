@@ -27,30 +27,31 @@
  * Every item carries enough information to be verified independently:
  *
  * - The tuple (qi_producer, qi_seq) identifies each item; the consumer
- *   checks that each producer's items arrive in the same order they
- *   were enqueued.
+ * checks that each producer's items arrive in the same order they were
+ * enqueued.
  *
  * - qi_check is a hash of (qi_seed, qi_producer, qi_seq). The processing
- *   function verifies it and then XORs in TRANSFORM_MAGIC. The consumer
- *   checks that the transform happened iff cost > 0.
+ * function verifies it and then XORs in TRANSFORM_MAGIC. The consumer
+ * checks that the transform happened iff cost > 0.
  *
  * - qi_pattern[] is filled from qi_check and verified both by the process
- *   function and the consumer, to catch any corruption of the shallow
- *   copies in and out of the ring buffer.
+ * function and the consumer, to catch any corruption of the shallow copies
+ * in and out of the ring buffer.
  *
- * - qi_process_count counts invocations of the process function, which
- *   must be exactly one for cost > 0 items and zero for cost == 0 items.
+ * - qi_process_count counts invocations of the process function, which must
+ * be exactly one for cost > 0 items and zero for cost == 0 items.
  *
  * Global conservation checks: the number of items dequeued must equal the
  * number enqueued, and the total number of process-function invocations
  * must equal the number of nonzero-cost items enqueued.
  *
- * Costs are not inert. The queue measures how long its own work takes per
- * unit of cost and sizes its batches from the result, so a workload's cost
- * distribution decides how the implementation behaves. Configs can set
- * qc_ns_per_cost to make processing time genuinely proportional to cost
- * (the relationship the queue assumes), or leave it at zero to get delays
- * unrelated to cost. Both are worth testing; see queue_batch_tuning().
+ * Costs are not passive values. Each queue measures how long its own work
+ * takes per unit of cost and sizes its batches accordingly. So, a
+ * workload's cost distribution decides how the implementation will behave.
+ * Configs can set qc_ns_per_cost to make processing time genuinely
+ * proportional to cost (the relationship the queue assumes), or leave it at
+ * zero to get delays unrelated to cost. Both are worth testing; see
+ * queue_batch_tuning().
  */
 
 #include <assert.h>
@@ -411,8 +412,8 @@ queue_torture(void)
  * zero-length payloads.
  *
  * Queue depth and batch size are no longer caller-supplied, so the
- * boundaries worth straddling are the implementation's own: ZQ_MAX_BATCH,
- * the point at which claim_batch() stops filling a batch, and
+ * boundaries worth probing are the implementation's own: ZQ_MAX_BATCH, the
+ * point at which claim_batch() stops filling a batch, and
  * ZQ_SLOTS_PER_QUEUE, the point at which the ring index wraps and Q_FULL
  * can trip. Both are exported by zstream_queue.h for exactly this purpose,
  * so this sweep tracks them automatically if either one is retuned.
@@ -477,9 +478,9 @@ queue_zero_cost(void)
 
 /*
  * Batch sizing is derived from each queue's own measured ns-per-unit-cost,
- * so the cost values a caller reports now steer the implementation rather
+ * so the cost values reported by a caller now steer the implementation rather
  * than just gating the fast track. This test runs four queues at once whose
- * cost-to-time relationships are deliberately dissimilar, and checks that
+ * cost-to-time relationships are deliberately dissimilar and checks that
  * all of them still deliver every item exactly once and in order.
  *
  * The four cases, in the order configured below:

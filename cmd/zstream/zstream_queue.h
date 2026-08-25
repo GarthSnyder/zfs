@@ -49,9 +49,9 @@ extern "C" {
  * of a batch's costs comfortably inside a size_t.
  *
  * Work is processed in batches whose size is tuned automatically. Each
- * queue observes how long its own work actually takes per unit of cost,
- * and claims enough items to fill a fixed slice of processing time. No
- * batch exceeds ZQ_MAX_BATCH items.
+ * queue observes how long its own work actually takes per unit of cost, and
+ * claims enough items to fill a fixed slice of processing time. No batch
+ * exceeds ZQ_MAX_BATCH items.
  *
  * All queues share a single thread pool that is managed to avoid
  * contention. Threads are assigned to queues dynamically according to where
