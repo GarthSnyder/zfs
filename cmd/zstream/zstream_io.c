@@ -41,9 +41,9 @@
  * When memory is exhausted, chain_read() waits until memory in use is
  * MEMORY_HYSTERESIS bytes lower than the nominal limit.
  */
-#define	MEMORY_BASE		(16 << 20)	/* 512MB */
+#define	MEMORY_BASE		(512 << 20)	/* 512MB */
 #define	MEMORY_BASE_CUTOFF	(4ULL << 30)	/* 4GB */
-#define	MEMORY_PCT		0		/* % beyond the base region */
+#define	MEMORY_PCT		10		/* % beyond the base region */
 #define	MEMORY_HYSTERESIS 	(128 << 20)	/* 128MB */
 
 /*
@@ -294,9 +294,6 @@ maybe_wait_for_memory(size_t bytes_wanted)
 
 	if (current + bytes_wanted <= payloads.dif_allowed)
 		return;
-
-	// fprintf(stderr, "Waiting for memory...\n");
-	// fflush(stderr);
 
 	pthread_mutex_lock(&payloads.dif_mutex);
 	__atomic_store_n(&payloads.dif_waiting, B_TRUE, __ATOMIC_SEQ_CST);

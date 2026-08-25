@@ -57,7 +57,6 @@ extern "C" {
  * The shared thread pool persists until the process exits.
  */
 
-#define	ZQ_MAX_BATCH	32	/* The most items that can be claimed at once */
 #define	ZQ_MAX_QUEUES	16	/* The maximum number of simultaneous queues */
 #define	ZQ_MIN_THREADS	6
 

@@ -391,7 +391,7 @@ static void
 queue_edge_cases(void)
 {
 	static const size_t lengths[] =
-	    { 1, 2, ZQ_MAX_BATCH - 1, ZQ_MAX_BATCH, ZQ_MAX_BATCH + 1, 64 };
+	    { 1, 2, 1023, 1024, 1025, 64 };
 	uint64_t stream = 200;
 
 	for (int l = 0; l < 6; l++) {

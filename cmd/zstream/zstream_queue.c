@@ -50,8 +50,8 @@
 #define	Q_FULL(queue)	((queue)->zq_ix.enqueue - (queue)->zq_ix.dequeue >= \
 	    SLOTS_PER_QUEUE)
 
-// #define	MONITOR_QUEUES
-// #define	SHOW_QUEUE_HISTOGRAMS
+// #define	MONITOR_QUEUES		/* Queue tenancy data per interval */
+// #define	SHOW_BATCH_HISTOGRAMS	/* Batch size histograms per queue */
 
 /*
  * A zstream_queue is a ring buffer with four indexes: enqueue, claim,
@@ -163,7 +163,7 @@ struct zstream_queue {
 	zq_params_t	zq_params;
 	boolean_t	zq_disallow_enqueue;
 	zq_stats_t	zq_stats;
-#ifdef SHOW_QUEUE_HISTOGRAMS
+#ifdef SHOW_BATCH_HISTOGRAMS
 	uint64_t	zq_histogram[MAX_BATCH+1];	/* Batch sizes */
 #endif
 };
@@ -201,7 +201,7 @@ static inline void initialize_monitor_data(zstream_queue_t *);
 static inline void update_monitor_data(zstream_queue_t *);
 #endif
 
-#ifdef SHOW_QUEUE_HISTOGRAMS
+#ifdef SHOW_BATCH_HISTOGRAMS
 static void print_batch_size_histogram(zstream_queue_t *);
 #endif
 
@@ -513,7 +513,7 @@ claim_batch(zstream_queue_t *queue, queue_slot_t **batch)
 		atomic_sub_64(&pool.tp_unclaimed, passed);
 	}
 	advance_indexes(queue);
-#ifdef SHOW_QUEUE_HISTOGRAMS
+#ifdef SHOW_BATCH_HISTOGRAMS
 	queue->zq_histogram[count]++;
 #endif
 	return (count);
@@ -753,7 +753,7 @@ zstream_queue_destroy(zstream_queue_t *queue)
 {
 	pthread_mutex_lock(&pool.tp_pool_mutex);
 
-#ifdef SHOW_QUEUE_HISTOGRAMS
+#ifdef SHOW_BATCH_HISTOGRAMS
 	print_batch_size_histogram(queue);
 #endif
 
@@ -823,7 +823,7 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 	}
 }
 
-#ifdef SHOW_QUEUE_HISTOGRAMS
+#ifdef SHOW_BATCH_HISTOGRAMS
 
 /*
  * Called only during zstream_queue_destroy(), under the pool mutex
