@@ -43,7 +43,7 @@
  */
 #define	MEMORY_BASE		(16 << 20)	/* 512MB */
 #define	MEMORY_BASE_CUTOFF	(4ULL << 30)	/* 4GB */
-#define	MEMORY_PCT		1		/* % beyond the base region */
+#define	MEMORY_PCT		0		/* % beyond the base region */
 #define	MEMORY_HYSTERESIS 	(128 << 20)	/* 128MB */
 
 /*
