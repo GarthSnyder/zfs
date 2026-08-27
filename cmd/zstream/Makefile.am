@@ -37,8 +37,7 @@ zstream_SOURCES = \
 	%D%/zstream_validate.c \
 	%D%/zstream_validate.h
 
-# -lm supplies sqrt() for the MONITOR_QUEUES build of zstream_queue.c. That
-# code is #ifdef'd out by default, so nothing in a stock build needs libm.
+# -lm supplies sqrt() for MONITOR_QUEUES
 zstream_LDADD = \
 	libzfs.la \
 	libzfs_core.la \
