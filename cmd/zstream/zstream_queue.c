@@ -446,7 +446,7 @@ score_queue(zstream_queue_t *queue)
 static inline int
 select_stochastic(uint32_t weights[], int num_values)
 {
-	uint32_t randval;
+	uint64_t randval;
 	uint32_t total = 0;
 
 	for (int i = 0; i < num_values; i++) {
@@ -454,7 +454,7 @@ select_stochastic(uint32_t weights[], int num_values)
 	}
 	VERIFY3U(total, >, 0);
 	random_get_pseudo_bytes((uint8_t *)&randval, sizeof (randval));
-	uint32_t select_val = randval % total;
+	uint64_t select_val = randval % total;
 	for (int i = 0; i < num_values; i++) {
 		if (select_val < weights[i])
 			return (i);
