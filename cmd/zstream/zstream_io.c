@@ -106,8 +106,8 @@ initialize_memory_tracking(void)
 		warnx("unable to read system memory info");
 		payloads.dif_allowed = UINT64_MAX; /* no limit */
 	} else {
-		uint64_t total_mem = (uint64_t)pagesize * (uint64_t)pages;
-		int64_t flex = total_mem - MEMORY_BASE_CUTOFF;
+		ssize_t total_mem = pagesize * pages;
+		int64_t flex = (int64_t)total_mem - MEMORY_BASE_CUTOFF;
 		int64_t addl = (double)flex * MEMORY_PCT / 100;
 		payloads.dif_allowed = MEMORY_BASE + MAX(addl, 0);
 	}
