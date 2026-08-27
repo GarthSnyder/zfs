@@ -62,7 +62,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/sysmacros.h>
+#include <sys/param.h>
 #include <unistd.h>
 
 #include "zstream_queue.h"
