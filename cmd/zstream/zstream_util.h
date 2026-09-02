@@ -34,10 +34,21 @@ extern "C" {
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
 
+/*
+ * As with the libzfs-native ZIO_* encodings, only zstd compression has a
+ * separately-defined level. gzip levels are bundled into the compression
+ * type.
+ */
 typedef struct {
 	enum zio_compress	cs_type;
 	int			cs_level;
 } compression_spec_t;
+
+typedef struct {
+	uint64_t		rs_object;
+	uint64_t		rs_offset;
+	compression_spec_t	rs_compression;
+} record_specifier_t;
 
 typedef void *
 thread_f(void *);
@@ -88,6 +99,28 @@ ctype_is_uncompressed(enum zio_compress ct)
 	VERIFY3U((int)ct, <, (int)ZIO_COMPRESS_FUNCTIONS);
 	return (zio_compress_table[(int)(ct)].ci_compress == NULL);
 }
+
+/*
+ * Convert a string such as "zstd-12" to a compression_spec_t. Returns 0 for
+ * successful parsing, nonzero if parsing failed. In the case of failure,
+ * the original compression_spec_t remains unmodified.
+ *
+ * This parser accepts "on" and returns it as a discrete compression type.
+ */
+int
+parse_compression_specifier(const char *str, compression_spec_t *spec);
+
+/*
+ * Parse a string of the form "OBJECT,OFFSET" or "OBJECT,OFFSET,COMPRESSION"
+ * (with accept_compression == B_TRUE) and fill out a corresponding
+ * record_specifier_t. Returns 0 if the string was successfully parsed.
+ *
+ * If accept_compression is B_TRUE but there is no COMPRESSION specifier,
+ * the compression is set to ZIO_COMPRESS_INHERIT.
+ */
+int
+parse_record_specifier(const char *str, record_specifier_t *rec,
+    boolean_t accept_compression);
 
 boolean_t
 write_is_encrypted(struct drr_write *drrw);

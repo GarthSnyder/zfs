@@ -147,6 +147,69 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 	return (B_FALSE);
 }
 
+int
+parse_compression_specifier(const char *str, compression_spec_t *spec)
+{
+	uint64_t val;
+	int rc;
+	rc = zfs_prop_string_to_index(ZFS_PROP_COMPRESSION, str, &val);
+	if (rc == 0) {
+		*spec = (compression_spec_t) {
+			.cs_type = ZIO_COMPRESS_ALGO(val),
+			.cs_level = ZIO_COMPRESS_LEVEL(val)
+		};
+	}
+	return (rc);
+}
+
+int
+parse_record_specifier(const char *str, record_specifier_t *rec,
+    boolean_t accept_compression)
+{
+	char static_buff[256];
+	char *buff = static_buff;
+	char *loc;
+	char *obj_str, *offset_str, *end;
+	boolean_t bad = B_TRUE;
+	size_t in_size = strlen(str) + 1;
+
+	if (in_size > sizeof (static_buff)) {
+		buff = malloc(in_size);
+	}
+	strcpy(buff, str);
+	loc = buff;
+	errno = 0;
+	rec->rs_compression = (compression_spec_t) {
+		.cs_type = ZIO_COMPRESS_INHERIT
+	};
+
+	obj_str = strsep(&loc, ",");
+	if (loc == NULL)
+		goto bail;
+	rec->rs_object = strtoull(obj_str, &end, 0);
+	if (errno != 0 || *end != '\0')
+		goto bail;
+	offset_str = strsep(&loc, ",");
+	rec->rs_offset = strtoull(offset_str, &end, 0);
+	if (errno != 0 || *end != '\0')
+		goto bail;
+	if (loc != NULL) {
+		if (accept_compression) {
+			int rc = parse_compression_specifier(loc,
+			    &rec->rs_compression);
+			if (rc != 0)
+				goto bail;
+		} else {
+			goto bail;
+		}
+	}
+	bad = B_FALSE;
+
+bail:	if (buff != static_buff)
+		free(buff);
+	return (bad ? -1 : 0);
+}
+
 boolean_t
 write_is_encrypted(struct drr_write *drrw)
 {

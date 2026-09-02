@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/stdtypes.h>
 #include <sys/zfs_ioctl.h>
 #include <unistd.h>
@@ -93,6 +94,8 @@ zstream_do_drop_record(int argc, char *argv[])
 {
 	int c;
 	chain_attrs_t attrs = {0};
+	struct stat statbuf;
+	char *stream_file = NULL;
 
 	while ((c = getopt(argc, argv, "v")) != -1) {
 		switch (c) {
@@ -114,41 +117,31 @@ zstream_do_drop_record(int argc, char *argv[])
 		errx(1, "hcreate failed");
 
 	for (int i = 0; i < argc; i++) {
-
-		uint64_t object, offset;
-		char *obj_str;
-		char *offset_str;
-		char *key;
-		char *end;
-
-		obj_str = strsep(&argv[i], ",");
-		if (argv[i] == NULL)
-			zstream_usage();
-		errno = 0;
-		object = strtoull(obj_str, &end, 0);
-		if (errno || *end != '\0')
-			errx(1, "invalid value for object");
-		offset_str = strsep(&argv[i], ",");
-		offset = strtoull(offset_str, &end, 0);
-		if (errno || *end != '\0')
-			errx(1, "invalid value for offset");
-
-		if (asprintf(&key, "%llu,%llu", (u_longlong_t)object,
-		    (u_longlong_t)offset) < 0) {
-			err(1, "asprintf");
+		record_specifier_t spec;
+		if (parse_record_specifier(argv[i], &spec, B_FALSE) == 0) {
+			char *key;
+			int n_chars = asprintf(&key, "%llu,%llu",
+			    (u_longlong_t)spec.rs_object,
+			    (u_longlong_t)spec.rs_offset);
+			if (n_chars < 0)
+				err(1, "asprintf");
+			ENTRY *p = hsearch((ENTRY) { .key = key }, ENTER);
+			if (p == NULL)
+				errx(1, "hsearch failed");
+			p->data = (void *)(intptr_t)B_TRUE;
+			continue;
 		}
-		ENTRY e = {.key = key};
-		ENTRY *p;
-		p = hsearch(e, ENTER);
-		if (p == NULL)
-			errx(1, "hsearch");
-		p->data = (void *)(intptr_t)B_TRUE;
+		if (i == argc - 1 && stat(argv[i], &statbuf) == 0) {
+			stream_file = argv[i];
+		} else {
+			errx(1, "invalid record specifier '%s'", argv[i]);
+		}
 	}
 
 	ENABLE_OPTION(&attrs, CA_FORBID_DEDUP);
 
 	zstream_chain_t drop_chain = {
-		STANDARD_INPUT_STACK(NULL),
+		STANDARD_INPUT_STACK(stream_file),
 		serial_drop_records(),
 		STANDARD_OUTPUT_STACK(NULL)
 	};
