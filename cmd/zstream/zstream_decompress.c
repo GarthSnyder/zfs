@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/stdtypes.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_compress.h>
@@ -134,6 +135,8 @@ int
 zstream_do_decompress(int argc, char *argv[])
 {
 	chain_attrs_t attrs = {0};
+	struct stat statbuf;
+	char *stream_file = NULL;
 	int c;
 
 	while ((c = getopt(argc, argv, "v")) != -1) {
@@ -156,60 +159,31 @@ zstream_do_decompress(int argc, char *argv[])
 		errx(1, "hcreate failed");
 
 	for (int i = 0; i < argc; i++) {
-		uint64_t object, offset;
-		char *obj_str;
-		char *offset_str;
-		char *key;
-		char *end;
-		enum zio_compress type = ZIO_COMPRESS_INHERIT;
-
-		obj_str = strsep(&argv[i], ",");
-		if (argv[i] == NULL)
-			zstream_usage();
-		errno = 0;
-		object = strtoull(obj_str, &end, 0);
-		if (errno || *end != '\0')
-			errx(1, "invalid value for object");
-		offset_str = strsep(&argv[i], ",");
-		offset = strtoull(offset_str, &end, 0);
-		if (errno || *end != '\0')
-			errx(1, "invalid value for offset");
-		if (argv[i]) {
-			if (0 == strcmp("off", argv[i]))
-				type = ZIO_COMPRESS_OFF;
-			else if (0 == strcmp("lz4", argv[i]))
-				type = ZIO_COMPRESS_LZ4;
-			else if (0 == strcmp("lzjb", argv[i]))
-				type = ZIO_COMPRESS_LZJB;
-			else if (0 == strcmp("gzip", argv[i]))
-				type = ZIO_COMPRESS_GZIP_1;
-			else if (0 == strcmp("zle", argv[i]))
-				type = ZIO_COMPRESS_ZLE;
-			else if (0 == strcmp("zstd", argv[i]))
-				type = ZIO_COMPRESS_ZSTD;
-			else {
-				errx(2, "invalid compression type %s. "
-				    "Supported types are off, lz4, lzjb, gzip, "
-				    "zle, and zstd", argv[i]);
-			}
+		record_specifier_t spec;
+		if (parse_record_specifier(argv[i], &spec, B_TRUE) == 0) {
+			char *key;
+			int n_chars = asprintf(&key, "%llu,%llu",
+			    (u_longlong_t)spec.rs_object,
+			    (u_longlong_t)spec.rs_offset);
+			if (n_chars < 0)
+				err(1, "asprintf");
+			ENTRY *p = hsearch((ENTRY) { .key = key }, ENTER);
+			if (p == NULL)
+				errx(1, "hsearch failed");
+			p->data = (void *)(intptr_t)spec.rs_compression.cs_type;
+			continue;
 		}
-
-		int n_chars = asprintf(&key, "%llu,%llu", (u_longlong_t)object,
-		    (u_longlong_t)offset);
-		if (n_chars < 0)
-			err(1, "asprintf");
-		ENTRY e = { .key = key };
-		ENTRY *p;
-		p = hsearch(e, ENTER);
-		if (p == NULL)
-			errx(1, "hsearch failed");
-		p->data = (void *)(intptr_t)type;
+		if (i == argc - 1 && stat(argv[i], &statbuf) == 0) {
+			stream_file = argv[i];
+		} else {
+			errx(1, "invalid record specifier '%s'", argv[i]);
+		}
 	}
 
 	ENABLE_OPTION(&attrs, CA_FORBID_DEDUP);
 
 	zstream_chain_t decompress_chain = {
-		STANDARD_INPUT_STACK(NULL),
+		STANDARD_INPUT_STACK(stream_file),
 		serial_decompress_named_writes(),
 		STANDARD_OUTPUT_STACK(NULL)
 	};
