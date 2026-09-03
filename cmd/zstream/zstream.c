@@ -17,6 +17,7 @@
 
 #include <err.h>
 #include <libspl.h>
+#include <libzfs.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,8 @@
 
 #include "zstream.h"
 #include "zstream_util.h"
+
+static libzfs_handle_t *libzfs_handle;
 
 void
 zstream_usage(void)
@@ -77,6 +80,7 @@ libraries_init(void)
 	zio_init();
 	zstd_init();
 	libspl_init();
+	libzfs_handle = libzfs_init();
 	fletcher_4_init();
 }
 
@@ -84,6 +88,7 @@ static void
 libraries_fini(void)
 {
 	fletcher_4_fini();
+	libzfs_fini(libzfs_handle);
 	libspl_fini();
 	zio_fini();
 	zstd_fini();
