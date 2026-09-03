@@ -43,7 +43,7 @@ zstream_usage(void)
 	    "\n"
 	    "\tzstream drop_records [-v] [object,offset ...] [file]\n"
 	    "\n"
-	    "\tzstream raw [-v] [-b max_buffers] [-g from_guid] image|device [file]\n"
+	    "\tzstream raw [-v] [-b max_buffers] [-g fromguid] image|device [file]\n"
 	    "\n"
 	    "\tzstream recompress [-t num_threads] compress_type [file]\n"
 	    "\n"
