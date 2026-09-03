@@ -54,9 +54,9 @@
 .Op Ar file
 .
 .Sh DESCRIPTION
-The
 .Sy zstream
-utility manipulates ZFS send streams created by the
+performs various transformations and manipulations of ZFS send streams
+created by the
 .Sy zfs send
 command.
 .Pp
@@ -81,9 +81,9 @@ cannot accept input from a pipe.
 .Xc
 Prints information about the specified send stream, including headers and
 record counts.
-The send stream may either be in the specified
+The stream is read from either the specified
 .Ar file
-or provided on standard input.
+or standard input.
 .Bl -tag -width "-D"
 .It Fl C
 Suppresses the validation of checksums.
@@ -106,7 +106,7 @@ alias is provided for compatibility and is equivalent to running
 .Cm token
 .Ar resume_token
 .Xc
-Dumps zfs resume token information.
+Dumps ZFS resume token information.
 .It Xo
 .Nm
 .Cm decompress
@@ -119,7 +119,8 @@ This subcommand can be used to recover data when the compression type
 recorded in the ZFS metadata may be incorrect.
 Specify the object number and byte offset of each record you want to
 decompress.
-Optionally, specify the (true) compression type.
+Optionally, specify the (true) compression
+.Ar type .
 The
 .Ar type
 can be any value accepted by the
@@ -132,23 +133,26 @@ property, such as
 .Sy zstd ,
 or
 .Sy zle .
-A compression level, as in
+A compression level (e.g.,
 .Sy gzip-3
 or
-.Sy zstd-5 ,
+.Sy zstd-5 )
 is accepted but ignored; only the algorithm matters when decompressing.
 If no
 .Ar type
 is given, the compression type recorded in the record's own metadata is used.
+.Pp
 Every record for that object beginning at that offset will be decompressed, if
 possible.
 It may not be possible, because the record may be corrupted in some but not
 all of the stream's snapshots.
+.Pp
 Specifying a compression type of
 .Sy off
 will change the stream's metadata accordingly, without attempting decompression.
 This can be useful if the record is already uncompressed but the metadata
 insists otherwise.
+.Pp
 The repaired stream will be written to standard output.
 .Bl -tag -width "-v"
 .It Fl v
@@ -309,7 +313,7 @@ The bogus records typically have an absurdly large offset which can be
 discovered by running
 .Nm zdb Fl ddddd Ar dataset Ar object
 or
-.Nm zstream Ar dump Fl v .
+.Nm zstream dump Fl v .
 To recover, send the dataset and use
 .Nm zstream
 to drop the bogus record, then receive it into a new dataset.
