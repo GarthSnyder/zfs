@@ -174,7 +174,7 @@ parse_record_specifier(const char *str, record_specifier_t *rec,
 	size_t in_size = strlen(str) + 1;
 
 	if (in_size > sizeof (static_buff)) {
-		buff = malloc(in_size);
+		buff = safe_malloc(in_size);
 	}
 	strcpy(buff, str);
 	loc = buff;
