@@ -41,7 +41,7 @@ zstream_usage(void)
 	    "\n"
 	    "\tzstream decompress [-v] [object,offset[,type] ...] [file]\n"
 	    "\n"
-	    "\tzstream drop_record [-v] [object,offset ...] [file]\n"
+	    "\tzstream drop_records [-v] [object,offset ...] [file]\n"
 	    "\n"
 	    "\tzstream raw [-v] [-b max_buffers] [-g from_guid] image|device [file]\n"
 	    "\n"
@@ -115,7 +115,9 @@ main(int argc, char *argv[])
 	} else if (strcmp(subcommand, "decompress") == 0) {
 		return (zstream_do_decompress(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "drop_record") == 0) {
-		return (zstream_do_drop_record(argc - 1, argv + 1));
+		return (zstream_do_drop_records(argc - 1, argv + 1));
+	} else if (strcmp(subcommand, "drop_records") == 0) {
+		return (zstream_do_drop_records(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "raw") == 0) {
 		return (zstream_do_raw(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "recompress") == 0) {
