@@ -33,7 +33,7 @@ extern "C" {
 extern int zstream_do_redup(int, char *[]);
 extern int zstream_do_dump(int, char *[]);
 extern int zstream_do_decompress(int argc, char *argv[]);
-extern int zstream_do_drop_record(int argc, char *argv[]);
+extern int zstream_do_drop_records(int argc, char *argv[]);
 extern int zstream_do_recompress(int argc, char *argv[]);
 extern int zstream_do_token(int, char *[]);
 extern int zstream_do_raw(int, char *[]);

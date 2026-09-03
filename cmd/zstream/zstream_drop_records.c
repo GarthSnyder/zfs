@@ -90,7 +90,7 @@ serial_drop_records(void)
 }
 
 int
-zstream_do_drop_record(int argc, char *argv[])
+zstream_do_drop_records(int argc, char *argv[])
 {
 	int c;
 	chain_attrs_t attrs = {0};
