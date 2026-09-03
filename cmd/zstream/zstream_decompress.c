@@ -167,7 +167,8 @@ zstream_do_decompress(int argc, char *argv[])
 			    (u_longlong_t)spec.rs_offset);
 			if (n_chars < 0)
 				err(1, "asprintf");
-			ENTRY *p = hsearch((ENTRY) { .key = key }, ENTER);
+			ENTRY e = { .key = key };
+			ENTRY *p = hsearch(e, ENTER);
 			if (p == NULL)
 				errx(1, "hsearch failed");
 			p->data = (void *)(intptr_t)spec.rs_compression.cs_type;
