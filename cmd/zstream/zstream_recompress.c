@@ -368,7 +368,7 @@ zstream_do_recompress(int argc, char *argv[])
 			break;
 		case 't':
 			if (sscanf(optarg, "%d", &num_threads) != 1) {
-				warnx("failed to parse num_threads '%s'",
+				warnx("failed to parse number of threads '%s'",
 				    optarg);
 				zstream_usage();
 			}
