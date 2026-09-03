@@ -43,14 +43,14 @@
 .Nm
 .Cm raw
 .Op Fl v
-.Op Fl b Ar maxbufs
-.Op Fl g Ar fromguid
+.Op Fl b Ar max_buffers
+.Op Fl g Ar from_guid
 .Ar image|device
 .Op Ar file
 .Nm
 .Cm recompress
 .Op Fl t Ar num_threads
-.Ar algorithm
+.Ar compress_type
 .Op Ar file
 .
 .Sh DESCRIPTION
@@ -211,8 +211,8 @@ Print summary of converted records.
 .Nm
 .Cm raw
 .Op Fl v
-.Op Fl b Ar maxbufs
-.Op Fl g Ar fromguid
+.Op Fl b Ar max_buffers
+.Op Fl g Ar from_guid
 .Ar image|device
 .Op Ar file
 .Xc
@@ -223,14 +223,14 @@ By default, at most 32
 .Dv SPA_MAXBLOCKSIZE
 buffers can be written at a time.
 With
-.Ar maxbufs
+.Ar max_buffers
 set to some value between 1 and
 .Dv IOV_MAX ,
 contiguous write records will be combined into one write operation using up to
 this many buffers, at the cost of additional memory use.
 When
-.Ar fromguid
-is provided, the initial fromguid of the stream will be checked to ensure it
+.Ar from_guid
+is provided, the initial from_guid of the stream will be checked to ensure it
 matches the given value.
 The final toguid of the stream is printed to stdout on completion.
 With
@@ -242,18 +242,18 @@ details of the records in the stream are printed in similar fashion to
 .Nm
 .Cm recompress
 .Op Fl t Ar num_threads
-.Ar algorithm
+.Ar compress_type
 .Op Ar file
 .Xc
 Recompresses a send stream, read from the specified
 .Ar file
 or from standard input, using the specified compression
-.Ar algorithm ,
+.Ar compress_type ,
 and writes the modified stream to standard output.
 All WRITE records in the send stream will be compressed unless compression
 fails to reduce their size compared to being left uncompressed.
 The
-.Ar algorithm
+.Ar compress_type
 can be any value accepted by the
 .Sy compression
 property, including one that names a compression level, such as
@@ -262,7 +262,7 @@ property, including one that names a compression level, such as
 or
 .Sy zstd-fast-1000 .
 An
-.Ar algorithm
+.Ar compress_type
 of
 .Sy off
 decompresses every record and leaves the stream uncompressed.
@@ -284,12 +284,12 @@ particularly when automating operations on shared servers.
 Deprecated.
 Specifies a
 .Sy zstd
-compression level, and may be used only with an
-.Ar algorithm
+compression level, and may be used only with a
+.Ar compress_type
 of
 .Sy zstd .
 Give the level as part of the
-.Ar algorithm
+.Ar compress_type
 instead, as in
 .Sy zstd-5 .
 .El

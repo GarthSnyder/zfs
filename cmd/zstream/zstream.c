@@ -37,19 +37,19 @@ zstream_usage(void)
 	    "usage: zstream command args ...\n"
 	    "Available commands are:\n"
 	    "\n"
-	    "\tzstream dump [-vCd] [FILE]\n"
+	    "\tzstream dump [-vCd] [file]\n"
 	    "\n"
-	    "\tzstream decompress [-v] [OBJECT,OFFSET[,TYPE] ...] [FILE]\n"
+	    "\tzstream decompress [-v] [object,offset[,type] ...] [file]\n"
 	    "\n"
-	    "\tzstream drop_record [-v] [OBJECT,OFFSET ...] [FILE]\n"
+	    "\tzstream drop_record [-v] [object,offset ...] [file]\n"
 	    "\n"
-	    "\tzstream raw [-v] [-b blocks] [-g guid] IMAGE|DEVICE [FILE]\n"
+	    "\tzstream raw [-v] [-b max_buffers] [-g from_guid] image|device [file]\n"
 	    "\n"
-	    "\tzstream recompress [-t num_threads] COMPRESS_TYPE [FILE]\n"
+	    "\tzstream recompress [-t num_threads] compress_type [file]\n"
 	    "\n"
 	    "\tzstream token resume_token\n"
 	    "\n"
-	    "\tzstream redup [-v] FILE\n");
+	    "\tzstream redup [-v] file\n");
 	exit(1);
 }
 
