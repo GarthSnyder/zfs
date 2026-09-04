@@ -20,7 +20,6 @@
 
 #include <err.h>
 #include <errno.h>
-#include <search.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,22 +48,17 @@ chain_decompress_named_writes(void *item_in, void *context)
 
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw = &drr->drr_u.drr_write;
-	char key[KEYSIZE];
 	uint8_t *dcbuff;
 
 	if (drr->drr_type != DRR_WRITE) {
 		return (D_OK);
 	}
 
-	snprintf(key, KEYSIZE, "%llu,%llu",
-	    (u_longlong_t)drrw->drr_object, (u_longlong_t)drrw->drr_offset);
-	ENTRY e = { .key = key };
-	ENTRY *p = hsearch(e, FIND);
-	if (p == NULL) {
+	enum zio_compress ctype;
+	boolean_t found = lookup_record_specifier(drrw->drr_object,
+	    drrw->drr_offset, &ctype);
+	if (!found)
 		return (D_OK);
-	}
-
-	enum zio_compress ctype = (enum zio_compress)(intptr_t)p->data;
 	if (ctype == ZIO_COMPRESS_INHERIT) {
 		/* Unspecified */
 		ctype = drrw->drr_compressiontype;
@@ -153,31 +147,17 @@ zstream_do_decompress(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-	if (argc < 0)
-		zstream_usage();
-	if (hcreate(argc) == 0)
-		errx(1, "hcreate failed");
+	int num_specifiers = parse_record_specifiers(argc, argv, B_TRUE);
+	argc -= num_specifiers;
+	argv += num_specifiers;
 
-	for (int i = 0; i < argc; i++) {
-		record_specifier_t spec;
-		if (parse_record_specifier(argv[i], &spec, B_TRUE) == 0) {
-			char *key;
-			int n_chars = asprintf(&key, "%llu,%llu",
-			    (u_longlong_t)spec.rs_object,
-			    (u_longlong_t)spec.rs_offset);
-			if (n_chars < 0)
-				err(1, "asprintf");
-			ENTRY e = { .key = key };
-			ENTRY *p = hsearch(e, ENTER);
-			if (p == NULL)
-				errx(1, "hsearch failed");
-			p->data = (void *)(intptr_t)spec.rs_compression.cs_type;
-			continue;
-		}
-		if (i == argc - 1 && stat(argv[i], &statbuf) == 0) {
-			stream_file = argv[i];
+	if (argc > 1) {
+		errx(1, "invalid record specifier '%s'", argv[0]);
+	} else if (argc == 1) {
+		if (stat(argv[0], &statbuf) == 0) {
+			stream_file = argv[0];
 		} else {
-			errx(1, "invalid record specifier '%s'", argv[i]);
+			err(1, "%s", argv[0]);
 		}
 	}
 
@@ -190,6 +170,6 @@ zstream_do_decompress(int argc, char *argv[])
 	};
 	zstream_chain_exec(decompress_chain, &attrs);
 
-	hdestroy();
+	destroy_record_specifier_hash();
 	return (0);
 }

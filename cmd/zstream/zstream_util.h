@@ -111,16 +111,29 @@ int
 parse_compression_specifier(const char *str, compression_spec_t *spec);
 
 /*
- * Parse a string of the form "OBJECT,OFFSET" or "OBJECT,OFFSET,COMPRESSION"
- * (with accept_compression == B_TRUE) and fill out a corresponding
- * record_specifier_t. Returns 0 if the string was successfully parsed.
+ * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the
+ * command line as possible, entering them into an hcreate() hash table. The
+ * OBJECT/OFFSET pairs become the keys and the compression types become the
+ * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
+ * a placeholder value.
  *
- * If accept_compression is B_TRUE but there is no COMPRESSION specifier,
- * the compression is set to ZIO_COMPRESS_INHERIT.
+ * Stops at the first unparseable specifier and returns the number of
+ * specifiers successfully parsed. Checks a few return codes that should
+ * never fail and exits with a message if they do.
  */
 int
-parse_record_specifier(const char *str, record_specifier_t *rec,
-    boolean_t accept_compression);
+parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression);
+
+/*
+ * Looks up record specifiers in an hcreate() hash table by object and
+ * offset. Returns B_TRUE and sets the ctype if found.
+ */
+boolean_t
+lookup_record_specifier(uint64_t object, uint64_t offset,
+    enum zio_compress *ctype);
+
+void
+destroy_record_specifier_hash(void);
 
 boolean_t
 write_is_encrypted(struct drr_write *drrw);
