@@ -20,10 +20,6 @@
 .Nd manipulate ZFS send streams
 .Sh SYNOPSIS
 .Nm
-.Cm dump
-.Op Fl Cvd
-.Op Ar file
-.Nm
 .Cm decompress
 .Op Fl v
 .Oo Ar object Ns Sy \&, Ns Ar offset Ns Oo Sy \&, Ns Ar type Oc Ns … Oc
@@ -34,12 +30,9 @@
 .Oo Ar object Ns Sy \&, Ns Ar offset Ns … Oc
 .Op Ar file
 .Nm
-.Cm redup
-.Op Fl v
-.Ar file
-.Nm
-.Cm token
-.Ar resume_token
+.Cm dump
+.Op Fl Cvd
+.Op Ar file
 .Nm
 .Cm raw
 .Op Fl v
@@ -52,6 +45,13 @@
 .Op Fl t Ar num_threads
 .Ar compress_type
 .Op Ar file
+.Nm
+.Cm redup
+.Op Fl v
+.Ar file
+.Nm
+.Cm token
+.Ar resume_token
 .
 .Sh DESCRIPTION
 .Nm
@@ -73,34 +73,6 @@ subcommand requires a
 it rereads earlier parts of the stream to resolve deduplicated records, so it
 cannot accept input from a pipe.
 .Bl -tag -width ""
-.It Xo
-.Nm
-.Cm dump
-.Op Fl Cvd
-.Op Ar file
-.Xc
-Prints information about the specified send stream, including headers and
-record counts.
-The stream is read from either the specified
-.Ar file
-or standard input.
-.Bl -tag -width "-C"
-.It Fl C
-Suppresses the validation of checksums.
-.It Fl v
-Verbose.
-Prints metadata for each record.
-This option can be repeated to also print record checksums.
-.It Fl d
-Dumps the data contained in each record.
-Implies verbose.
-.El
-.Pp
-The
-.Nm zstreamdump
-alias is provided for compatibility and is equivalent to running
-.Nm
-.Cm dump .
 .It Xo
 .Nm
 .Cm decompress
@@ -170,42 +142,32 @@ Prints a summary of dropped records.
 .El
 .It Xo
 .Nm
-.Cm redup
-.Op Fl v
-.Ar file
+.Cm dump
+.Op Fl Cvd
+.Op Ar file
 .Xc
-It was formerly possible to create deduplicated send streams with the
-.Nm zfs Cm send Fl D
-option.
-However, support for stream-level deduplication has been deprecated and
-removed from both
-.Nm zfs Cm send
-and
-.Nm zfs Cm receive .
-.Pp
-.Nm zstream Cm redup
-reads a deduplicated stream from the specified
+Prints information about the specified send stream, including headers and
+record counts.
+The stream is read from either the specified
 .Ar file
-and outputs an equivalent, non-deduplicated send stream on standard output.
-Therefore, a deduplicated stream can be received by running:
-.Pp
-.Dl # Nm zstream Cm redup Pa file | Nm zfs Cm receive No …
-.Pp
-A real
-.Ar file
-is required here because resolving deduplicated records involves rereading
-earlier parts of the stream.
-.Bl -tag -width "-v"
+or standard input.
+.Bl -tag -width "-C"
+.It Fl C
+Suppresses the validation of checksums.
 .It Fl v
 Verbose.
-Prints a summary of reduplicated records.
+Prints metadata for each record.
+This option can be repeated to also print record checksums.
+.It Fl d
+Dumps the data contained in each record.
+Implies verbose.
 .El
-.It Xo
+.Pp
+The
+.Nm zstreamdump
+alias is provided for compatibility and is equivalent to running
 .Nm
-.Cm token
-.Ar resume_token
-.Xc
-Dumps ZFS resume token information.
+.Cm dump .
 .It Xo
 .Nm
 .Cm raw
@@ -286,6 +248,44 @@ Use a standard compression specifier such as
 .Sy zstd-5
 instead.
 .El
+.It Xo
+.Nm
+.Cm redup
+.Op Fl v
+.Ar file
+.Xc
+It was formerly possible to create deduplicated send streams with the
+.Nm zfs Cm send Fl D
+option.
+However, support for stream-level deduplication has been deprecated and
+removed from both
+.Nm zfs Cm send
+and
+.Nm zfs Cm receive .
+.Pp
+.Nm zstream Cm redup
+reads a deduplicated stream from the specified
+.Ar file
+and outputs an equivalent, non-deduplicated send stream on standard output.
+Therefore, a deduplicated stream can be received by running:
+.Pp
+.Dl # Nm zstream Cm redup Pa file | Nm zfs Cm receive No …
+.Pp
+A real
+.Ar file
+is required here because resolving deduplicated records involves rereading
+earlier parts of the stream.
+.Bl -tag -width "-v"
+.It Fl v
+Verbose.
+Prints a summary of reduplicated records.
+.El
+.It Xo
+.Nm
+.Cm token
+.Ar resume_token
+.Xc
+Dumps ZFS resume token information.
 .El
 .
 .Sh EXAMPLES
