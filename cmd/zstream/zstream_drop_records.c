@@ -17,7 +17,6 @@
 
 #include <err.h>
 #include <errno.h>
-#include <search.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +28,7 @@
 
 #include "zstream.h"
 #include "zstream_modules.h"
+#include "zstream_util.h"
 
 #define	KEYSIZE 64
 
@@ -44,10 +44,8 @@ chain_drop_records(void *item_in, void *context)
 	dmu_replay_record_t *drr = &item->dp_drr;
 	struct drr_write *drrw = &drr->drr_u.drr_write;
 	struct drr_write_embedded *drrwe = &drr->drr_u.drr_write_embedded;
-	char key[KEYSIZE];
 	u_longlong_t object, offset;
 	const char *record_type;
-	ENTRY e = {.key = key};
 
 	if (drr->drr_type == DRR_WRITE) {
 		object = drrw->drr_object;
@@ -61,8 +59,8 @@ chain_drop_records(void *item_in, void *context)
 		return (D_OK);
 	}
 
-	snprintf(key, KEYSIZE, "%llu,%llu", object, offset);
-	if (hsearch(e, FIND) != NULL) {
+	enum zio_compress ctype;
+	if (lookup_record_specifier(object, offset, &ctype)) {
 		if (OPTION_ENABLED(CA_VERBOSE)) {
 			warnx("dropping %s record for object %llu "
 			    "offset %llu", record_type, object, offset);
@@ -111,31 +109,17 @@ zstream_do_drop_records(int argc, char *argv[])
 	argc -= optind;
 	argv += optind;
 
-	if (argc < 0)
-		zstream_usage();
-	if (hcreate(argc) == 0)
-		errx(1, "hcreate failed");
+	int num_specifiers = parse_record_specifiers(argc, argv, B_FALSE);
+	argc -= num_specifiers;
+	argv += num_specifiers;
 
-	for (int i = 0; i < argc; i++) {
-		record_specifier_t spec;
-		if (parse_record_specifier(argv[i], &spec, B_FALSE) == 0) {
-			char *key;
-			int n_chars = asprintf(&key, "%llu,%llu",
-			    (u_longlong_t)spec.rs_object,
-			    (u_longlong_t)spec.rs_offset);
-			if (n_chars < 0)
-				err(1, "asprintf");
-			ENTRY e = { .key = key };
-			ENTRY *p = hsearch(e, ENTER);
-			if (p == NULL)
-				errx(1, "hsearch failed");
-			p->data = (void *)(intptr_t)B_TRUE;
-			continue;
-		}
-		if (i == argc - 1 && stat(argv[i], &statbuf) == 0) {
-			stream_file = argv[i];
+	if (argc > 1) {
+		errx(1, "invalid record specifier '%s'", argv[0]);
+	} else if (argc == 1) {
+		if (stat(argv[0], &statbuf) == 0) {
+			stream_file = argv[0];
 		} else {
-			errx(1, "invalid record specifier '%s'", argv[i]);
+			err(1, "%s", argv[0]);
 		}
 	}
 
@@ -148,6 +132,6 @@ zstream_do_drop_records(int argc, char *argv[])
 	};
 	zstream_chain_exec(drop_chain, &attrs);
 
-	hdestroy();
+	destroy_record_specifier_hash();
 	return (0);
 }

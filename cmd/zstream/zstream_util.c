@@ -28,6 +28,7 @@
 #include <err.h>
 #include <errno.h>
 #include <pthread.h>
+#include <search.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,7 +163,15 @@ parse_compression_specifier(const char *str, compression_spec_t *spec)
 	return (rc);
 }
 
-int
+/*
+ * Parse a string of the form "OBJECT,OFFSET" or "OBJECT,OFFSET,COMPRESSION"
+ * (with accept_compression == B_TRUE) and fill out a corresponding
+ * record_specifier_t. Returns 0 if the string was successfully parsed.
+ *
+ * If accept_compression is B_TRUE but there is no COMPRESSION specifier,
+ * the compression is set to ZIO_COMPRESS_INHERIT.
+ */
+static int
 parse_record_specifier(const char *str, record_specifier_t *rec,
     boolean_t accept_compression)
 {
@@ -208,6 +217,66 @@ parse_record_specifier(const char *str, record_specifier_t *rec,
 bail:	if (buff != static_buff)
 		free(buff);
 	return (bad ? -1 : 0);
+}
+
+int
+parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
+{
+	int num_parsed = 0;
+	char *key;
+
+	if (hcreate(argc) == 0)
+		errx(1, "hcreate failed");
+
+	for (int i = 0; i < argc; i++) {
+		record_specifier_t spec;
+		int rc = parse_record_specifier(argv[i], &spec,
+		    accept_compression);
+		if (rc != 0) {
+			break;
+		}
+		int n_chars = asprintf(&key, "%llu,%llu",
+		    (u_longlong_t)spec.rs_object,
+		    (u_longlong_t)spec.rs_offset);
+		if (n_chars < 0)
+			err(1, "asprintf");
+		ENTRY e = { .key = key };
+		ENTRY *p = hsearch(e, ENTER);
+		if (p == NULL)
+			errx(1, "hsearch failed");
+		if (!accept_compression) {
+			spec.rs_compression.cs_type = ZIO_COMPRESS_INHERIT;
+		}
+		p->data = (void *)(intptr_t)spec.rs_compression.cs_type;
+		num_parsed++;
+	}
+	return (num_parsed);
+}
+
+boolean_t
+lookup_record_specifier(uint64_t object, uint64_t offset,
+    enum zio_compress *ctype)
+{
+	char *key;
+	boolean_t found = B_FALSE;
+	int n_chars = asprintf(&key, "%llu,%llu", (u_longlong_t)object,
+	    (u_longlong_t)offset);
+	if (n_chars < 0)
+		err(1, "asprintf");
+	ENTRY e = { .key = key };
+	ENTRY *p = hsearch(e, FIND);
+	if (p != NULL) {
+		*ctype = (enum zio_compress)p->data;
+		found = B_TRUE;
+	}
+	free(key);
+	return (found);
+}
+
+void
+destroy_record_specifier_hash(void)
+{
+	hdestroy();
 }
 
 boolean_t
