@@ -20,7 +20,7 @@
 
 #
 # Description:
-# Verify that "zstream drop_record" can remove a record from a stream
+# Verify that "zstream drop_records" can remove a record from a stream
 #
 # Strategy:
 # 1. Create a file containing multiple records, both full size and embedded.
@@ -30,7 +30,7 @@
 
 verify_runnable "both"
 
-log_assert "Verify zstream drop_record correctly drops records."
+log_assert "Verify zstream drop_records correctly drops records."
 log_onexit cleanup_pool $POOL
 
 typeset sendfs=$POOL/fs
@@ -66,7 +66,7 @@ typeset inode2=$(get_objnum $dir/embedded_records)
 
 # Verify that the requested records, and only them, were dropped
 log_must eval "zfs send -ce $sendfs@snap > $stream"
-log_must eval "zstream drop_record $inode1,131072 $inode2,0 < $stream > $filtered"
+log_must eval "zstream drop_records $inode1,131072 $inode2,0 < $stream > $filtered"
 log_must eval "zstream dump -v < $filtered > $dump"
 log_must grep -qE "^WRITE object = $inode1\>.*offset = 0" $dump
 log_mustnot grep -qE "^WRITE object = $inode1\>.*offset = 131072" $dump
@@ -75,4 +75,4 @@ log_mustnot grep -qE "^WRITE_EMBEDDED object = $inode2\>.*offset = 0" $dump
 # Verify that the stream can be received
 log_must eval "zfs recv $recvfs < $stream"
 
-log_pass "zstream drop_record correctly drops records."
+log_pass "zstream drop_records correctly drops records."
