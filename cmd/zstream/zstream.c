@@ -40,19 +40,20 @@ zstream_usage(void)
 	    "usage: zstream command args ...\n"
 	    "Available commands are:\n"
 	    "\n"
-	    "\tzstream dump [-vCd] [file]\n"
+	    "\tzstream decompress [-v] [object,offset[,type]...] [file]\n"
 	    "\n"
-	    "\tzstream decompress [-v] [object,offset[,type] ...] [file]\n"
+	    "\tzstream drop_records [-v] [object,offset...] [file]\n"
 	    "\n"
-	    "\tzstream drop_records [-v] [object,offset ...] [file]\n"
+	    "\tzstream dump [-Cvd] [file]\n"
 	    "\n"
-	    "\tzstream raw [-v] [-b max_buffers] [-g fromguid] image|device [file]\n"
+	    "\tzstream raw [-v] [-b max_buffers] [-g fromguid] "
+	    "image|device [file]\n"
 	    "\n"
 	    "\tzstream recompress [-t num_threads] compress_type [file]\n"
 	    "\n"
-	    "\tzstream token resume_token\n"
+	    "\tzstream redup [-v] file\n"
 	    "\n"
-	    "\tzstream redup [-v] file\n");
+	    "\tzstream token resume_token\n");
 	exit(1);
 }
 
@@ -115,25 +116,25 @@ main(int argc, char *argv[])
 
 	char *subcommand = argv[1];
 
-	if (strcmp(subcommand, "dump") == 0) {
-		return (zstream_do_dump(argc - 1, argv + 1));
-	} else if (strcmp(subcommand, "decompress") == 0) {
+	if (strcmp(subcommand, "decompress") == 0) {
 		return (zstream_do_decompress(argc - 1, argv + 1));
-	} else if (strcmp(subcommand, "drop_record") == 0) {
+	} else if (strcmp(subcommand, "drop_records") == 0 ||
+	    strcmp(subcommand, "drop_record") == 0) {
+		/* "drop_record" is the original name, kept for compatibility */
 		return (zstream_do_drop_records(argc - 1, argv + 1));
-	} else if (strcmp(subcommand, "drop_records") == 0) {
-		return (zstream_do_drop_records(argc - 1, argv + 1));
+	} else if (strcmp(subcommand, "dump") == 0) {
+		return (zstream_do_dump(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "raw") == 0) {
 		return (zstream_do_raw(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "recompress") == 0) {
 		return (zstream_do_recompress(argc - 1, argv + 1));
-	} else if (strcmp(subcommand, "token") == 0) {
-		return (zstream_do_token(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "redup") == 0) {
 		return (zstream_do_redup(argc - 1, argv + 1));
 	} else if (strcmp(subcommand, "selftest") == 0) {
 		/* Undocumented; used by the ZFS test suite */
 		return (zstream_do_selftest(argc - 1, argv + 1));
+	} else if (strcmp(subcommand, "token") == 0) {
+		return (zstream_do_token(argc - 1, argv + 1));
 	} else {
 		zstream_usage();
 	}
