@@ -31,7 +31,7 @@
 #include "zstream.h"
 #include "zstream_util.h"
 
-static libzfs_handle_t *libzfs_handle;
+static libzfs_handle_t *libzfs_handle = NULL;
 
 void
 zstream_usage(void)
@@ -81,15 +81,17 @@ libraries_init(void)
 	zio_init();
 	zstd_init();
 	libspl_init();
-	libzfs_handle = libzfs_init();
 	fletcher_4_init();
+	libzfs_handle = libzfs_init();
 }
 
 static void
 libraries_fini(void)
 {
-	fletcher_4_fini();
+	if (libzfs_handle == NULL)
+		return;
 	libzfs_fini(libzfs_handle);
+	fletcher_4_fini();
 	libspl_fini();
 	zio_fini();
 	zstd_fini();
