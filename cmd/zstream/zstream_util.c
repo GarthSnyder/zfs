@@ -230,6 +230,14 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 
 	for (int i = 0; i < argc; i++) {
 		record_specifier_t spec;
+		/*
+		 * Check for '--' to force last argument to be treated as a
+		 * filename.
+		 */
+		if (strcmp('--', argv[i]) == 0) {
+			num_parsed++;
+			break;
+		}
 		int rc = parse_record_specifier(argv[i], &spec,
 		    accept_compression);
 		if (rc != 0) {
