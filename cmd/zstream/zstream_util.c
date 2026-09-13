@@ -294,7 +294,7 @@ lookup_record_specifier(uint64_t object, uint64_t offset,
 	ENTRY e = { .key = key };
 	ENTRY *p = hsearch(e, FIND);
 	if (p != NULL) {
-		*ctype = (enum zio_compress)p->data;
+		*ctype = (enum zio_compress)(intptr_t)p->data;
 		found = B_TRUE;
 	}
 	free(key);
