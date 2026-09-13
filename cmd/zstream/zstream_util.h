@@ -115,7 +115,8 @@ parse_compression_specifier(const char *str, compression_spec_t *spec);
  * command line as possible, entering them into an hcreate() hash table. The
  * OBJECT/OFFSET pairs become the keys and the compression types become the
  * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
- * a placeholder value.
+ * a placeholder value. This is also the default when accept_compression
+ * is B_TRUE but no compression is specified.
  *
  * Stops at the first unparseable specifier and returns the number of
  * specifiers successfully parsed. Checks a few return codes that should
@@ -132,6 +133,9 @@ boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype);
 
+/*
+ * Frees the hash table used by lookup_record_specifier().
+ */
 void
 destroy_record_specifier_hash(void);
 
