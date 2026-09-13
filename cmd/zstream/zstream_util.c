@@ -153,6 +153,7 @@ parse_compression_specifier(const char *str, compression_spec_t *spec)
 {
 	uint64_t val;
 	int rc;
+
 	rc = zfs_prop_string_to_index(ZFS_PROP_COMPRESSION, str, &val);
 	if (rc == 0) {
 		*spec = (compression_spec_t) {
@@ -168,8 +169,10 @@ parse_compression_specifier(const char *str, compression_spec_t *spec)
  * (with accept_compression == B_TRUE) and fill out a corresponding
  * record_specifier_t. Returns 0 if the string was successfully parsed.
  *
- * If accept_compression is B_TRUE but there is no COMPRESSION specifier,
- * the compression is set to ZIO_COMPRESS_INHERIT.
+ * The rs_compression field of the record specifier struct is always
+ * initialized to ZIO_COMPRESS_INHERIT, whether accept_compression is true
+ * or not. If accept_compression is B_TRUE but the input string does not
+ * specify compression, the value remains at ZIO_COMPRESS_INHERIT.
  */
 static int
 parse_record_specifier(const char *str, record_specifier_t *rec,
@@ -219,6 +222,18 @@ bail:	if (buff != static_buff)
 	return (bad ? -1 : 0);
 }
 
+/*
+ * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the
+ * command line as possible, entering them into an hcreate() hash table. The
+ * OBJECT/OFFSET pairs become the keys and the compression types become the
+ * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
+ * a placeholder value. This is also the default when accept_compression
+ * is B_TRUE but no compression is specified.
+ *
+ * Stops at the first unparseable specifier and returns the number of
+ * specifiers successfully parsed. Checks a few return codes that should
+ * never fail and exits with a message if they do.
+ */
 int
 parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 {
@@ -231,10 +246,10 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 	for (int i = 0; i < argc; i++) {
 		record_specifier_t spec;
 		/*
-		 * Check for '--' to force last argument to be treated as a
-		 * filename.
+		 * Check for a "--" argument used to force last argument to
+		 * be treated as a filename.
 		 */
-		if (strcmp('--', argv[i]) == 0) {
+		if (strcmp("--", argv[i]) == 0) {
 			num_parsed++;
 			break;
 		}
@@ -261,6 +276,11 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 	return (num_parsed);
 }
 
+/*
+ * Returns a raw zio_compress value rather than a compression_spec_t because
+ * no clients are interested in compression levels. They just need to know
+ * compression type.
+ */
 boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype)
