@@ -188,23 +188,6 @@ free_tail(raw_context_t *context, off_t offset)
 		context->volume.size = offset;
 }
 
-static inline boolean_t
-punch_hole(raw_context_t *context, off_t offset, size_t length)
-{
-	int fd = context->volume.fd;
-
-#if defined(__FreeBSD__)
-	struct spacectl_range range = { offset, length };
-	return (fspacectl(fd, SPACECTL_DEALLOC, &range, 0, NULL) == 0);
-#elif defined(__linux__)
-	int mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
-	return (fallocate(fd, mode, offset, length) == 0);
-#else
-	(void) fd, (void) offset, (void) length;
-	return (B_FALSE);
-#endif
-}
-
 static boolean_t
 free_blocks(raw_context_t *context, off_t offset, size_t length)
 {
@@ -250,7 +233,7 @@ free_range(raw_context_t *context, off_t offset, size_t length)
 			return;
 		}
 		if (context->volume.punch_holes) {
-			if (punch_hole(context, offset, length))
+			if (punch_hole(context->volume.fd, offset, length) == 0)
 				return;
 			context->volume.punch_holes = B_FALSE;
 		}
