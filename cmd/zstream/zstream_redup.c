@@ -36,14 +36,14 @@
 #include "zstream_modules.h"
 #include "zstream_util.h"
 
-#define	HASH_PHYSMEM_PERCENT			40
+#define	HASH_PHYSMEM_PERCENT			30
 #define	SMALLEST_POSSIBLE_HASH_MEMORY_MB	128
 
 typedef struct {
-	uint64_t		rhe_guid;
-	uint64_t		rhe_object;
-	uint64_t		rhe_offset;
-	uint64_t		rhe_stream_offset;
+	uint64_t	rhe_toguid;
+	uint64_t	rhe_object;
+	uint64_t	rhe_offset;
+	uint64_t	rhe_stream_offset;
 } redup_hash_entry_t;
 
 typedef struct {
@@ -51,34 +51,35 @@ typedef struct {
 	FILE		*rc_fp;
 } redup_context_t;
 
-static void
-rdt_insert(linear_hash_t *lh,
-    uint64_t guid, uint64_t object, uint64_t offset, uint64_t stream_offset)
+static inline void
+hash_insert(linear_hash_t *lh, struct drr_write *drrw, uint64_t stream_offset)
 {
-	uint64_t hashcode = cityhash3(guid, object, offset);
-	redup_hash_entry_t re = {
-		.rhe_guid = guid,
-		.rhe_object = object,
-		.rhe_offset = offset,
+	redup_hash_entry_t rhe = {
+		.rhe_toguid = drrw->drr_toguid,
+		.rhe_object = drrw->drr_object,
+		.rhe_offset = drrw->drr_offset,
 		.rhe_stream_offset = stream_offset
 	};
-	lh_insert(lh, hashcode, &re);
+	uint64_t hashcode = cityhash3(rhe.rhe_guid, rhe.rhe_object,
+	    rhe.rhe_offset);
+	lh_insert(lh, hashcode, &rhe);
 }
 
-static void
-rdt_lookup(linear_hash_t *lh, uint64_t guid, uint64_t object, uint64_t offset,
-    uint64_t *stream_offsetp)
+static inline uint64_t
+hash_lookup(linear_hash_t *lh, struct drr_write_byref *drrwb)
 {
-	uint64_t hashcode = cityhash3(guid, object, offset);
 	redup_hash_entry_t entry;
+	uint64_t hashcode = cityhash3(drrwb->drr_refguid, drrwb->drr_refobject,
+	    drrwb->drr_refoffset)
 
 	lh_iterator_t *iter = lh_initiate_retrieve(lh, hashcode);
 	while (lh_retrieve_next(iter, &entry)) {
-		boolean_t matches = entry.rhe_guid == guid &&
-		    entry.rhe_object == object && entry.rhe_offset == offset;
+		boolean_t matches =
+		    entry.rhe_guid == guid &&
+		    entry.rhe_object == object &&
+		    entry.rhe_offset == offset;
 		if (matches) {
-			*stream_offsetp = entry.rhe_stream_offset;
-			return;
+			return entry.rhe_stream_offset;
 		}
 	}
 	errx(1, "could not find expected redup table entry");
@@ -115,14 +116,11 @@ chain_redup_writes(void *item_in, void *context_in)
 
 		/*
 		 * Look up in hash table by drrwb->drr_refguid,
-		 * drr_refobject, drr_refoffset. Replace this
-		 * record with the found WRITE record, but with
-		 * drr_object,drr_offset,drr_toguid replaced with ours.
+		 * drr_refobject, drr_refoffset. Replace this record with
+		 * the found WRITE record, but with drr_object, drr_offset,
+		 * and drr_toguid replaced with ours.
 		 */
-		uint64_t stream_offset = 0;
-		rdt_lookup(context->rc_hash, drrwb.drr_refguid,
-		    drrwb.drr_refobject, drrwb.drr_refoffset,
-		    &stream_offset);
+		uint64_t stream_offset = hash_lookup(context->rc_hash, drrwb);
 
 		if (fseeko(context->rc_fp, stream_offset, SEEK_SET) != 0) {
 			err(1, "seek into source file failed, offset %llu",
@@ -154,8 +152,7 @@ chain_redup_writes(void *item_in, void *context_in)
 	}
 
 	case DRR_WRITE:
-		rdt_insert(context->rc_hash, drrw->drr_toguid, drrw->drr_object,
-		    drrw->drr_offset, item->dp_stream_offset);
+		hash_insert(context->rc_hash, drrw, item->dp_stream_offset);
 		break;
 
 	default:
