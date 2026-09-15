@@ -35,23 +35,22 @@ extern "C" {
  * remains available.
  *
  * For more details on linear hashing, see the Wikipedia article or the
- * comments in zstream_hash.c. Briefly, the table grows (roughly) linearly
- * as items are inserted. When an occupancy threshold is crossed, one bucket
- * is split into two. This incremental growth is ideal for tables that we'd
- * really like to keep in memory but that might eventually get too big to
- * keep there. As more disk storage is used, the performance of the hash
- * table declines smoothly with the number of entries.
+ * comments in zstream_hash.c. Briefly, the table grows linearly as items
+ * are inserted. When an occupancy threshold is crossed, one bucket is split
+ * into two, extending the table by one bucket. This incremental growth is
+ * ideal for tables that we'd really like to keep in memory but that might
+ * eventually get too big to keep there. As more disk storage is used, the
+ * performance of the hash table declines smoothly with the number of
+ * entries.
  *
  * API clients are not required to memory-manage iterators, nor are they
  * obligated to pursue iterations to completion. In return, callers must
  * limit themselves to MAX_LH_ITERATORS concurrent iterators.
  *
  * Hash keys are 64-bit values, and you must supply them yourself. If you
- * want to use longer hash keys, give the linear hash 64-bit digests and
- * check returned records against the full hash value.
- *
- * This header file contains the struct definitions and #defines needed to
- * compile the core linear hash implementation found in zstream_hash.c.
+ * want to use longer hash keys, give the linear hash a 64-bit digest and
+ * check returned records against the full hash value. (CityHash is
+ * available as an off-the-shelf facility within ZFS.)
  *
  * To enable validation and statistical profiling, add the following
  * definition:
