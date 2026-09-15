@@ -25,18 +25,20 @@
 #include "zstream_hash_impl.h"
 #include "zstream_util.h"
 
-#define	MAX_OCCUPANCY 0.75
-#define	INITIAL_HASH_SUFFIX_LENGTH 10
+#define	MAX_OCCUPANCY			0.75
+#define	INITIAL_HASH_SUFFIX_LENGTH	10
+
+#define	ROUND_UP(size, align)	(((size + align - 1) / align) * align)
 
 /*
- * Memory management pacing. These are variables rather than #defines so
+ * Memory management controls. These are variables rather than #defines so
  * that tests (and eventually callers) can tweak them; see the declarations
  * in zstream_hash_impl.h. The margin should be sized so that a table under
  * sustained memory pressure performs a reasonable number of memory
  * clawbacks (a few dozen) over its lifetime rather than thrashing.
  */
-size_t lh_memory_margin = 64ULL << 20;		/* 64MB */
-int lh_mem_check_interval = 4096;		/* insertions per check */
+size_t	lh_memory_margin	= 64ULL << 20;	/* 64MB */
+int	lh_mem_check_interval	= 4096;		/* Insertions per check */
 
 /*
  * A slightly more detailed description of linear hashing:
@@ -140,7 +142,8 @@ read_bucket(entry_iterator_t *iter)
 }
 
 static inline void
-save_bucket(entry_iterator_t *iter, boolean_t force) {
+save_bucket(entry_iterator_t *iter, boolean_t force)
+{
 	if (!force && iter->ei_dirty == B_FALSE)
 		return;
 	allocator_store(ALLOC_FOR(iter), iter->ei_bucket_ix, &iter->ei_bucket);
@@ -291,16 +294,16 @@ check_split(linear_hash_t *lh)
 }
 
 /*
- * Free up memory if we're over budget. If we free, we reclaim MEMORY_MARGIN
- * more bytes than is strictly necessary to give ourselves some operating
- * room until the next memory check. We want to free in relatively large
- * chunks, not in small increments.
+ * Free up memory if we're over budget. If we free, we reclaim
+ * lh_memory_margin more bytes than is strictly necessary to give ourselves
+ * some operating room until the next memory check. We want to free in
+ * relatively large chunks, not in small increments.
  *
  * Memory clawbacks are prioritized by allocator. The data allocator is the
  * first hit, followed by the overflow allocator and the bucket allocator.
  *
- * Depending on state, we may need to reclaim memory from more
- * than one allocator, hence the loop.
+ * Depending on state, we may need to reclaim memory from more than one
+ * allocator, hence the loop.
  */
 static void
 check_memory_use(linear_hash_t *lh)
@@ -326,7 +329,18 @@ check_memory_use(linear_hash_t *lh)
 		}
 		ssize_t target = (ssize_t)squeezee->as_mem_used -
 		    overage - (ssize_t)lh_memory_margin;
-		size_t new_limit = target > 0 ? (size_t)target : 0;
+		size_t new_limit = 0;
+		if (target > 0) {
+			/*
+			 * Round the new max memory up to a multiple of the
+			 * granularity unless that results in no change, in
+			 * which case we round down.
+			 */
+			size_t granularity = squeezee->as_granularity;
+			new_limit = ROUND_UP(target, granularity);
+			while (new_limit >= squeezee->as_max_memory)
+				new_limit -= granularity;
+		}
 		allocator_set_max_memory(squeezee->as_allocator, new_limit);
 		*squeezee = allocator_get_stats(squeezee->as_allocator);
 	}
