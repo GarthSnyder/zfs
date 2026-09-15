@@ -60,7 +60,7 @@ hash_insert(linear_hash_t *lh, struct drr_write *drrw, uint64_t stream_offset)
 		.rhe_offset = drrw->drr_offset,
 		.rhe_stream_offset = stream_offset
 	};
-	uint64_t hashcode = cityhash3(rhe.rhe_guid, rhe.rhe_object,
+	uint64_t hashcode = cityhash3(rhe.rhe_toguid, rhe.rhe_object,
 	    rhe.rhe_offset);
 	lh_insert(lh, hashcode, &rhe);
 }
@@ -70,14 +70,14 @@ hash_lookup(linear_hash_t *lh, struct drr_write_byref *drrwb)
 {
 	redup_hash_entry_t entry;
 	uint64_t hashcode = cityhash3(drrwb->drr_refguid, drrwb->drr_refobject,
-	    drrwb->drr_refoffset)
+	    drrwb->drr_refoffset);
 
 	lh_iterator_t *iter = lh_initiate_retrieve(lh, hashcode);
 	while (lh_retrieve_next(iter, &entry)) {
 		boolean_t matches =
-		    entry.rhe_guid == guid &&
-		    entry.rhe_object == object &&
-		    entry.rhe_offset == offset;
+		    entry.rhe_toguid == drrwb->drr_refguid &&
+		    entry.rhe_object == drrwb->drr_refobject &&
+		    entry.rhe_offset == drrwb->drr_refoffset;
 		if (matches) {
 			return entry.rhe_stream_offset;
 		}
@@ -120,7 +120,7 @@ chain_redup_writes(void *item_in, void *context_in)
 		 * the found WRITE record, but with drr_object, drr_offset,
 		 * and drr_toguid replaced with ours.
 		 */
-		uint64_t stream_offset = hash_lookup(context->rc_hash, drrwb);
+		uint64_t stream_offset = hash_lookup(context->rc_hash, &drrwb);
 
 		if (fseeko(context->rc_fp, stream_offset, SEEK_SET) != 0) {
 			err(1, "seek into source file failed, offset %llu",

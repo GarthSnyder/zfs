@@ -68,7 +68,7 @@ safe_calloc(size_t n);
  * partial reads and writes correctly and do not return until the full
  * buffer has been transferred.
  */
-char *
+void
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
 
 void
@@ -181,7 +181,7 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
  * is harmless; file contents outside the given region are never affected.
  */
 int
-punch_hole(int fd, off_t offset, off_t length);
+punch_hole(int fd, off_t offset, size_t length);
 
 #ifdef __cplusplus
 }
