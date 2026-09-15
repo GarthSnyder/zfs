@@ -33,16 +33,18 @@
 #include "zstream_alloc.h"
 #include "zstream_util.h"
 
-
 /*
  * Inputs to the record-size rounding calculation in allocator_init().
  * See the discussion there for details.
  */
 #define	TARGET_GRANULARITY	(32 << 20)	/* 32MB */
-#define MAX_WASTE_PCT		50
+#define MAX_WASTE_PERCENT	50
 
-#define	MEM_ROUNDUP(size, pagesize, recsize) \
-	    round_up(size, lcm(pagesize, recsize))
+/*
+ * Granularity at which memory pages are converted from PROT_NONE to
+ * PROT_READ | PROT_WRITE.
+ */
+#define FRONTIER_GRANULARITY	(8 << 20)
 
 #define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_record_size_rounded)
 #define	OFFSET_TO_REC(alloc, off) ((off) / (alloc)->a_record_size_rounded)
@@ -110,7 +112,9 @@ struct allocator {
 	size_t		a_pagesize;		/* System page size */
 	size_t		a_vm_allocated;		/* Total VM space reserved */
 	void		*a_vm_frontier;		/* Offset of 1st non-r/w byte */
-	size_t		a_frontier_granularity;	/* Frontier expansion */
+
+	size_t		a_memory_granularity;	/* Memory/disk boundary chunk */
+	size_t		a_frontier_granularity;	/* Mem reification chunk */
 
 	uint64_t	a_io_ops_mem;		/* Number of reads and writes */
 	uint64_t	a_io_ops_disk;
@@ -181,7 +185,7 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 		rsize_rounded = P2ROUNDUP(record_size, align);
 		size_t waste_bytes = rsize_rounded - record_size;
 		double waste_pct = (double)waste_bytes / rsize_rounded;
-		if (waste_pct > MAX_WASTE_PCT)
+		if (waste_pct > MAX_WASTE_PERCENT)
 			errx(1, "unable to find an efficient rounding for "
 			    "record_size = %llu, page_size = %llu",
 			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
@@ -204,7 +208,7 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 		return (NULL);
 	}
 
-	size_t mem = MEM_ROUNDUP(mem_size, pagesize, rsize_rounded);
+	size_t mem = round_up(mem_size, granularity);
 	VERIFY3U(mem, <=, vm_allocation);
 	allocator_t *alloc = safe_calloc(sizeof (allocator_t));
 	*alloc = (allocator_t) {
@@ -216,7 +220,8 @@ allocator_init(size_t record_size, size_t mem_size, int fd)
 		.a_pagesize = pagesize,
 		.a_vm_allocated = vm_allocation,
 		.a_vm_frontier = base,
-		.a_frontier_granularity = granularity
+		.a_memory_granularity = granularity,
+		.a_frontier_granularity = MAX(pagesize, FRONTIER_GRANULARITY)
 	};
 	return (alloc);
 }
@@ -250,10 +255,13 @@ shrink_frontier(allocator_t *alloc)
 /*
  * "Reify": to make something abstract more concrete or real
  *
- * Memory pages starting at a_vm_frontier are initially PROT_NONE, so they
- * don't really exist and can't be written to or read. If a byte we want to
- * access lies beyond the frontier, we need to move the frontier and mark
- * the intervening pages as PROT_READ | PROT_WRITE. The frontier advances in
+ * a_max_memory locates the boundary between memory and disk storage. The
+ * memory region is further subdivided at the a_vm_frontier, which points to
+ * the first byte of the PROT_NONE region.
+ *
+ * PROT_NONE pages can't be read or written to. If a byte we want to access
+ * lies beyond the frontier, we need to move the frontier and mark the
+ * intervening pages as PROT_READ | PROT_WRITE. The frontier advances in
  * multiples of a_frontier_granularity to keep mprotect() calls infrequent.
  *
  * The end_offset parameter and the a_vm_frontier pointer are both "+1"
@@ -317,8 +325,7 @@ reify_memory_for_record(allocator_t *alloc, record_ix_t record)
 void
 allocator_set_max_memory(allocator_t *alloc, size_t new_size)
 {
-	new_size = MEM_ROUNDUP(new_size, alloc->a_pagesize,
-	    alloc->a_record_size_rounded);
+	new_size = round_up(new_size, alloc->a_memory_granularity);
 	VERIFY3U(new_size, <=, alloc->a_vm_allocated);
 	off_t bytes_used = REC_TO_OFFSET(alloc, alloc->a_count);
 	if (alloc->a_fd < 0 && new_size < bytes_used)
@@ -397,7 +404,8 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 }
 
 record_ix_t
-allocator_append(allocator_t *alloc, const void *data) {
+allocator_append(allocator_t *alloc, const void *data)
+{
 	record_ix_t loc = alloc->a_count;
 	allocator_store(alloc, loc, data);
 	return (loc);
@@ -408,7 +416,8 @@ allocator_append(allocator_t *alloc, const void *data) {
  * past last record known to have been written.
  */
 record_ix_t
-allocator_skip(allocator_t *alloc) {
+allocator_skip(allocator_t *alloc)
+{
 	VERIFY(alloc != NULL);
 	void *buff = safe_calloc(alloc->a_record_size);
 	record_ix_t ix = allocator_append(alloc, buff);
@@ -417,13 +426,16 @@ allocator_skip(allocator_t *alloc) {
 }
 
 allocator_stats_t
-allocator_get_stats(allocator_t *alloc) {
+allocator_get_stats(allocator_t *alloc)
+{
 	VERIFY(alloc != NULL);
 	allocator_stats_t stats = {
 		.as_allocator = alloc,
 		.as_io_ops_mem = alloc->a_io_ops_mem,
 		.as_io_ops_disk = alloc->a_io_ops_disk,
 		.as_mem_used = alloc->a_vm_frontier - alloc->a_base_addr,
+		.as_granularity =
+		    lcm(alloc->a_pagesize, alloc->a_record_size_rounded),
 		.as_max_memory = alloc->a_max_memory,
 		.as_num_records = alloc->a_count
 	};
@@ -437,7 +449,8 @@ allocator_get_stats(allocator_t *alloc) {
 }
 
 void
-allocator_destroy(allocator_t *alloc) {
+allocator_destroy(allocator_t *alloc)
+{
 	VERIFY(alloc != NULL);
 	munmap(alloc->a_base_addr, alloc->a_vm_allocated);
 	if (alloc->a_fd >= 0) {
