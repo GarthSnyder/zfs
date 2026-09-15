@@ -29,10 +29,10 @@ extern "C" {
 #include <stddef.h>
 
 /*
- * This code implements linear hashing with 64-bit hash keys. It runs on top
- * of allocator_t, which allows a structured approach to memory management
- * and allows the hash table to expand indefinitely as long as disk storage
- * remains available.
+ * This module implements linear hashing with 64-bit hash keys. It runs on
+ * top of allocator_t, which allows a structured approach to storage
+ * management and allows the hash table to expand indefinitely as long as
+ * disk storage remains available.
  *
  * For more details on linear hashing, see the Wikipedia article or the
  * comments in zstream_hash.c. Briefly, the table grows linearly as items
@@ -49,8 +49,7 @@ extern "C" {
  *
  * Hash keys are 64-bit values, and you must supply them yourself. If you
  * want to use longer hash keys, give the linear hash a 64-bit digest and
- * check returned records against the full hash value. (CityHash is
- * available as an off-the-shelf facility within ZFS.)
+ * check returned records against the full hash value.
  *
  * To enable validation and statistical profiling, add the following
  * definition:
@@ -58,7 +57,6 @@ extern "C" {
  * #define LH_STATS_AND_VALIDATION
  */
 
-#define LH_STATS_AND_VALIDATION
 #define	MAX_LH_ITERATORS 8
 
 struct linear_hash;

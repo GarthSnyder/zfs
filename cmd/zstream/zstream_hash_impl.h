@@ -87,7 +87,7 @@ typedef struct {
  */
 typedef struct {
 	bucket_entry_t	b_entries[ENTRIES_PER_BUCKET];
-	record_ix_t	b_overflow;  /* 0 if no overflow */
+	record_ix_t	b_overflow;	/* 0 if no overflow */
 } bucket_t;
 
 /*

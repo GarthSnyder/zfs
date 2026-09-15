@@ -58,6 +58,7 @@ typedef struct {
 	uint64_t	as_io_ops_mem;	/* Number of stores and retrieves */
 	uint64_t	as_io_ops_disk;
 	size_t		as_mem_used;	/* Current memory use */
+	size_t		as_granularity;	/* Memory allocation granularity */
 	size_t		as_disk_used;	/* Current disk use */
 	size_t		as_max_memory;
 	uint64_t	as_num_records;
@@ -105,11 +106,17 @@ allocator_skip(allocator_t *alloc);
  * difference between old and new budgets. However, all data remains intact.
  *
  * If the allocator is memory-only, the new memory budget must be sufficient
- * to accommodate all existing records. If it is not, the program will abort.
- * You can check the current memory consumption with allocator_get_stats().
+ * to accommodate all existing records. If it is not, the program will
+ * abort. You can check the current memory consumption with
+ * allocator_get_stats().
  *
  * You can also use this function to convert a disk-only allocator to a
  * dual-backed allocator.
+ *
+ * The requested new_size will be rounded up to a multiple of the memory
+ * allocation granularity. Depending on rounding, a call to
+ * allocator_set_max_memory() may in fact be a silent no-op. If this is of
+ * concern, double-check the rounded value by calling allocator_get_stats().
  */
 void
 allocator_set_max_memory(allocator_t *alloc, size_t new_size);
