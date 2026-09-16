@@ -160,6 +160,10 @@ parse_compression_specifier(const char *str, compression_spec_t *spec)
 			.cs_type = ZIO_COMPRESS_ALGO(val),
 			.cs_level = ZIO_COMPRESS_LEVEL(val)
 		};
+		boolean_t is_zstd = spec->cs_type == ZIO_COMPRESS_ZSTD;
+		boolean_t inherited = spec->cs_level == ZIO_COMPLEVEL_INHERIT;
+		if (is_zstd && inherited)
+			spec->cs_level = ZIO_COMPLEVEL_DEFAULT;
 	}
 	return (rc);
 }
@@ -245,14 +249,6 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 
 	for (int i = 0; i < argc; i++) {
 		record_specifier_t spec;
-		/*
-		 * Check for a "--" argument used to force last argument to
-		 * be treated as a filename.
-		 */
-		if (strcmp("--", argv[i]) == 0) {
-			num_parsed++;
-			break;
-		}
 		int rc = parse_record_specifier(argv[i], &spec,
 		    accept_compression);
 		if (rc != 0) {

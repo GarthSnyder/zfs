@@ -75,22 +75,8 @@ set_signal_mask(void)
 }
 
 static void
-libraries_init(void)
-{
-	zfs_refcount_init();
-	abd_init();
-	zio_init();
-	zstd_init();
-	libspl_init();
-	fletcher_4_init();
-	libzfs_handle = libzfs_init();
-}
-
-static void
 libraries_fini(void)
 {
-	if (libzfs_handle == NULL)
-		return;
 	libzfs_fini(libzfs_handle);
 	fletcher_4_fini();
 	libspl_fini();
@@ -100,14 +86,28 @@ libraries_fini(void)
 	zfs_refcount_fini();
 }
 
+static void
+libraries_init(void)
+{
+	zfs_refcount_init();
+	abd_init();
+	zio_init();
+	zstd_init();
+	libspl_init();
+	fletcher_4_init();
+	libzfs_handle = libzfs_init();
+
+	if (libzfs_handle == NULL)
+		errx(1, "unable to initialize libzfs");
+	if (atexit(libraries_fini) != 0)
+		err(1, "atexit failed");
+}
+
 int
 main(int argc, char *argv[])
 {
 	libraries_init();
 	set_signal_mask();
-
-	if (atexit(libraries_fini) != 0)
-		err(1, "atexit failed");
 
 	char *basename = strrchr(argv[0], '/');
 	basename = basename ? (basename + 1) : argv[0];
