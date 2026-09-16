@@ -47,7 +47,7 @@ bzcat "$src" > "$orig"
 recv_and_hash "$orig_hash" "$orig" cleanup
 
 # Recompress with zstd at level 10
-log_must eval "zstream recompress -l 10 zstd \
+log_must eval "zstream recompress zstd-10 \
     < '$orig' > '$recompressed'"
 
 # Verify size is smaller

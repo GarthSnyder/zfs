@@ -22,7 +22,7 @@
 .Nm
 .Cm decompress
 .Op Fl v
-.Oo Ar object Ns Sy \&, Ns Ar offset Ns Oo Sy \&, Ns Ar type Oc Ns … Oc
+.Oo Ar object Ns Sy \&, Ns Ar offset Ns Oo Sy \&, Ns Ar compress_type Oc Ns … Oc
 .Op Ar file
 .Nm
 .Cm drop_records
@@ -55,17 +55,18 @@
 .
 .Sh DESCRIPTION
 .Nm
-performs various transformations and manipulations of ZFS send streams
+performs various operations on send streams
 created by the
 .Nm zfs Cm send
 command.
-.Pp
 Aside from the
 .Cm token
 subcommand, which takes a resume token rather than a stream, every subcommand
 reads a send stream either from the
 .Ar file
-named as its last argument or, when no file is given, from standard input.
+named as its last argument or, when no
+.Ar file
+is given, from standard input.
 The
 .Cm redup
 subcommand requires a
@@ -77,17 +78,17 @@ cannot accept input from a pipe.
 .Nm
 .Cm decompress
 .Op Fl v
-.Oo Ar object Ns Sy \&, Ns Ar offset Ns Oo Sy \&, Ns Ar type Oc Ns … Oc
+.Oo Ar object Ns Sy \&, Ns Ar offset Ns Oo Sy \&, Ns Ar compress_type Oc Ns … Oc
 .Op Ar file
 .Xc
 Decompresses specified records within a send stream.
 This subcommand can be used to recover data when the compression type
 recorded in the ZFS metadata is incorrect.
 Specify the object number and byte offset of each record to be decompressed.
-Optionally, specify the (true) compression
-.Ar type .
+Optionally, specify the (true)
+.Ar compress_type .
 The
-.Ar type
+.Ar compress_type
 can be any value accepted by the
 .Sy compression
 property, such as
@@ -102,7 +103,7 @@ A compression level
 .Pq e.g.,\& Sy gzip-3 No or Sy zstd-5
 is accepted but ignored; only the algorithm matters when decompressing.
 If no
-.Ar type
+.Ar compress_type
 is given, the compression type recorded in the record's own metadata is used.
 .Pp
 Every record for that object beginning at that offset is decompressed, if
