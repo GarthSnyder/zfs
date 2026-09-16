@@ -203,11 +203,11 @@ parse_record_specifier(const char *str, record_specifier_t *rec,
 	if (loc == NULL)
 		goto bail;
 	rec->rs_object = strtoull(obj_str, &end, 0);
-	if (errno != 0 || *end != '\0')
+	if (errno != 0 || *end != '\0' || obj_str == end)
 		goto bail;
 	offset_str = strsep(&loc, ",");
 	rec->rs_offset = strtoull(offset_str, &end, 0);
-	if (errno != 0 || *end != '\0')
+	if (errno != 0 || *end != '\0' || offset_str == end)
 		goto bail;
 	if (loc != NULL) {
 		if (accept_compression) {
@@ -281,19 +281,18 @@ boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype)
 {
-	char *key;
+	char key[128];
 	boolean_t found = B_FALSE;
-	int n_chars = asprintf(&key, "%llu,%llu", (u_longlong_t)object,
-	    (u_longlong_t)offset);
-	if (n_chars < 0)
-		err(1, "asprintf");
+	int n_chars = snprintf(key, sizeof (key), "%llu,%llu",
+	    (u_longlong_t)object, (u_longlong_t)offset);
+	if (n_chars < 0 || n_chars >= sizeof (key))
+		err(1, "snprintf");
 	ENTRY e = { .key = key };
 	ENTRY *p = hsearch(e, FIND);
 	if (p != NULL) {
 		*ctype = (enum zio_compress)(intptr_t)p->data;
 		found = B_TRUE;
 	}
-	free(key);
 	return (found);
 }
 
