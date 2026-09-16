@@ -103,9 +103,8 @@ ctype_is_uncompressed(enum zio_compress ct)
 /*
  * Convert a string such as "zstd-12" to a compression_spec_t. Returns 0 for
  * successful parsing, nonzero if parsing failed. In the case of failure,
- * the original compression_spec_t remains unmodified.
- *
- * This parser accepts "on" and returns it as a discrete compression type.
+ * the original compression_spec_t remains unmodified. This parser rejects
+ * compression type "on" as being insufficiently specific.
  */
 int
 parse_compression_specifier(const char *str, compression_spec_t *spec);

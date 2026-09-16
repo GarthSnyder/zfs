@@ -91,7 +91,9 @@ The
 .Ar compress_type
 can be any value accepted by the
 .Sy compression
-property, such as
+property except
+.Sy on ,
+such as
 .Sy off ,
 .Sy gzip ,
 .Sy lz4 ,
@@ -218,7 +220,9 @@ The
 .Ar compress_type
 can be any value accepted by the
 .Sy compression
-property, including those that name a compression level, such as
+property except
+.Sy on ,
+including those that name a compression level, such as
 .Sy gzip-3
 or
 .Sy zstd-5 .
