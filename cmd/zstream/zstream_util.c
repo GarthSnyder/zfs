@@ -43,6 +43,8 @@
 
 #include "zstream_util.h"
 
+libzfs_handle_t *libzfs_handle = NULL;
+
 void *
 safe_malloc(size_t size)
 {
@@ -148,12 +150,36 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
 	return (B_FALSE);
 }
 
+/*
+ * Initialize and deinitialize libzfs idempotently. libzfs has some external
+ * dependencies, so it shouldn't be initialized as a matter of course.
+ */
+void
+require_libzfs()
+{
+	if (libzfs_handle == NULL) {
+		if ((libzfs_handle = libzfs_init()) == NULL) {
+			errx(1, "%s\n", libzfs_error_init(errno));
+		}
+	}
+}
+
+void
+release_libzfs()
+{
+	if (libzfs_handle != NULL) {
+		libzfs_fini(libzfs_handle);
+		libzfs_handle = NULL;
+	}
+}
+
 int
 parse_compression_specifier(const char *str, compression_spec_t *spec)
 {
 	uint64_t val;
 	int rc;
 
+	require_libzfs();
 	rc = zfs_prop_string_to_index(ZFS_PROP_COMPRESSION, str, &val);
 	if (rc == 0) {
 		*spec = (compression_spec_t) {
@@ -273,6 +299,12 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		p->data = (void *)(intptr_t)spec.rs_compression.cs_type;
 		num_parsed++;
 	}
+	/*
+	 * acquire_libzfs() will not have been called if accept_compression
+	 * is B_FALSE, but it's still fine to call release_libzfs(). In that
+	 * case it's a no-op.
+	 */
+	release_libzfs();
 	return (num_parsed);
 }
 

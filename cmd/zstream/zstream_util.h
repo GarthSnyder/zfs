@@ -22,6 +22,7 @@ extern "C" {
 #endif
 
 #include <assert.h>
+#include <libzfs.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stddef.h>
@@ -52,6 +53,8 @@ typedef struct {
 
 typedef void *
 thread_f(void *);
+
+extern libzfs_handle_t *libzfs_handle;
 
 /*
  * The safe_ versions of the functions below terminate the process if the
@@ -101,10 +104,23 @@ ctype_is_uncompressed(enum zio_compress ct)
 }
 
 /*
- * Convert a string such as "zstd-12" to a compression_spec_t. Returns 0 for
- * successful parsing, nonzero if parsing failed. In the case of failure,
- * the original compression_spec_t remains unmodified. This parser rejects
- * compression type "on" as being insufficiently specific.
+ * Initialize and deinitialize libzfs idempotently. libzfs has some external
+ * dependencies, so it should not be initialized as a matter of course.
+ */
+void
+require_libzfs();
+
+void
+release_libzfs();
+
+/*
+ * NOTE: This function calls acquire_libzfs(). Call release_libzfs() at some
+ * point after use.
+ *
+ * Converts a string such as "zstd-12" to a compression_spec_t. Returns 0
+ * for successful parsing, nonzero if parsing failed. In the case of
+ * failure, the original compression_spec_t remains unmodified. This parser
+ * rejects compression type "on" as being insufficiently specific.
  */
 int
 parse_compression_specifier(const char *str, compression_spec_t *spec);
@@ -114,8 +130,8 @@ parse_compression_specifier(const char *str, compression_spec_t *spec);
  * command line as possible, entering them into an hcreate() hash table. The
  * OBJECT/OFFSET pairs become the keys and the compression types become the
  * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
- * a placeholder value. This is also the default when accept_compression
- * is B_TRUE but no compression is specified.
+ * a placeholder value. This is also the default when accept_compression is
+ * B_TRUE but no compression is specified.
  *
  * Stops at the first unparseable specifier and returns the number of
  * specifiers successfully parsed. Checks a few return codes that should

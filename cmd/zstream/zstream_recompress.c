@@ -388,6 +388,7 @@ zstream_do_recompress(int argc, char *argv[])
 
 	if (parse_compression_specifier(argv[0], &spec) != 0)
 		errx(1, "invalid compression type '%s'", argv[0]);
+	release_libzfs();
 
 	boolean_t is_off = spec.cs_type == ZIO_COMPRESS_OFF;
 	boolean_t is_uncompressed = ctype_is_uncompressed(spec.cs_type);

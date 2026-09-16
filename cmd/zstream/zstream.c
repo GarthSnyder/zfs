@@ -15,23 +15,13 @@
  * Copyright (c) 2020 by Datto Inc. All rights reserved.
  */
 
-#include <err.h>
-#include <libspl.h>
-#include <libzfs.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <zfs_fletcher.h>
-#include <sys/abd.h>
-#include <sys/zfs_refcount.h>
-#include <sys/zio.h>
-#include <sys/zstd/zstd.h>
 
 #include "zstream.h"
 #include "zstream_util.h"
-
-static libzfs_handle_t *libzfs_handle = NULL;
 
 void
 zstream_usage(void)
@@ -74,47 +64,18 @@ set_signal_mask(void)
 	safe_pthread_sigmask(SIG_SETMASK, &mask, NULL);
 }
 
-static void
-libraries_init(void)
-{
-	zfs_refcount_init();
-	abd_init();
-	zio_init();
-	zstd_init();
-	libspl_init();
-	fletcher_4_init();
-	libzfs_handle = libzfs_init();
-
-	if (libzfs_handle == NULL)
-		errx(1, "unable to initialize libzfs");
-}
-
-static void
-libraries_fini(void)
-{
-	libzfs_fini(libzfs_handle);
-	fletcher_4_fini();
-	libspl_fini();
-	zio_fini();
-	zstd_fini();
-	abd_fini();
-	zfs_refcount_fini();
-}
-
 int
 main(int argc, char *argv[])
 {
+	if (argc < 2)
+		zstream_usage();
+
 	set_signal_mask();
 
 	char *basename = strrchr(argv[0], '/');
 	basename = basename ? (basename + 1) : argv[0];
 	if (argc >= 1 && strcmp(basename, "zstreamdump") == 0)
 		return (zstream_do_dump(argc, argv));
-
-	if (argc < 2)
-		zstream_usage();
-
-	libraries_init();
 
 	char *subcommand = argv[1];
 
@@ -140,6 +101,4 @@ main(int argc, char *argv[])
 	} else {
 		zstream_usage();
 	}
-
-	libraries_fini();
 }
