@@ -108,10 +108,10 @@ ctype_is_uncompressed(enum zio_compress ct)
  * dependencies, so it should not be initialized as a matter of course.
  */
 void
-require_libzfs();
+require_libzfs(void);
 
 void
-release_libzfs();
+release_libzfs(void);
 
 /*
  * NOTE: This function calls acquire_libzfs(). Call release_libzfs() at some

@@ -27,13 +27,16 @@
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
+#include <libzfs.h>
 #include <pthread.h>
 #include <search.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/abd.h>
 #include <sys/fs/zfs.h>
+#include <sys/spa_checksum.h>
 #include <sys/stdtypes.h>
 #include <sys/sysmacros.h>
 #include <sys/zfs_ioctl.h>
@@ -155,7 +158,7 @@ validate_checksum(zio_cksum_t *expected, zio_cksum_t *actual,
  * dependencies, so it shouldn't be initialized as a matter of course.
  */
 void
-require_libzfs()
+require_libzfs(void)
 {
 	if (libzfs_handle == NULL) {
 		if ((libzfs_handle = libzfs_init()) == NULL) {
@@ -165,7 +168,7 @@ require_libzfs()
 }
 
 void
-release_libzfs()
+release_libzfs(void)
 {
 	if (libzfs_handle != NULL) {
 		libzfs_fini(libzfs_handle);

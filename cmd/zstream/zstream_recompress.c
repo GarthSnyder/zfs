@@ -33,7 +33,6 @@
 #include <sys/stdtypes.h>
 
 #include "zstream.h"
-#include "zstream_chain.h"
 #include "zstream_modules.h"
 #include "zstream_queue.h"
 #include "zstream_util.h"

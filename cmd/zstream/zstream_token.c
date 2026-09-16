@@ -21,7 +21,6 @@
  * Copyright (c) 2020 by Datto Inc. All rights reserved.
  */
 
-#include <errno.h>
 #include <libnvpair.h>
 #include <libzfs.h>
 #include <stdio.h>
