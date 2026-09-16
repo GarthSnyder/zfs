@@ -160,6 +160,10 @@ parse_compression_specifier(const char *str, compression_spec_t *spec)
 			.cs_type = ZIO_COMPRESS_ALGO(val),
 			.cs_level = ZIO_COMPRESS_LEVEL(val)
 		};
+		if (spec->cs_type == ZIO_COMPRESS_ON)
+			errx(1, "the meaning of compression type 'on' varies "
+			    "among systems - use a more specific type "
+			    "such as 'lz4'");
 		boolean_t is_zstd = spec->cs_type == ZIO_COMPRESS_ZSTD;
 		boolean_t inherited = spec->cs_level == ZIO_COMPLEVEL_INHERIT;
 		if (is_zstd && inherited)
