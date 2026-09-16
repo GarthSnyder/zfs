@@ -19,11 +19,8 @@
  */
 
 #include <err.h>
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/stat.h>
 #include <sys/stdtypes.h>
 #include <sys/zfs_ioctl.h>
@@ -33,8 +30,6 @@
 #include "zstream.h"
 #include "zstream_modules.h"
 #include "zstream_util.h"
-
-#define	KEYSIZE 64
 
 static disposition_t
 chain_decompress_named_writes(void *item_in, void *context)
@@ -157,7 +152,8 @@ zstream_do_decompress(int argc, char *argv[])
 		if (stat(argv[0], &statbuf) == 0) {
 			stream_file = argv[0];
 		} else {
-			err(1, "%s", argv[0]);
+			errx(1, "invalid record specifier or input file '%s'",
+			    argv[0]);
 		}
 	}
 

@@ -35,8 +35,8 @@
 #include "zstream.h"
 #include "zstream_modules.h"
 #include "zstream_queue.h"
-#include "zstream_util.h"
 #include "zstream_recompress.h"
+#include "zstream_util.h"
 
 #define	MAX_COMPRESSION_STEPS 4
 
@@ -362,8 +362,6 @@ zstream_do_recompress(int argc, char *argv[])
 				warnx("failed to parse level '%s'", optarg);
 				zstream_usage();
 			}
-			warnx("-l is deprecated; use standard specifiers such "
-			    "as zstd-5, lz4, or gzip-5");
 			break;
 		case 't':
 			if (sscanf(optarg, "%d", &num_threads) != 1) {
@@ -395,8 +393,15 @@ zstream_do_recompress(int argc, char *argv[])
 		errx(1, "invalid compression type '%s'; use 'off'", argv[0]);
 
 	if (level != ZIO_COMPLEVEL_DEFAULT) {
-		if (spec.cs_type != ZIO_COMPRESS_ZSTD)
+		if (spec.cs_type != ZIO_COMPRESS_ZSTD) {
 			errx(1, "use -l only with compression type 'zstd'");
+		} else if (spec.cs_level != ZIO_COMPLEVEL_DEFAULT) {
+			errx(1, "conflicting compression levels -l %d vs. "
+			    "zstd-%d", level, spec.cs_level);
+		} else {
+			warnx("-l is deprecated; use a composite specifier "
+			    "such as zstd-%d", level);
+		}
 		spec.cs_level = level;
 	}
 

@@ -114,7 +114,7 @@ void
 release_libzfs(void);
 
 /*
- * NOTE: This function calls acquire_libzfs(). Call release_libzfs() at some
+ * NOTE: This function calls require_libzfs(). Call release_libzfs() at some
  * point after use.
  *
  * Converts a string such as "zstd-12" to a compression_spec_t. Returns 0

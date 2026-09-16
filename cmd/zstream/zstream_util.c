@@ -46,6 +46,8 @@
 
 #include "zstream_util.h"
 
+#define	KEYSIZE 128
+
 libzfs_handle_t *libzfs_handle = NULL;
 
 void *
@@ -162,7 +164,7 @@ require_libzfs(void)
 {
 	if (libzfs_handle == NULL) {
 		if ((libzfs_handle = libzfs_init()) == NULL) {
-			errx(1, "%s\n", libzfs_error_init(errno));
+			errx(1, libzfs_error_init(errno));
 		}
 	}
 }
@@ -296,14 +298,11 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		ENTRY *p = hsearch(e, ENTER);
 		if (p == NULL)
 			errx(1, "hsearch failed");
-		if (!accept_compression) {
-			spec.rs_compression.cs_type = ZIO_COMPRESS_INHERIT;
-		}
 		p->data = (void *)(intptr_t)spec.rs_compression.cs_type;
 		num_parsed++;
 	}
 	/*
-	 * acquire_libzfs() will not have been called if accept_compression
+	 * require_libzfs() will not have been called if accept_compression
 	 * is B_FALSE, but it's still fine to call release_libzfs(). In that
 	 * case it's a no-op.
 	 */
@@ -320,12 +319,12 @@ boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype)
 {
-	char key[128];
+	char key[KEYSIZE];
 	boolean_t found = B_FALSE;
-	int n_chars = snprintf(key, sizeof (key), "%llu,%llu",
+	size_t n_chars = snprintf(key, sizeof (key), "%llu,%llu",
 	    (u_longlong_t)object, (u_longlong_t)offset);
 	if (n_chars < 0 || n_chars >= sizeof (key))
-		err(1, "snprintf");
+		errx(1, "snprintf");
 	ENTRY e = { .key = key };
 	ENTRY *p = hsearch(e, FIND);
 	if (p != NULL) {

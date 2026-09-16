@@ -67,9 +67,6 @@ set_signal_mask(void)
 int
 main(int argc, char *argv[])
 {
-	if (argc < 2)
-		zstream_usage();
-
 	set_signal_mask();
 
 	char *basename = strrchr(argv[0], '/');
@@ -77,6 +74,8 @@ main(int argc, char *argv[])
 	if (argc >= 1 && strcmp(basename, "zstreamdump") == 0)
 		return (zstream_do_dump(argc, argv));
 
+	if (argc < 2)
+		zstream_usage();
 	char *subcommand = argv[1];
 
 	if (strcmp(subcommand, "decompress") == 0) {
