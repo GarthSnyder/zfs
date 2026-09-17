@@ -21,7 +21,7 @@
 #
 # Description:
 # Verify that zstream recompress with zstd at level 10 produces a smaller
-# stream that receives with identical file contents, Also verify that the
+# stream that receives with identical file contents. Also verify that the
 # deprecated "-l level" spelling produces results identical to the composite
 # "zstd-N" spelling.
 #
