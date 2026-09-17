@@ -395,9 +395,10 @@ zstream_do_recompress(int argc, char *argv[])
 	if (level != ZIO_COMPLEVEL_DEFAULT) {
 		if (spec.cs_type != ZIO_COMPRESS_ZSTD) {
 			errx(1, "use -l only with compression type 'zstd'");
-		} else if (spec.cs_level != ZIO_COMPLEVEL_DEFAULT) {
-			errx(1, "conflicting compression levels -l %d vs. "
-			    "zstd-%d", level, spec.cs_level);
+		} else if (spec.cs_level != ZIO_COMPLEVEL_DEFAULT &&
+		    spec.cs_level != level) {
+			errx(1, "conflicting compression levels -l %d "
+			    "vs. zstd-%d", level, spec.cs_level);
 		} else {
 			warnx("-l is deprecated; use a composite specifier "
 			    "such as zstd-%d", level);

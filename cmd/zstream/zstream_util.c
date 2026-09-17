@@ -164,7 +164,7 @@ require_libzfs(void)
 {
 	if (libzfs_handle == NULL) {
 		if ((libzfs_handle = libzfs_init()) == NULL) {
-			errx(1, libzfs_error_init(errno));
+			errx(1, "%s", libzfs_error_init(errno));
 		}
 	}
 }
@@ -321,9 +321,9 @@ lookup_record_specifier(uint64_t object, uint64_t offset,
 {
 	char key[KEYSIZE];
 	boolean_t found = B_FALSE;
-	size_t n_chars = snprintf(key, sizeof (key), "%llu,%llu",
+	int n_chars = snprintf(key, sizeof (key), "%llu,%llu",
 	    (u_longlong_t)object, (u_longlong_t)offset);
-	if (n_chars < 0 || n_chars >= sizeof (key))
+	if (n_chars < 0 || (size_t)n_chars >= sizeof (key))
 		errx(1, "snprintf");
 	ENTRY e = { .key = key };
 	ENTRY *p = hsearch(e, FIND);
