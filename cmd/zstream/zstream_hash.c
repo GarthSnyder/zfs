@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "zstream_alloc.h"
+#include "zstream_hash_impl.h"
 #include "zstream_util.h"
 
 /*
@@ -92,12 +93,13 @@
  * expect to see the data and overflow buckets fully converted to disk
  * storage while the main bucket array is partially in memory and partially
  * on disk.
+ *
+ * Struct definitions are in zstream_hash_impl.c to make them available
+ * to selftests.
  */
 
 #define	MAX_OCCUPANCY			0.75
 #define	INITIAL_HASH_SUFFIX_LENGTH	10
-#define	ENTRIES_PER_BUCKET		6
-#define NUM_ALLOC			3
 
 #define	ITER_BUCKET(lh, bucket) {					\
 		.ei_lh = lh,						\
@@ -114,69 +116,6 @@
 	    (iter)->ei_lh->lh_alloc.overflow : (iter)->ei_lh->lh_alloc.bucket)
 
 #define	BUCKET_ENTRY(ei) (&(ei)->ei_bucket.b_entries[(ei)->ei_entry_ix])
-
-/*
- * Entry in a bucket: hash value + locator to data
- */
-typedef struct {
-	uint64_t  	be_hash;
-	record_ix_t 	be_record;  /* index of actual data */
-} bucket_entry_t;
-
-/*
- * Bucket structure: fixed array of entries + overflow pointer. Overflow
- * buckets have a separate allocator.
- */
-typedef struct {
-	bucket_entry_t	b_entries[ENTRIES_PER_BUCKET];
-	record_ix_t	b_overflow;			/* 0 == no overflow */
-} bucket_t;
-
-/*
- * Internal iterator for bucket entries
- */
-typedef struct {
-	linear_hash_t	*ei_lh;		/* The hash that owns this iterator */
-	record_ix_t	ei_bucket_ix;	/* Index of bucket within allocator */
-	int		ei_entry_ix;	/* Ix within bucket; -1 == not read */
-	bucket_t	ei_bucket;	/* Working copy of bucket */
-	boolean_t	ei_in_overflow;	/* Which allocator: main or overflow? */
-	boolean_t	ei_dirty;	/* Needs writeback? */
-} entry_iterator_t;
-
-/*
- * Client-facing iterator for retrieving records by hash
- */
-typedef struct lh_iterator {
-	uint64_t		lhi_hash;		/* Client's query */
-	entry_iterator_t	lhi_entry_iterator;
-} lh_iterator_t;
-
-/*
- * These allocators are in memory clawback order, first to last
- */
-typedef union {
-	struct {
-		allocator_t	*data;		/* Data records */
-		allocator_t	*overflow;	/* Overflow buckets */
-		allocator_t	*bucket;	/* Main buckets */
-	};
-	allocator_t		*all[NUM_ALLOC];
-} lh_allocators_t;
-
-_Static_assert(sizeof (lh_allocators_t) == NUM_ALLOC * sizeof (allocator_t *),
-    "lh_allocators_t has padding");
-
-struct linear_hash {
-	size_t		lh_record_size;		/* Params */
-	uint64_t	lh_max_memory;
-	lh_allocators_t	lh_alloc;
-	uint8_t		lh_hash_suffix_length;	  /* Granularity above split */
-	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
-	int		lh_next_memory_check;	  /* # of splits before check */
-	uint64_t	lh_num_top_level_buckets;
-	uint64_t	lh_num_top_level_entries;
-};
 
 /*
  * Memory management controls. These are variables rather than #defines so
@@ -382,7 +321,7 @@ check_memory_use(linear_hash_t *lh)
 		for (int i = 0; i < NUM_ALLOC; i++) {
 			if (current_use[i] > 0) {
 				size_t trimmed = allocator_trim_memory(
-				    lh->lh_alloc.all[i], to_trim)
+				    lh->lh_alloc.all[i], to_trim);
 				overage -= trimmed;
 				current_use[i] -= trimmed;
 				break;
@@ -468,7 +407,7 @@ lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 		if (entry->be_record == 0)
 			break;
 		if (entry->be_hash == lh_iter->lhi_hash) {
-			allocator_retrieve(ei->ei_lh->data,
+			allocator_retrieve(ei->ei_lh->lh_alloc.data,
 			    entry->be_record, buffer);
 			return (B_TRUE);
 		}
