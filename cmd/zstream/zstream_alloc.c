@@ -179,7 +179,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 		.a_writable_frontier = base,
 		.a_record_size_rounded = rsize_rounded,
 		.a_memory_granularity = granularity,
-		.a_frontier_granularity = MAX(pagesize, FRONTIER_GRANULARITY)
+		.a_frontier_granularity = MAX(pagesize, FRONTIER_GRANULARITY),
 		.a_pagesize = pagesize,
 		.a_vm_allocated = vm_allocation,
 	};
