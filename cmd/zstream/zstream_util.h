@@ -36,6 +36,11 @@ extern "C" {
 #include <sys/zio_compress.h>
 
 /*
+ * Round up to an arbitrary (not necessarily power-of-2) multiple
+ */
+#define ROUND_UP(size, align) (((size + align - 1) / align) * align)
+
+/*
  * As with the libzfs-native ZIO_* encodings, only zstd compression has a
  * separately-defined level. gzip levels are bundled into the compression
  * type.
@@ -184,19 +189,14 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
     compression_spec_t compress_type, size_t *compressed_size);
 
 /*
- * Ask the filesystem (which may not be ZFS) to deallocate the storage that
- * backs a region of a regular file. This doesn't change the file size, but
- * it may/should result in the region reading as zeros.
- *
- * This is best-effort. Some systems (older FreeBSD in particular) may not
- * support it at all.
- *
- * Returns 0 if the whole region was punched, -1 with errno set otherwise
- * (EOPNOTSUPP if this platform or filesystem has no way to do it). Failure
- * is harmless; file contents outside the given region are never affected.
+ * Create a temporary file in the named directory, returning an open file
+ * descriptor. The file is unlinked on creation, so closing deletes it.
  */
 int
-punch_hole(int fd, off_t offset, size_t length);
+safe_create_temp_file(const char *dir_path);
+
+size_t
+least_common_multiple(size_t a, size_t b);
 
 #ifdef __cplusplus
 }

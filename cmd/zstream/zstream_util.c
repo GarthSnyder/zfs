@@ -482,95 +482,36 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 	return (outbuff);
 }
 
-/*
- * Ask the filesystem (which may not be ZFS) to deallocate the storage that
- * backs a region of a regular file. This doesn't change the file size, but
- * it may/should result in the region reading as zeros.
- *
- * This is best-effort. Some systems (older FreeBSD systems in particular)
- * may not support it at all.
- *
- * Returns 0 if the whole region was punched, -1 with errno set otherwise
- * (EOPNOTSUPP if this platform or filesystem has no way to do it). Failure
- * is harmless; file contents outside the given region are never affected.
- */
 int
-punch_hole(int fd, off_t offset, size_t length)
+safe_create_temp_file(const char *dir_path)
 {
-	if (offset < 0 || length <= 0) {
-		errno = EINVAL;
-		return (-1);
-	}
-
-#if defined(__linux__) && defined(FALLOC_FL_PUNCH_HOLE)
-	/*
-	 * Linux >= 2.6.38. The kernel zeroes partial blocks at the edges
-	 * and deallocates whole blocks in the interior, so no alignment is
-	 * required of the caller. FALLOC_FL_KEEP_SIZE is required to avoid
-	 * truncation.
-	 */
-	return (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-	    offset, length));
-#elif defined(__FreeBSD__) && defined(SPACECTL_DEALLOC)
-	/*
-	 * FreeBSD >= 14 (older releases have no hole punching API at
-	 * all). fspacectl() handles alignment like Linux, but is allowed
-	 * to complete partially, returning the remaining range; loop
-	 * until it is done.
-	 */
-	struct spacectl_range range = {
-		.r_offset = offset,
-		.r_len = length,
-	};
-
-	while (range.r_len > 0) {
-		if (fspacectl(fd, SPACECTL_DEALLOC, &range, 0, &range) != 0) {
-			if (errno == EINTR)
-				continue;
-			return (-1);
-		}
-	}
-	return (0);
-#elif defined(__APPLE__) && defined(F_PUNCHHOLE)
-	/*
-	 * macOS (APFS only; HFS+ returns ENOTSUP). Unlike Linux and
-	 * FreeBSD, F_PUNCHHOLE fails with EINVAL unless the range is
-	 * aligned to the filesystem block size, so on EINVAL retry with
-	 * the range shrunk inward to the nearest block boundaries.
-	 * That punches a subset of the requested region, which is safe.
-	 */
-	struct fpunchhole hole = {
-		.fp_flags = 0,
-		.reserved = 0,
-		.fp_offset = offset,
-		.fp_length = length,
-	};
-
-	if (fcntl(fd, F_PUNCHHOLE, &hole) == 0)
-		return (0);
-	if (errno != EINVAL)
-		return (-1);
-
-	struct stat st;
-	off_t align = 4096;
-
-	if (fstat(fd, &st) == 0 && st.st_blksize > 0 && ISP2(st.st_blksize))
-		align = st.st_blksize;
-
-	off_t start = P2ROUNDUP(offset, align);
-	off_t end = P2ALIGN_TYPED(offset + length, align, off_t);
-
-	if (end <= start) {
-		errno = EINVAL;	/* range doesn't span a full block */
-		return (-1);
-	}
-
-	hole.fp_offset = start;
-	hole.fp_length = end - start;
-	return (fcntl(fd, F_PUNCHHOLE, &hole));
-#else
-	(void) fd, (void) offset, (void) length;
-	errno = EOPNOTSUPP;
-	return (-1);
-#endif
+	char buff[1024];
+	int length = snprintf(buff, sizeof (buff),
+	    "%s/zstream-temp-XXXXXX", dir_path);
+	if (length >= sizeof (buff))
+		errx(1, "filename too long in %s", __func__);
+	int fd = mkstemp(buff);
+	if (fd < 0)
+		err(1, "%s", buff);
+	if (unlink(buff) < 0)
+		err(1, "unlink of %s failed", buff);
+	return (fd);
 }
+
+/*
+ * Euclid's algorithm
+ */
+size_t
+least_common_multiple(size_t a, size_t b)
+{
+	size_t a_orig = a;
+	size_t b_orig = b;
+
+	while (b != 0) {
+		size_t r = a % b;
+		a = b;
+		b = r;
+	}
+	return ((a_orig / a) * b_orig);
+}
+
