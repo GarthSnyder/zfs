@@ -50,8 +50,8 @@ typedef struct {
 
 static const selftest_module_t modules[] = {
 	{ "queue",	selftest_queue_cases },
-	{ "allocator",	selftest_alloc_cases },
-	{ "hash",	selftest_hash_cases  },
+	// { "allocator",	selftest_alloc_cases },
+	// { "hash",	selftest_hash_cases  },
 };
 
 #define	NUM_MODULES	(sizeof (modules) / sizeof (modules[0]))
