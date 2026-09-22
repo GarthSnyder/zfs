@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
- *
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
  * You may only use this file in accordance with the terms of version
@@ -9,9 +7,7 @@
  *
  * A full copy of the text of the CDDL should have accompanied this
  * source.  A copy of the CDDL is also available via the Internet at
- * http://www.illumos.org/license/CDDL.
- *
- * CDDL HEADER END
+ * https://opensource.org/license/CDDL-1.0.
  */
 
 /*
@@ -27,6 +23,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/stdtypes.h>
 
 /*
  * This module implements linear hashing with 64-bit hash keys. It runs on
@@ -49,21 +46,26 @@ extern "C" {
 
 #define	MAX_LH_ITERATORS 8
 
-struct linear_hash;
 typedef struct linear_hash linear_hash_t;
-
-struct lh_iterator;
 typedef struct lh_iterator lh_iterator_t;
 
 /*
  * The cache_dir should be a place where memory can meaningfully spill over
  * to disk, which rules out /tmp on most systems because it's often
- * implemented as a ramdisk. If cache_dir is NULL, the allocator does not
- * use disk backup. If max_memory is zero, the allocator is disk-only.
+ * implemented as a ramdisk. If cache_dir is NULL, the hash table does not
+ * use disk backup and may run out of memory. If max_memory is zero, the
+ * hash table is disk-only.
+ *
+ * Because memory accounting is only performed periodically, actual memory
+ * use may briefly exceed max_memory for a short time.
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
 
+/*
+ * Insert a new record. This operation invalidates all outstanding
+ * iterators.
+ */
 void
 lh_insert(linear_hash_t *lh, uint64_t hash, const void* data);
 

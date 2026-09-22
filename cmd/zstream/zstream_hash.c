@@ -1,27 +1,28 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
  *
- * This file and its contents are supplied under the terms of the Common
- * Development and Distribution License ("CDDL"), version 1.0. You may only use
- * this file in accordance with the terms of version 1.0 of the CDDL.
- *
- * A full copy of the text of the CDDL should have accompanied this source. A
- * copy of the CDDL is also available via the Internet at
- * http://www.illumos.org/license/CDDL.
- *
- * CDDL HEADER END
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * https://opensource.org/license/CDDL-1.0.
  */
 
 /*
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+#include <assert.h>
 #include <err.h>
+#include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
+#include <sys/stdtypes.h>
+#include <sys/types.h>
 
 #include "zstream_alloc.h"
+#include "zstream_hash.h"
 #include "zstream_hash_impl.h"
 #include "zstream_util.h"
 
@@ -94,7 +95,7 @@
  * storage while the main bucket array is partially in memory and partially
  * on disk.
  *
- * Struct definitions are in zstream_hash_impl.c to make them available
+ * Struct definitions are in zstream_hash_impl.h to make them available
  * to selftests.
  */
 
@@ -127,19 +128,26 @@
 size_t	lh_memory_margin	= 64ULL << 20;	/* 64MB */
 int	lh_mem_check_interval	= 4096;		/* Insertions per check */
 
-static int		next_iterator = 0;
+static unsigned int	next_iterator = 0;
 static lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
+
+/*
+ * The generation is incremented on each insertion and split. Iterators make
+ * a copy of the current generation when they are first set up. If the
+ * iterator generation != the current generation, the iterator is invalid.
+ */
+static uint64_t		generation = 0;
 
 /*
  * Calculate the destination bucket for a given hash value.
  *
  * lh_hash_suffix_length = hash suffix length in effect at or above the
  * split point. Below the split, it is one bit longer. E.g., if
- * hash_suffix_length = 3, items below the split point are hashed into 16
- * buckets. At the split point or above, they are hashed into 8 buckets.
- * Ergo, when the split pointer reaches index 8, 2^level, all mod 8 entries
- * have been upgraded. The split pointer is reset to zero and the suffix
- * length increases.
+ * lh_hash_suffix_length == 3, items below the split point are hashed into
+ * 16 buckets. At the split point or above, they are hashed into 8 buckets.
+ * Ergo, when the split pointer reaches index 8, 2^lh_hash_suffix_length,
+ * all mod 8 entries have been upgraded. The split pointer is reset to zero
+ * and the suffix length increases.
  */
 static inline uint64_t
 bucket_for_hash(linear_hash_t *lh, uint64_t hash)
@@ -291,6 +299,7 @@ check_split(linear_hash_t *lh)
 	    (lh->lh_num_top_level_buckets * ENTRIES_PER_BUCKET);
 	if (occupancy > MAX_OCCUPANCY) {
 		split_bucket(lh);
+		generation++;
 	}
 }
 
@@ -310,12 +319,12 @@ static void
 check_memory_use(linear_hash_t *lh)
 {
 	size_t current_use[NUM_ALLOC];
-	size_t total_used = 0;
+	ssize_t total_used = 0;
 	for (int i = 0; i < NUM_ALLOC; i++) {
 		current_use[i] = allocator_memory_used(lh->lh_alloc.all[i]);
 		total_used += current_use[i];
 	}
-	ssize_t overage = (ssize_t)total_used - lh->lh_max_memory;
+	ssize_t overage = total_used - (ssize_t)lh->lh_max_memory;
 	while (overage > 0) {
 		size_t to_trim = overage + lh_memory_margin;
 		for (int i = 0; i < NUM_ALLOC; i++) {
@@ -338,6 +347,9 @@ check_memory_use(linear_hash_t *lh)
 linear_hash_t *
 lh_init(size_t record_size, size_t max_mem, const char *dir)
 {
+	if (max_mem == 0 && dir == NULL)
+		errx(1, "linear_hash_t requires memory or disk backing "
+		    " (or both)");
 	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
@@ -347,8 +359,7 @@ lh_init(size_t record_size, size_t max_mem, const char *dir)
 	};
 	size_t sizes[] = {record_size, sizeof (bucket_t), sizeof (bucket_t)};
 	for (int i = 0; i < NUM_ALLOC; i++) {
-		lh->lh_alloc.all[i] = allocator_init(sizes[i], max_mem,
-		    (dir != NULL) ? dir : "/var/tmp");
+		lh->lh_alloc.all[i] = allocator_init(sizes[i], max_mem, dir);
 		if (lh->lh_alloc.all[i] == NULL)
 			errx(1, "failed to initialize linear hash allocators");
 	}
@@ -382,17 +393,19 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 		lh->lh_next_memory_check = lh_mem_check_interval;
 		check_memory_use(lh);
 	}
+	generation++;
 }
 
 lh_iterator_t *
 lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 {
 	ASSERT(lh != NULL);
-	int which_iterator = next_iterator++ % MAX_LH_ITERATORS;
+	unsigned int which_iterator = next_iterator++ % MAX_LH_ITERATORS;
 	lh_iterator_t *iter = &lh_iterators[which_iterator];
 	record_ix_t bucket = bucket_for_hash(lh, hash);
 	*iter = (lh_iterator_t) {
 		.lhi_hash = hash,
+		.lhi_generation = generation,
 		.lhi_entry_iterator = ITER_BUCKET(lh, bucket)
 	};
 	return (iter);
@@ -401,6 +414,9 @@ lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 boolean_t
 lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 {
+	ASSERT(lh_iter != NULL);
+	if (lh_iter->lhi_generation != generation)
+		errx(1, "%s() called on an invalidated iterator", __func__);
 	entry_iterator_t *ei = &lh_iter->lhi_entry_iterator;
 	bucket_entry_t *entry;
 	while ((entry = entry_iterator_next(ei, B_FALSE))) {

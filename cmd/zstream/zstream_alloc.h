@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
- *
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
  * You may only use this file in accordance with the terms of version
@@ -9,9 +7,7 @@
  *
  * A full copy of the text of the CDDL should have accompanied this
  * source.  A copy of the CDDL is also available via the Internet at
- * http://www.illumos.org/license/CDDL.
- *
- * CDDL HEADER END
+ * https://opensource.org/license/CDDL-1.0.
  */
 
 /*
@@ -21,9 +17,12 @@
 #ifndef _ZSTREAM_ALLOC_H
 #define	_ZSTREAM_ALLOC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 
 /*
  * zstream_alloc.[ch] define a thin storage API that can be backed by
@@ -50,7 +49,6 @@
 
 typedef uint64_t record_ix_t;
 
-struct allocator;
 typedef struct allocator allocator_t;
 
 /*
@@ -59,7 +57,7 @@ typedef struct allocator allocator_t;
  * If dir_path is non-NULL, the allocator creates a temporary file there for
  * backup storage on disk.
  *
- * The max_memory parameter determines how much RAM the allocator is allowed
+ * The mem_size parameter determines how much RAM the allocator is allowed
  * to consume, in bytes. If it's 0, the allocator will be disk-only. The
  * memory limit is recorded for future reference, but allocations occur only
  * as memory is actually needed.
@@ -123,5 +121,9 @@ allocator_trim_memory(allocator_t *alloc, size_t delta_bytes);
  */
 void
 allocator_destroy(allocator_t *alloc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZSTREAM_ALLOC_H */

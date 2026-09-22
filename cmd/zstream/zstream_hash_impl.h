@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
- *
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
  * You may only use this file in accordance with the terms of version
@@ -9,9 +7,7 @@
  *
  * A full copy of the text of the CDDL should have accompanied this
  * source.  A copy of the CDDL is also available via the Internet at
- * http://www.illumos.org/license/CDDL.
- *
- * CDDL HEADER END
+ * https://opensource.org/license/CDDL-1.0.
  */
 
 /*
@@ -66,6 +62,7 @@ typedef union {
 	allocator_t		*all[NUM_ALLOC];
 } lh_allocators_t;
 
+/* CSTYLED */
 _Static_assert(sizeof (lh_allocators_t) == NUM_ALLOC * sizeof (allocator_t *),
     "lh_allocators_t has padding");
 
@@ -75,7 +72,7 @@ struct linear_hash {
 	lh_allocators_t	lh_alloc;
 	uint8_t		lh_hash_suffix_length;	  /* Granularity above split */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
-	int		lh_next_memory_check;	  /* # of splits before check */
+	int		lh_next_memory_check;	  /* # inserts before check */
 	uint64_t	lh_num_top_level_buckets;
 	uint64_t	lh_num_top_level_entries;
 };
@@ -95,10 +92,11 @@ typedef struct {
 /*
  * Client-facing iterator for retrieving records by hash
  */
-typedef struct lh_iterator {
+struct lh_iterator {
 	uint64_t		lhi_hash;		/* Client's query */
+	uint64_t		lhi_generation;		/* Validity check */
 	entry_iterator_t	lhi_entry_iterator;
-} lh_iterator_t;
+};
 
 #ifdef __cplusplus
 }
