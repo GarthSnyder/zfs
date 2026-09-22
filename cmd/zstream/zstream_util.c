@@ -514,4 +514,3 @@ least_common_multiple(size_t a, size_t b)
 	}
 	return ((a_orig / a) * b_orig);
 }
-
