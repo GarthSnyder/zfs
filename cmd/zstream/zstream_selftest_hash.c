@@ -267,11 +267,11 @@ static void
 check_invariants(linear_hash_t *lh, uint64_t expected_entries)
 {
 	VERIFY3U(lh->lh_num_entries, ==, expected_entries);
-	VERIFY3U(lh->lh_num_buckets, ==,
+	VERIFY3U(lh->lh_num_top_level_buckets, ==,
 	    (1ULL << lh->lh_hash_suffix_length) + lh->lh_split_pointer);
 	VERIFY3U(lh->lh_num_top_level_entries, <=, lh->lh_num_entries);
 	VERIFY3U(allocator_get_stats(lh->lh_bucket_alloc).as_num_records,
-	    <=, lh->lh_num_buckets);
+	    <=, lh->lh_num_top_level_buckets);
 }
 
 /*
