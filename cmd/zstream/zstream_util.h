@@ -38,7 +38,7 @@ extern "C" {
 /*
  * Round up to an arbitrary (not necessarily power-of-2) multiple
  */
-#define ROUND_UP(size, align) (((size + align - 1) / align) * align)
+#define	ROUND_UP(size, align) ((((size) + (align) - 1) / (align)) * (align))
 
 /*
  * As with the libzfs-native ZIO_* encodings, only zstd compression has a
