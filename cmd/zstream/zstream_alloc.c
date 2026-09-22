@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
- *
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
  * You may only use this file in accordance with the terms of version
@@ -9,26 +7,25 @@
  *
  * A full copy of the text of the CDDL should have accompanied this
  * source.  A copy of the CDDL is also available via the Internet at
- * http://www.illumos.org/license/CDDL.
- *
- * CDDL HEADER END
+ * https://opensource.org/license/CDDL-1.0.
  */
 
 /*
  * Copyright (c) 2026 by Garth Snyder. All rights reserved.
  */
 
+#include <assert.h>
 #include <err.h>
-#include <errno.h>
-#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
+#include <sys/param.h>
+#include <sys/stdtypes.h>
+#include <sys/sysmacros.h>
+#include <sys/types.h>
 
 #include "zstream_alloc.h"
 #include "zstream_util.h"
@@ -38,14 +35,14 @@
  * the discussion there for details. TARGET_GRANULARITY is an upper bound.
  */
 #define	TARGET_GRANULARITY	(32 << 20)	/* 32MB */
-#define MAX_WASTE_PERCENT	50
+#define	MAX_WASTE		0.5
 
 /*
  * Granularity at which memory pages are converted from PROT_NONE to
  * PROT_READ | PROT_WRITE. If the system page size is larger, that
  * becomes the granularity.
  */
-#define FRONTIER_GRANULARITY	(8 << 20)	/* 8MB */
+#define	FRONTIER_GRANULARITY	(8 << 20)	/* 8MB */
 
 #define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_record_size_rounded)
 #define	OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
@@ -101,12 +98,11 @@ struct allocator {
 
 	uint64_t	a_count;		/* Number of records stored */
 	void		*a_base_addr;		/* Start of memory segment */
-	void		*a_writable_frontier;	/* Address of 1st non-r/w byte */
+	void		*a_writable_frontier;	/* Addr of 1st non-r/w byte */
 
 	size_t		a_record_size_rounded;	/* Record-to-record offset */
 	size_t		a_memory_granularity;	/* Memory/disk boundary chunk */
 	size_t		a_frontier_granularity;	/* Memory reification chunk */
-	size_t		a_pagesize;		/* System page size */
 	size_t		a_vm_allocated;		/* Total VM space reserved */
 };
 
@@ -147,7 +143,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 		rsize_rounded = P2ROUNDUP(record_size, align);
 		size_t waste_bytes = rsize_rounded - record_size;
 		double waste_pct = (double)waste_bytes / rsize_rounded;
-		if (waste_pct > MAX_WASTE_PERCENT)
+		if (waste_pct > MAX_WASTE)
 			errx(1, "unable to find an efficient rounding for "
 			    "record_size = %llu, page_size = %llu",
 			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
@@ -180,7 +176,6 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 		.a_record_size_rounded = rsize_rounded,
 		.a_memory_granularity = granularity,
 		.a_frontier_granularity = MAX(pagesize, FRONTIER_GRANULARITY),
-		.a_pagesize = pagesize,
 		.a_vm_allocated = vm_allocation,
 	};
 	return (alloc);
@@ -202,8 +197,8 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
  * The end_offset parameter and the a_writable_frontier pointer are both
  * "+1" markers. That is, everything below a_writable_fronter is already
  * writable, and reify_memory_up_to() reifies up to but not including the
- * end_offset. Because of this accounting convention, a_vm_frontier always
- * points to the first byte of an unreified memory page.
+ * end_offset. Because of this accounting convention, a_writable_frontier
+ * always points to the first byte of an unreified memory page.
  */
 static void
 reify_memory_up_to(allocator_t *alloc, off_t end_offset)
@@ -241,11 +236,14 @@ reify_memory_up_to(allocator_t *alloc, off_t end_offset)
 size_t
 allocator_trim_memory(allocator_t *alloc, size_t delta_bytes)
 {
+	ASSERT(alloc != NULL);
+	if (alloc->a_base_addr == NULL)
+		return (0);
 	ssize_t bytes_used = ADDR_TO_OFFSET(alloc, alloc->a_writable_frontier);
-	ssize_t new_max = ROUND_UP(MAX(bytes_used - delta_bytes, 0),
+	ssize_t new_max = ROUND_UP(MAX(bytes_used - (ssize_t)delta_bytes, 0),
 	    alloc->a_memory_granularity);
 	/* Always free at least one granule */
-	if (new_max == alloc->a_max_memory && alloc->a_max_memory > 0) {
+	if (new_max >= bytes_used && bytes_used > 0) {
 		ASSERT3U(new_max, >=, alloc->a_memory_granularity);
 		new_max -= alloc->a_memory_granularity;
 	}
@@ -330,14 +328,16 @@ allocator_skip(allocator_t *alloc)
 size_t
 allocator_memory_used(allocator_t *alloc)
 {
-	return (alloc->a_writable_frontier - alloc->a_base_addr);
+	return ((alloc->a_base_addr == NULL) ? 0 :
+	    (alloc->a_writable_frontier - alloc->a_base_addr));
 }
 
 void
 allocator_destroy(allocator_t *alloc)
 {
 	VERIFY(alloc != NULL);
-	munmap(alloc->a_base_addr, alloc->a_vm_allocated);
+	if (alloc->a_base_addr != NULL)
+		munmap(alloc->a_base_addr, alloc->a_vm_allocated);
 	if (alloc->a_fd >= 0) {
 		if (close(alloc->a_fd) != 0)
 			warn("unable to close allocator backing file");
