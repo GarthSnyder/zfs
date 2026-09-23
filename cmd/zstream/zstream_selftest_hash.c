@@ -15,31 +15,34 @@
  */
 
 /*
- * Selftests for linear_hash_t, defined in zstream_hash.c
+ * Self-tests for linear_hash_t. The general verification strategy is
+ * multiset equality against a shadow model. Every inserted record's payload
+ * begins with a unique tag, and the rest of the payload is a deterministic
+ * pattern derived from that tag.
  *
- * The verification strategy is multiset equality against a shadow model.
- * Every inserted record's payload begins with a unique tag, and the rest of
- * the payload is a deterministic pattern derived from that tag. The model
- * is simply the list of (hash, tag) pairs inserted. To verify a table,
- * entries are grouped by hash value and each group is retrieved. Every
- * returned payload must be internally consistent and must match exactly one
- * not-yet-seen model entry, and the number of returned records must equal
- * the group size. Hashes never inserted must return nothing. (Inserted keys
- * always have bit 63 clear, which gives absent-probe tests an inexhaustible
- * supply of known-absent keys.)
+ * The model is the list of (hash, tag) pairs inserted.
+ *
+ * To verify a table, entries are grouped by hash value and each group is
+ * retrieved. Every returned payload must be internally consistent and must
+ * match exactly one not-yet-seen model entry, and the number of returned
+ * records must equal the group size. Hashes never inserted must return
+ * nothing. (Inserted keys always have bit 63 clear, while absent-probe
+ * tests set this bit.)
  *
  * lh_validate() below complements that black-box view with a structural
- * audit of the table itself. It used to live in zstream_hash_extras.c; it
- * is kept here, and deliberately walks bucket chains with its own code
- * rather than with the table's own entry_iterator_t, so that a bug in the
- * iterator cannot hide itself from the validator.
+ * audit of the table itself. It used to live in zstream_hash_extras.c and
+ * was a runtime-callable function. But in the interest of keeping the
+ * production code simple, it has moved here. In this context, we
+ * deliberately walk bucket chains using separate code rather than the
+ * table's own entry_iterator_t code. That way, a bug in the iterator can't
+ * hide from the validator.
  *
  * Beyond store-and-retrieve correctness, the tests exercise the table's
- * supra-allocator memory management: with small budgets, margins, and check
- * intervals (see lh_memory_margin and lh_mem_check_interval), the table
- * must reclaim memory from its three allocators in priority order (data
- * first, then overflow buckets, then main buckets) while remaining fully
- * correct and keeping total memory use bounded.
+ * memory management with small budgets, margins, and check intervals (see
+ * lh_memory_margin and lh_mem_check_interval). The table must reclaim
+ * memory from its three allocators in correct priority order (data first,
+ * then overflow buckets, then main buckets) while remaining fully correct
+ * and keeping total memory use bounded.
  */
 
 #include <err.h>
@@ -58,9 +61,9 @@
 #define	MAX_CHAIN_WALK	100000
 
 typedef struct {
-	uint64_t	ht_hash;
-	uint64_t	ht_tag;
-	boolean_t	ht_found;
+	uint64_t	he_hash;
+	uint64_t	he_tag;
+	boolean_t	he_found;
 } htest_entry_t;
 
 typedef struct {
@@ -98,16 +101,19 @@ expected_bucket(linear_hash_t *lh, uint64_t hash)
  * Structural audit of an entire table. Walks every top-level bucket and its
  * overflow chain directly through the allocators, and checks that:
  *
- * - entries are packed at the front of each bucket, with no live entry
- *   following an empty one (the scan for a free slot stops at the first
- *   zero be_record, so a gap would strand everything after it);
- * - every entry sits in the bucket its hash currently maps to;
- * - the total number of entries is what the caller inserted; and
+ * - Entries are packed at the front of each bucket, with no live entry
+ *   following an empty one. (The scan for a free slot stops at the first
+ *   zero be_record, so a gap would strand everything after it.)
+ *
+ * - Every entry sits in the bucket its hash currently maps to.
+ *
+ * - The total number of entries is the number the caller inserted.
+ *
  * - lh_num_top_level_entries and lh_num_top_level_buckets agree with what
  *   is actually on disk. Those two drive the split decision, so drift in
  *   either one silently stops the table from growing.
  *
- * Returns B_TRUE if the table is sound, warning about each problem found.
+ * Returns B_TRUE if the table is OK, warns about each problem found.
  */
 static boolean_t
 lh_validate(linear_hash_t *lh, uint64_t expected_entries)
@@ -122,7 +128,7 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 		uint64_t links = 0;
 
 		allocator_retrieve(lh->lh_alloc.bucket, b, &bucket);
-		for (;;) {
+		while (B_TRUE) {
 			boolean_t seen_empty = B_FALSE;
 			for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
 				bucket_entry_t *e = &bucket.b_entries[i];
@@ -131,18 +137,17 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 					continue;
 				}
 				if (seen_empty) {
-					warnx("bucket %ju has uncompacted "
-					    "entries", (uintmax_t)b);
+					warnx("bucket %llu has uncompacted "
+					    "entries", (u_longlong_t)b);
 					warned = B_TRUE;
 				}
-				uint64_t want = expected_bucket(lh,
-				    e->be_hash);
+				uint64_t want = expected_bucket(lh, e->be_hash);
 				if (want != b) {
-					warnx("bucket %ju contains hash %jx, "
-					    "which belongs in bucket %ju",
-					    (uintmax_t)b,
-					    (uintmax_t)e->be_hash,
-					    (uintmax_t)want);
+					warnx("bucket %llu contains hash %llx, "
+					    "which belongs in bucket %llu",
+					    (u_longlong_t)b,
+					    (u_longlong_t)e->be_hash,
+					    (u_longlong_t)want);
 					warned = B_TRUE;
 				}
 				total_entries++;
@@ -152,8 +157,8 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 			if (bucket.b_overflow == 0)
 				break;
 			if (++links > MAX_CHAIN_WALK) {
-				warnx("bucket %ju has a runaway overflow "
-				    "chain", (uintmax_t)b);
+				warnx("bucket %llu has a runaway overflow "
+				    "chain", (u_longlong_t)b);
 				warned = B_TRUE;
 				break;
 			}
@@ -164,21 +169,21 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 	}
 
 	if (total_entries != expected_entries) {
-		warnx("linear hash is supposed to have %ju entries, but "
-		    "actually has %ju", (uintmax_t)expected_entries,
-		    (uintmax_t)total_entries);
+		warnx("linear hash is supposed to have %llu entries, but "
+		    "actually has %llu", (u_longlong_t)expected_entries,
+		    (u_longlong_t)total_entries);
 		warned = B_TRUE;
 	}
 	if (total_top_level != lh->lh_num_top_level_entries) {
-		warnx("linear hash is supposed to have %ju top-level entries, "
-		    "but actually has %ju",
-		    (uintmax_t)lh->lh_num_top_level_entries,
-		    (uintmax_t)total_top_level);
+		warnx("linear hash is supposed to have %llu top-level entries, "
+		    "but actually has %llu",
+		    (u_longlong_t)lh->lh_num_top_level_entries,
+		    (u_longlong_t)total_top_level);
 		warned = B_TRUE;
 	}
 	if (total_top_level > total_entries) {
-		warnx("more top-level entries (%ju) than entries (%ju)",
-		    (uintmax_t)total_top_level, (uintmax_t)total_entries);
+		warnx("more top-level entries (%llu) than entries (%llu)",
+		    (u_longlong_t)total_top_level, (u_longlong_t)total_entries);
 		warned = B_TRUE;
 	}
 
@@ -189,10 +194,10 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 	uint64_t want_buckets = (1ULL << lh->lh_hash_suffix_length) +
 	    lh->lh_split_pointer;
 	if (lh->lh_num_top_level_buckets != want_buckets) {
-		warnx("linear hash has %ju top-level buckets, but its split "
-		    "state implies %ju",
-		    (uintmax_t)lh->lh_num_top_level_buckets,
-		    (uintmax_t)want_buckets);
+		warnx("linear hash has %llu top-level buckets, but its split "
+		    "state implies %llu",
+		    (u_longlong_t)lh->lh_num_top_level_buckets,
+		    (u_longlong_t)want_buckets);
 		warned = B_TRUE;
 	}
 	return (!warned);
@@ -225,8 +230,8 @@ verify_payload(const uint8_t *buf, size_t record_size)
 	uint8_t *whole = safe_malloc(record_size);
 	make_payload(whole, record_size, tag);
 	if (memcmp(whole, buf, record_size) != 0)
-		errx(1, "retrieved payload with tag %ju is corrupted",
-		    (uintmax_t)tag);
+		errx(1, "retrieved payload with tag %llu is corrupted",
+		    (u_longlong_t)tag);
 	free(whole);
 }
 
@@ -271,8 +276,8 @@ generate_entries(const htest_config_t *cfg, selftest_rng_t *rng)
 			    (cfg->hc_fixed_bits & ~ABSENT_BIT &
 			    cfg->hc_fixed_mask);
 		}
-		entries[i].ht_hash = h;
-		entries[i].ht_tag = i + 1;
+		entries[i].he_hash = h;
+		entries[i].he_tag = i + 1;
 	}
 	free(keys);
 	return (entries);
@@ -288,16 +293,16 @@ spot_check(linear_hash_t *lh, htest_entry_t *entries, uint64_t n_inserted,
     selftest_rng_t *rng, uint8_t *buf)
 {
 	htest_entry_t *e = &entries[selftest_rng_below(rng, n_inserted)];
-	lh_iterator_t *iter = lh_initiate_retrieve(lh, e->ht_hash);
+	lh_iterator_t *iter = lh_initiate_retrieve(lh, e->he_hash);
 	while (lh_retrieve_next(iter, buf)) {
 		uint64_t tag;
 		memcpy(&tag, buf, sizeof (tag));
-		if (tag == e->ht_tag)
+		if (tag == e->he_tag)
 			return;
 	}
-	errx(1, "record with hash %jx (tag %ju) lost after %ju inserts",
-	    (uintmax_t)e->ht_hash, (uintmax_t)e->ht_tag,
-	    (uintmax_t)n_inserted);
+	errx(1, "record with hash %llx (tag %llu) lost after %llu inserts",
+	    (u_longlong_t)e->he_hash, (u_longlong_t)e->he_tag,
+	    (u_longlong_t)n_inserted);
 }
 
 static void
@@ -307,8 +312,8 @@ insert_entries(linear_hash_t *lh, htest_entry_t *entries, uint64_t count,
 	uint8_t *buf = safe_malloc(lh->lh_record_size);
 
 	for (uint64_t i = 0; i < count; i++) {
-		make_payload(buf, lh->lh_record_size, entries[i].ht_tag);
-		lh_insert(lh, entries[i].ht_hash, buf);
+		make_payload(buf, lh->lh_record_size, entries[i].he_tag);
+		lh_insert(lh, entries[i].he_hash, buf);
 		if (spot_every != 0 && (i + 1) % spot_every == 0)
 			spot_check(lh, entries, i + 1, rng, buf);
 	}
@@ -321,16 +326,16 @@ htest_entry_cmp(const void *va, const void *vb)
 	const htest_entry_t *a = va;
 	const htest_entry_t *b = vb;
 
-	if (a->ht_hash != b->ht_hash)
-		return (a->ht_hash < b->ht_hash ? -1 : 1);
-	if (a->ht_tag != b->ht_tag)
-		return (a->ht_tag < b->ht_tag ? -1 : 1);
+	if (a->he_hash != b->he_hash)
+		return (a->he_hash < b->he_hash ? -1 : 1);
+	if (a->he_tag != b->he_tag)
+		return (a->he_tag < b->he_tag ? -1 : 1);
 	return (0);
 }
 
 /*
- * The full multiset-equality sweep, plus absent-key probes. Sorts the
- * entries array as a side effect.
+ * The full multiset-equality sweep, plus probes for keys that should be
+ * absent. Sorts the entries array as a side effect.
  */
 static void
 verify_table(linear_hash_t *lh, htest_entry_t *entries, uint64_t count,
@@ -342,10 +347,10 @@ verify_table(linear_hash_t *lh, htest_entry_t *entries, uint64_t count,
 
 	uint64_t i = 0;
 	while (i < count) {
-		uint64_t hash = entries[i].ht_hash;
+		uint64_t hash = entries[i].he_hash;
 		uint64_t j = i;
-		while (j < count && entries[j].ht_hash == hash) {
-			entries[j].ht_found = B_FALSE;
+		while (j < count && entries[j].he_hash == hash) {
+			entries[j].he_found = B_FALSE;
 			j++;
 		}
 
@@ -357,29 +362,29 @@ verify_table(linear_hash_t *lh, htest_entry_t *entries, uint64_t count,
 			memcpy(&tag, buf, sizeof (tag));
 			boolean_t matched = B_FALSE;
 			for (uint64_t k = i; k < j; k++) {
-				if (!entries[k].ht_found &&
-				    entries[k].ht_tag == tag) {
-					entries[k].ht_found = B_TRUE;
+				if (!entries[k].he_found &&
+				    entries[k].he_tag == tag) {
+					entries[k].he_found = B_TRUE;
 					matched = B_TRUE;
 					break;
 				}
 			}
 			if (!matched) {
-				errx(1, "hash %jx returned unexpected or "
-				    "duplicate record (tag %ju)",
-				    (uintmax_t)hash, (uintmax_t)tag);
+				errx(1, "hash %llx returned unexpected or "
+				    "duplicate record (tag %llu)",
+				    (u_longlong_t)hash, (u_longlong_t)tag);
 			}
 			nfound++;
 		}
 		if (nfound != j - i) {
-			errx(1, "hash %jx: expected %ju records, "
-			    "retrieved %ju", (uintmax_t)hash,
-			    (uintmax_t)(j - i), (uintmax_t)nfound);
+			errx(1, "hash %llx: expected %llu records, "
+			    "retrieved %llu", (u_longlong_t)hash,
+			    (u_longlong_t)(j - i), (u_longlong_t)nfound);
 		}
 		i = j;
 	}
 
-	/* Keys that were never inserted must return nothing */
+	/* Keys that were never inserted must return no matches */
 	for (int p = 0; p < 1000; p++) {
 		uint64_t h = selftest_rng_next(rng) | ABSENT_BIT;
 		lh_iterator_t *iter = lh_initiate_retrieve(lh, h);
@@ -391,7 +396,7 @@ verify_table(linear_hash_t *lh, htest_entry_t *entries, uint64_t count,
 /*
  * Run a complete generate/insert/verify workload. If hc_keep is set, the
  * table is returned live (for extra caller-side assertions) and the caller
- * must lh_destroy() it; otherwise NULL is returned.
+ * must lh_destroy() it. Otherwise NULL is returned.
  */
 static linear_hash_t *
 run_hash_workload(const htest_config_t *cfg)
@@ -427,7 +432,7 @@ run_hash_workload(const htest_config_t *cfg)
 /*
  * Basic operation: mostly unique random keys, no memory pressure. Also
  * covers boundary hash values (0 and ~0) and multiple records under one
- * key, with hand-rolled verification.
+ * key, with verification.
  */
 static void
 hash_basic(void)
@@ -589,8 +594,8 @@ hash_adversarial(void)
 		if (i % 2 == 0) {
 			h = (h & ~((1ULL << 22) - 1)) | 0x2a5;
 		}
-		entries[i].ht_hash = h;
-		entries[i].ht_tag = i + 1;
+		entries[i].he_hash = h;
+		entries[i].he_tag = i + 1;
 	}
 	insert_entries(lh, entries, count, 512, &rng);
 	VERIFY(lh_validate(lh, count));
@@ -672,17 +677,17 @@ hash_memory_pressure(void)
 
 	/*
 	 * Insert in slices so total memory use can be sampled along the
-	 * way, not just at the end. The bound is loose - each of the three
+	 * way, not just at the end. The bound is loose (each of the three
 	 * allocators may take one frontier-granularity step past the
-	 * budget before the next check notices - but total use must stay in
+	 * budget before the next check notices) but total use must stay in
 	 * the budget's neighborhood rather than tracking the data size.
 	 */
 	const size_t slack = 8 << 20;
 	uint8_t *buf = safe_malloc(record_size);
 	size_t max_seen = 0;
 	for (uint64_t i = 0; i < count; i++) {
-		make_payload(buf, record_size, entries[i].ht_tag);
-		lh_insert(lh, entries[i].ht_hash, buf);
+		make_payload(buf, record_size, entries[i].he_tag);
+		lh_insert(lh, entries[i].he_hash, buf);
 		if ((i + 1) % 1024 == 0)
 			max_seen = MAX(max_seen, total_mem_used(lh));
 		if ((i + 1) % 2048 == 0)
@@ -740,8 +745,8 @@ hash_pressure_priority(void)
 	size_t peak[NUM_ALLOC] = { 0 };
 	uint8_t *buf = safe_malloc(record_size);
 	for (uint64_t i = 0; i < count; i++) {
-		make_payload(buf, record_size, entries[i].ht_tag);
-		lh_insert(lh, entries[i].ht_hash, buf);
+		make_payload(buf, record_size, entries[i].he_tag);
+		lh_insert(lh, entries[i].he_hash, buf);
 		if ((i + 1) % 512 == 0) {
 			for (int k = 0; k < NUM_ALLOC; k++) {
 				peak[k] = MAX(peak[k], allocator_memory_used(
@@ -757,7 +762,7 @@ hash_pressure_priority(void)
 	size_t overflow = allocator_memory_used(lh->lh_alloc.overflow);
 	size_t bucket = allocator_memory_used(lh->lh_alloc.bucket);
 
-	/* The data allocator took the hit... */
+	/* The data allocator was trimmed... */
 	VERIFY3U(data, <, peak[0]);
 	VERIFY3U(data, <, count * record_size);
 	/* ...but is still partially memory-resident: gradual degradation */
@@ -778,13 +783,14 @@ hash_pressure_priority(void)
 
 /*
  * The full complement of MAX_LH_ITERATORS concurrent iterators, stepped
- * round-robin over distinct heavily-duplicated keys, and then iterators
+ * round-robin over distinct, heavily-duplicated keys, and then iterators
  * used against two live tables in alternation. Iterator state must not
  * bleed between iterators or tables.
  *
- * Note that no insert may happen while any of these iterators is live: an
- * insert invalidates every outstanding iterator, and lh_retrieve_next()
- * treats a stale one as fatal.
+ * An insert invalidates every outstanding iterator for that hash table, and
+ * lh_retrieve_next() treats a stale iterator as a fatal error. It's fine to
+ * invalidate the iterators en passant, but not to attempt to use them
+ * afterwards.
  */
 static void
 hash_iterators(void)
@@ -814,16 +820,16 @@ hash_iterators(void)
 	for (uint64_t i = 0; i < count && nkeys < MAX_LH_ITERATORS; i++) {
 		int k;
 		for (k = 0; k < nkeys; k++) {
-			if (hashes[k] == entries[i].ht_hash)
+			if (hashes[k] == entries[i].he_hash)
 				break;
 		}
 		if (k == nkeys)
-			hashes[nkeys++] = entries[i].ht_hash;
+			hashes[nkeys++] = entries[i].he_hash;
 	}
 	VERIFY3S(nkeys, ==, MAX_LH_ITERATORS);
 	for (uint64_t i = 0; i < count; i++) {
 		for (int k = 0; k < nkeys; k++) {
-			if (hashes[k] == entries[i].ht_hash)
+			if (hashes[k] == entries[i].he_hash)
 				expect[k]++;
 		}
 	}
@@ -844,7 +850,7 @@ hash_iterators(void)
 				uint64_t tag;
 				verify_payload(buf, sizeof (buf));
 				memcpy(&tag, buf, sizeof (tag));
-				VERIFY3U(entries[tag - 1].ht_hash, ==,
+				VERIFY3U(entries[tag - 1].he_hash, ==,
 				    hashes[k]);
 				got[k]++;
 				any = B_TRUE;
@@ -888,9 +894,9 @@ hash_iterators(void)
 }
 
 /*
- * Seeded chaos: randomized record sizes, counts, duplication levels,
- * budgets, and memory-management pacing. Whatever the targeted tests
- * miss, this net catches over many CI runs; failures replay with -s.
+ * Seeded randomization of record sizes, counts, duplication levels,
+ * budgets, and memory-management pacing. Whatever the targeted tests miss,
+ * this net should catch over many CI runs; failures replay with -s.
  */
 static void
 hash_stress(void)

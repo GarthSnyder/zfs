@@ -98,20 +98,22 @@ size_t
 allocator_memory_used(allocator_t *alloc);
 
 /*
- * Attempts to trim at least delta_bytes from the allocator's memory use and
- * returns the number of bytes actually trimmed, which may be different
- * because of internal rounding boundaries. The delta is relative to actual
- * memory use, not to the mem_size specified when the allocator was created.
+ * This function attempts to trim at least delta_bytes from the allocator's
+ * memory use and returns the number of bytes actually trimmed, which may be
+ * different because of internal rounding boundaries.
  *
  * A call to this function will always result in some trimming as long as
  * the current memory use and the specified delta_bytes are both nonzero.
  *
- * If the allocator is memory-only, the new memory budget must be sufficient
- * to accommodate all existing records. If it is not, the program will
- * abort.
- *
  * If the allocator also has disk backing, the allocator will transparently
  * move records trimmed from memory onto disk.
+ *
+ * The delta is relative to actual memory use (that is, the value returned
+ * by allocator_memory_used()), not to the mem_size specified when the
+ * allocator was created. A corollary is that you must not call this
+ * function on a memory-only allocator. There is nowhere for trimmed data to
+ * go, so it will cause the program to abort rather than silently losing
+ * data.
  */
 size_t
 allocator_trim_memory(allocator_t *alloc, size_t delta_bytes);

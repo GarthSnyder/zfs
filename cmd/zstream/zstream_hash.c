@@ -132,13 +132,6 @@ static unsigned int	next_iterator = 0;
 static lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
 
 /*
- * The generation is incremented on each insertion and split. Iterators make
- * a copy of the current generation when they are first set up. If the
- * iterator generation != the current generation, the iterator is invalid.
- */
-static uint64_t		generation = 0;
-
-/*
  * Calculate the destination bucket for a given hash value.
  *
  * lh_hash_suffix_length = hash suffix length in effect at or above the
@@ -299,7 +292,6 @@ check_split(linear_hash_t *lh)
 	    (lh->lh_num_top_level_buckets * ENTRIES_PER_BUCKET);
 	if (occupancy > MAX_OCCUPANCY) {
 		split_bucket(lh);
-		generation++;
 	}
 }
 
@@ -326,7 +318,8 @@ check_memory_use(linear_hash_t *lh)
 	}
 	ssize_t overage = total_used - (ssize_t)lh->lh_max_memory;
 	while (overage > 0) {
-		size_t to_trim = overage + lh_memory_margin;
+		size_t to_trim = overage +
+		    MIN(lh_memory_margin, lh->lh_max_memory / 8);
 		for (int i = 0; i < NUM_ALLOC; i++) {
 			if (current_use[i] > 0) {
 				size_t trimmed = allocator_trim_memory(
@@ -349,7 +342,7 @@ lh_init(size_t record_size, size_t max_mem, const char *dir)
 {
 	if (max_mem == 0 && dir == NULL)
 		errx(1, "linear_hash_t requires memory or disk backing "
-		    " (or both)");
+		    "(or both)");
 	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
@@ -393,7 +386,7 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 		lh->lh_next_memory_check = lh_mem_check_interval;
 		check_memory_use(lh);
 	}
-	generation++;
+	lh->lh_generation++;
 }
 
 lh_iterator_t *
@@ -405,7 +398,7 @@ lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 	record_ix_t bucket = bucket_for_hash(lh, hash);
 	*iter = (lh_iterator_t) {
 		.lhi_hash = hash,
-		.lhi_generation = generation,
+		.lhi_generation = lh->lh_generation,
 		.lhi_entry_iterator = ITER_BUCKET(lh, bucket)
 	};
 	return (iter);
@@ -415,7 +408,8 @@ boolean_t
 lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 {
 	ASSERT(lh_iter != NULL);
-	if (lh_iter->lhi_generation != generation)
+	uint64_t current = lh_iter->lhi_entry_iterator.ei_lh->lh_generation;
+	if (lh_iter->lhi_generation != current)
 		errx(1, "%s() called on an invalidated iterator", __func__);
 	entry_iterator_t *ei = &lh_iter->lhi_entry_iterator;
 	bucket_entry_t *entry;
