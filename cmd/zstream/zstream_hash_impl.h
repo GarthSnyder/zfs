@@ -62,6 +62,7 @@ typedef union {
 	allocator_t		*all[NUM_ALLOC];
 } lh_allocators_t;
 
+/* Format is wonky here because checkstyle doesn't understand static asserts */
 _Static_assert(sizeof (lh_allocators_t) == NUM_ALLOC * sizeof (allocator_t *),
 	    "lh_allocators_t has padding");
 
@@ -74,6 +75,7 @@ struct linear_hash {
 	int		lh_next_memory_check;	  /* # inserts before check */
 	uint64_t	lh_num_top_level_buckets;
 	uint64_t	lh_num_top_level_entries;
+	uint64_t	lh_generation;
 };
 
 /*
