@@ -62,9 +62,8 @@ typedef union {
 	allocator_t		*all[NUM_ALLOC];
 } lh_allocators_t;
 
-/* CSTYLED */
 _Static_assert(sizeof (lh_allocators_t) == NUM_ALLOC * sizeof (allocator_t *),
-    "lh_allocators_t has padding");
+	    "lh_allocators_t has padding");
 
 struct linear_hash {
 	size_t		lh_record_size;		/* Params */
@@ -97,6 +96,17 @@ struct lh_iterator {
 	uint64_t		lhi_generation;		/* Validity check */
 	entry_iterator_t	lhi_entry_iterator;
 };
+
+/*
+ * Memory-management pacing knobs (defined in zstream_hash.c). They are
+ * exposed so that selftests can exercise memory-pressure behavior at small
+ * scales: lh_memory_margin is the extra memory reclaimed beyond the strict
+ * overage whenever a clawback occurs, and lh_mem_check_interval is the
+ * number of insertions between memory-budget checks. Both are process-wide,
+ * so a caller that changes them must put them back.
+ */
+extern size_t	lh_memory_margin;
+extern int	lh_mem_check_interval;
 
 #ifdef __cplusplus
 }
