@@ -57,7 +57,8 @@ typedef struct lh_iterator lh_iterator_t;
  * hash table is disk-only.
  *
  * Because memory accounting is only performed periodically, actual memory
- * use may briefly exceed max_memory for a short time.
+ * use may briefly exceed max_memory for a short time. Because of internal
+ * rounding, max_memory should be at least 8MB.
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
