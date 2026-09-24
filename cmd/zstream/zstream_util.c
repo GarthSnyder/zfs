@@ -345,7 +345,8 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 {
 	int num_parsed = 0;
 	ASSERT(record_specifiers == NULL);
-	record_specifiers = lh_init(sizeof (record_specifier_t), 32 << 20, NULL);
+	record_specifiers = lh_init(sizeof (record_specifier_t),
+	    128 << 20, NULL);
 	for (int i = 0; i < argc; i++) {
 		record_specifier_t spec;
 		int rc = parse_record_specifier(argv[i], &spec,
