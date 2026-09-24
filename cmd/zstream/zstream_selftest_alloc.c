@@ -205,7 +205,7 @@ shadow_init(size_t record_size, size_t mem_size, boolean_t disk_backed,
 static void
 shadow_fini(shadow_allocator_t *sh)
 {
-	allocator_destroy(sh->sa_alloc);	/* Closes the backing file */
+	allocator_fini(sh->sa_alloc);	/* Closes the backing file */
 	free(sh->sa_tags);
 	free(sh->sa_state);
 	free(sh->sa_buf);

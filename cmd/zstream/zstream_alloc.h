@@ -67,7 +67,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path);
 
 /*
  * The basic API, which is essentially just read() and write() but
- * with fixed record size and abstracted across memory and disk.
+ * with fixed record sizes and abstracted across memory and disk.
  */
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);
@@ -92,7 +92,7 @@ allocator_skip(allocator_t *alloc);
 /*
  * Returns the amount of memory actually used. This includes all page
  * allocations, so it's not necessarily the same as the record size * the
- * number of records.
+ * number of records stored.
  */
 size_t
 allocator_memory_used(allocator_t *alloc);
@@ -112,8 +112,7 @@ allocator_memory_used(allocator_t *alloc);
  * by allocator_memory_used()), not to the mem_size specified when the
  * allocator was created. A corollary is that you must not call this
  * function on a memory-only allocator. There is nowhere for trimmed data to
- * go, so it will cause the program to abort rather than silently losing
- * data.
+ * go, so it will abort the program rather than silently losing data.
  */
 size_t
 allocator_trim_memory(allocator_t *alloc, size_t delta_bytes);
@@ -122,7 +121,7 @@ allocator_trim_memory(allocator_t *alloc, size_t delta_bytes);
  * Destroy allocator and free all resources.
  */
 void
-allocator_destroy(allocator_t *alloc);
+allocator_fini(allocator_t *alloc);
 
 #ifdef __cplusplus
 }

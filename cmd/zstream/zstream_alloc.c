@@ -88,7 +88,7 @@
 #define	REC_TO_ADDR(alloc, rec) OFFSET_TO_ADDR(alloc, \
 	    REC_TO_OFFSET(alloc, rec))
 
-#define	RECORD_IS_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
+#define	REC_IS_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
 	    (alloc)->a_max_memory)
 
 /*
@@ -150,12 +150,12 @@ calc_granularities(size_t record_size)
 	if (pagesize < 0) {
 		err(1, "unable to read system page size");
 	}
+	granularity_t g = { .frontier = MAX(pagesize, FRONTIER_GRANULARITY) };
 	/*
 	 * Waste (storage lost by rounding up record sizes) grows
 	 * monotonically with increasing alignment multiple, so this
 	 * calculation is guaranteed to terminate.
 	 */
-	granularity_t g;
 	size_t alignment = 1;
 	while (B_TRUE) {
 		g.stride = P2ROUNDUP(record_size, alignment);
@@ -167,7 +167,7 @@ calc_granularities(size_t record_size)
 			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
 		g.memory = least_common_multiple(pagesize, g.stride);
 		if (g.memory <= TARGET_GRANULARITY) {
-			g.frontier = MAX(pagesize, FRONTIER_GRANULARITY);
+			g.memory = (TARGET_GRANULARITY / g.memory) * g.memory;
 			return (g);
 		}
 		alignment = alignment << 1;
@@ -181,7 +181,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 	if (dir_path != NULL) {
 		fd = safe_create_temp_file(dir_path);
 	} else if (mem_size == 0) {
-		errx(1, "allocator needs disk or memory backing");
+		errx(1, "allocator_t needs either disk or memory backing");
 	}
 	granularity_t granularity = calc_granularities(record_size);
 	/*
@@ -230,6 +230,10 @@ reify_memory_up_to(allocator_t *alloc, off_t end_offset)
 	size_t avail = alloc->a_max_memory -
 	    ADDR_TO_OFFSET(alloc, alloc->a_writable_frontier);
 	if (needed > avail)
+		/*
+		 * Should never happen in practice because on-disk records
+		 * go down a separate path and don't call this function.
+		 */
 		errx(1, "allocator out of memory");
 	size_t length =
 	    MIN(P2ROUNDUP(needed, alloc->a_granularity.frontier), avail);
@@ -240,79 +244,14 @@ reify_memory_up_to(allocator_t *alloc, off_t end_offset)
 	alloc->a_writable_frontier += length;
 }
 
-/*
- * Free at least delta_bytes of memory, relative to the amount of memory
- * actually in use (not the allocator's theoretical memory limit as found in
- * a_max_memory). Since memory and disk segments share offset addresses, we
- * only need to do one copy from memory to disk to change the split point.
- *
- * Only bytes below the writable frontier are written out. Bytes between the
- * frontier and the old memory budget were never written and are logically
- * zero. The corresponding file region has never been written, so it already
- * reads back as zeros.
- *
- * Returns the amount of memory actually freed.
- */
-size_t
-allocator_trim_memory(allocator_t *alloc, size_t delta_bytes)
-{
-	ASSERT(alloc != NULL);
-	if (alloc->a_base_addr == NULL)
-		return (0);
-	ssize_t bytes_used = ADDR_TO_OFFSET(alloc, alloc->a_writable_frontier);
-	ssize_t new_max = ROUND_UP(MAX(bytes_used - (ssize_t)delta_bytes, 0),
-	    alloc->a_granularity.memory);
-	/* Always free at least one granule */
-	if (new_max >= bytes_used && bytes_used > 0) {
-		new_max -= alloc->a_granularity.memory;
-		ASSERT3U(new_max, >=, 0);
-	}
-
-	void *eject_start = alloc->a_base_addr + new_max;
-	void *eject_end = alloc->a_writable_frontier;
-	size_t bytes_to_free = MAX(0, eject_end - eject_start);
-	if (bytes_to_free > 0) {
-		if (alloc->a_fd < 0) {
-			errx(1, "no disk backing for allocator, so "
-			    "%s would lose data", __func__);
-		}
-		safe_pwrite(alloc->a_fd, eject_start, bytes_to_free, new_max);
-		void *ret = mmap(eject_start, bytes_to_free, PROT_NONE,
-		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-		if (ret == MAP_FAILED)
-			err(1, "mmap (frontier shrink) failed");
-		alloc->a_writable_frontier = eject_start;
-	}
-
-	alloc->a_max_memory = new_max;
-	return (bytes_to_free);
-}
-
-void
-allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
-{
-	VERIFY(buff != NULL);
-	if (RECORD_IS_ON_DISK(alloc, record)) {
-		if (alloc->a_fd < 0)
-			errx(1, "no disk file for allocator record %llu",
-			    (u_longlong_t)record);
-		off_t loc = REC_TO_OFFSET(alloc, record);
-		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, loc);
-	} else {
-		reify_memory_up_to(alloc, REC_TO_OFFSET(alloc, record) +
-		    alloc->a_granularity.stride);
-		memcpy(buff, REC_TO_ADDR(alloc, record), alloc->a_record_size);
-	}
-}
-
 void
 allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
 	VERIFY(buff != NULL);
-	if (RECORD_IS_ON_DISK(alloc, record)) {
+	if (REC_IS_ON_DISK(alloc, record)) {
 		if (alloc->a_fd < 0)
-			errx(1, "no disk file for allocator record %llu",
-			    (u_longlong_t)record);
+			errx(1, "no disk file for allocator record %llu "
+			    "(write)", (u_longlong_t)record);
 		off_t loc = REC_TO_OFFSET(alloc, record);
 		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, loc);
 	} else {
@@ -322,6 +261,32 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 	}
 	/* a_count is one past the highest record known to have been written */
 	alloc->a_count = MAX(alloc->a_count, record + 1);
+}
+
+void
+allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
+{
+	VERIFY(buff != NULL);
+	if (REC_IS_ON_DISK(alloc, record)) {
+		if (alloc->a_fd < 0)
+			errx(1, "no disk file for allocator record %llu (read)",
+			    (u_longlong_t)record);
+		off_t loc = REC_TO_OFFSET(alloc, record);
+		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, loc);
+	} else {
+		void *first = REC_TO_ADDR(alloc, record);
+		void *last_plus_one = first + alloc->a_granularity.stride;
+		/*
+		 * Unlike a_max_memory, a_writable_frontier may fall in the
+		 * middle of a record. But if the entire record is not
+		 * beneath a_writable_frontier, it cannot have ever been
+		 * written. So, we can safely "read" it back as zeros.
+		 */
+		if (last_plus_one <= alloc->a_writable_frontier)
+			memcpy(buff, first, alloc->a_record_size);
+		else
+			memset(buff, 0, alloc->a_record_size);
+	}
 }
 
 record_ix_t
@@ -352,8 +317,55 @@ allocator_memory_used(allocator_t *alloc)
 	    (alloc->a_writable_frontier - alloc->a_base_addr));
 }
 
+/*
+ * Free at least delta_bytes of memory, relative to the amount of memory
+ * actually in use (not the allocator's theoretical memory limit as found in
+ * a_max_memory). Since memory and disk segments share offset addresses, we
+ * only need to perform one copy from memory to disk to change the split point.
+ *
+ * Only bytes below the writable frontier are written out. Bytes between the
+ * frontier and the old memory budget were never written and are logically
+ * zero. The corresponding file region has never been written, so it already
+ * reads back as zeros.
+ *
+ * Returns the amount of memory actually freed.
+ */
+size_t
+allocator_trim_memory(allocator_t *alloc, size_t delta_bytes)
+{
+	ASSERT(alloc != NULL);
+	if (alloc->a_base_addr == NULL)
+		return (0);
+	ssize_t bytes_used = ADDR_TO_OFFSET(alloc, alloc->a_writable_frontier);
+	ssize_t new_max = ROUND_UP(MAX(bytes_used - (ssize_t)delta_bytes, 0),
+	    alloc->a_granularity.memory);
+	/* Always free at least one granule */
+	if (new_max >= bytes_used && bytes_used > 0) {
+		new_max -= alloc->a_granularity.memory;
+		ASSERT3U(new_max, >=, 0);
+	}
+
+	void *eject_start = alloc->a_base_addr + new_max;
+	void *eject_end = alloc->a_writable_frontier;
+	size_t bytes_to_free = MAX(0, eject_end - eject_start);
+	if (bytes_to_free > 0) {
+		if (alloc->a_fd < 0)
+			errx(1, "no disk backing for allocator, so "
+			    "%s would lose data", __func__);
+		safe_pwrite(alloc->a_fd, eject_start, bytes_to_free, new_max);
+		void *ret = mmap(eject_start, bytes_to_free, PROT_NONE,
+		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+		if (ret == MAP_FAILED)
+			err(1, "mmap (frontier shrink) failed");
+		alloc->a_writable_frontier = eject_start;
+	}
+
+	alloc->a_max_memory = new_max;
+	return (bytes_to_free);
+}
+
 void
-allocator_destroy(allocator_t *alloc)
+allocator_fini(allocator_t *alloc)
 {
 	VERIFY(alloc != NULL);
 	if (alloc->a_base_addr != NULL)
