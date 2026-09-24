@@ -40,7 +40,7 @@ extern "C" {
  * table declines smoothly with the number of entries.
  *
  * Hash keys are 64-bit values, and you must supply them yourself. If you
- * want to use longer hash keys, give the linear hash a 64-bit digest and
+ * want to use longer hash keys, give the hash table a 64-bit digest and
  * check returned records against the full hash value.
  */
 
@@ -57,8 +57,8 @@ typedef struct lh_iterator lh_iterator_t;
  * hash table is disk-only.
  *
  * Because memory accounting is only performed periodically, actual memory
- * use may briefly exceed max_memory for a short time. Because of internal
- * rounding, max_memory should be at least 8MB.
+ * use may exceed max_memory for a short time. Because of internal rounding,
+ * max_memory should be at least 8MB.
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
