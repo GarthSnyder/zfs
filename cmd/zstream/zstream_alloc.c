@@ -95,27 +95,34 @@
  * Allocators that use memory have two different allocation granularities
  * that are conceptually separate but that sometimes interact.
  *
- * a_memory_granularity is the granularity at which a_max_memory, the
- * boundary between memory storage and disk storage, changes. This
- * transition must always fall on an address that's both a page boundary and
- * a record boundary. That way, every record is either completely on disk or
+ * "memory" granularity is the increment by which a_max_memory, the boundary
+ * between memory storage and disk storage, moves. This transition must
+ * always fall on an address that's both a page boundary and a record
+ * boundary. That way, every record is either completely on disk or
  * completely in memory.
  *
  * The in-memory region is further subdivided at a_writable_frontier, which
  * points to the first byte of unwritable (PROT_NONE) memory. If a memory
  * byte we want to access lies beyond the frontier, we need to move the
  * frontier and mark the intervening pages as PROT_READ | PROT_WRITE. The
- * frontier advances in multiples of a_frontier_granularity to keep
+ * frontier advances in multiples of a_granularity.frontier to keep
  * mprotect() calls infrequent.
  *
- * a_memory_granularity is a "hard" value that's always enforced.
- * a_frontier_granularity is more of a vaguer "how much memory do you want
- * to allocate at once?" guideline. Conceptually, the frontier granularity
- * is finer than the memory granularity. But both are chosen with an eye to
- * the system page size, and in odd cases, the frontier granularity may
- * actually be larger. No matter; the code is designed to handle two
- * arbitrary (but page-aligned) values and will do the right thing.
+ * a_granularity.memory is a "hard" value that's always enforced.
+ * a_granularity.frontier is a vaguer "how much memory do you want to
+ * allocate at once?" guideline. Conceptually, the frontier granularity is
+ * finer than the memory granularity. But both are chosen with an eye to the
+ * system page size, and in odd cases, the frontier granularity may actually
+ * be larger. No matter; the code is designed to handle two arbitrary (but
+ * page-aligned) values and will do the right thing.
  */
+
+typedef struct {
+	size_t		memory;			/* Memory/disk boundary */
+	size_t		frontier;		/* Writable frontier w/in mem */
+	size_t		stride;			/* Record-to-record */
+} granularity_t;
+
 struct allocator {
 	int		a_fd;			/* On-disk file descriptor */
 	size_t		a_max_memory;		/* Current memory limit */
@@ -125,11 +132,47 @@ struct allocator {
 	void		*a_base_addr;		/* Start of memory segment */
 	void		*a_writable_frontier;	/* Addr of 1st non-r/w byte */
 
-	size_t		a_record_size_rounded;	/* Record-to-record offset */
-	size_t		a_memory_granularity;	/* Memory/disk boundary chunk */
-	size_t		a_frontier_granularity;	/* Memory reification chunk */
+	granularity_t	a_granularity;
 	size_t		a_vm_allocated;		/* Total VM space reserved */
 };
+
+/*
+ * Page sizes and record sizes can both vary, so we need some idea of what
+ * allocation granularity we're actually trying to achieve
+ * (TARGET_GRANULARITY). If the least common multiple of the record size and
+ * the page size is larger than this value, we can start to round up record
+ * sizes, trading some storage efficiency for a lower LCM.
+ */
+granularity_t
+calc_granularities(size_t record_size)
+{
+	ssize_t pagesize = (ssize_t)sysconf(_SC_PAGESIZE);
+	if (pagesize < 0) {
+		err(1, "unable to read system page size");
+	}
+	/*
+	 * Waste (storage lost by rounding up record sizes) grows
+	 * monotonically with increasing alignment multiple, so this
+	 * calculation is guaranteed to terminate.
+	 */
+	granularity_t g;
+	size_t alignment = 1;
+	while (B_TRUE) {
+		g.stride = P2ROUNDUP(record_size, a.alignment);
+		size_t waste_bytes = g.stride - record_size;
+		double waste_pct = (double)waste_bytes / g.stride;
+		if (waste_pct > MAX_WASTE)
+			errx(1, "unable to find an efficient rounding for "
+			    "record_size = %llu, page_size = %llu",
+			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
+		g.memory = least_common_multiple(pagesize, rsize_rounded);
+		if (granularity <= TARGET_GRANULARITY) {
+			g.frontier = MAX(pagesize, FRONTIER_GRANULARITY);
+			return (g);
+		}
+		align = align << 1;
+	}
+}
 
 allocator_t *
 allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
@@ -140,48 +183,12 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 	} else if (mem_size == 0) {
 		errx(1, "allocator needs disk or memory backing");
 	}
-
-	ssize_t pagesize = (ssize_t)sysconf(_SC_PAGESIZE);
-	if (pagesize < 0) {
-		err(1, "unable to read system page size");
-	}
-
-	/*
-	 * We want the memory-to-disk transition to occur at an address that
-	 * is both a page boundary and a record boundary. But page sizes and
-	 * record sizes can both vary, so we need some idea of what
-	 * allocation granularity we're actually trying to achieve
-	 * (TARGET_GRANULARITY). If the least common multiple of the record
-	 * size and the page size is larger than this value, we can start to
-	 * round up record sizes, trading some storage efficiency for a
-	 * lower LCM.
-	 */
-	size_t granularity, rsize_rounded;
-	size_t align = 1;
-	/*
-	 * Waste (storage lost by rounding up record sizes) grows
-	 * monotonically with increasing alignment multiple, so this
-	 * calculation is guaranteed to terminate.
-	 */
-	while (B_TRUE) {
-		rsize_rounded = P2ROUNDUP(record_size, align);
-		size_t waste_bytes = rsize_rounded - record_size;
-		double waste_pct = (double)waste_bytes / rsize_rounded;
-		if (waste_pct > MAX_WASTE)
-			errx(1, "unable to find an efficient rounding for "
-			    "record_size = %llu, page_size = %llu",
-			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
-		granularity = least_common_multiple(pagesize, rsize_rounded);
-		if (granularity <= TARGET_GRANULARITY)
-			break;
-		align = align << 1;
-	}
-
+	granularity_t granularity = calc_granularities(record_size);
 	/*
 	 * Allocate a full-size region of PROT_NONE address space.
 	 */
 	void *base = NULL;
-	size_t vm_allocation = ROUND_UP(mem_size, granularity);
+	size_t vm_allocation = ROUND_UP(mem_size, granularity.memory);
 	if (vm_allocation > 0) {
 		base = mmap(NULL, vm_allocation, PROT_NONE,
 		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -189,7 +196,6 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 			errx(1, "mmap failed in %s", __func__);
 		}
 	}
-
 	allocator_t *alloc = safe_malloc(sizeof (allocator_t));
 	*alloc = (allocator_t) {
 		.a_fd = fd,
@@ -197,9 +203,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 		.a_record_size = record_size,
 		.a_base_addr = base,
 		.a_writable_frontier = base,
-		.a_record_size_rounded = rsize_rounded,
-		.a_memory_granularity = granularity,
-		.a_frontier_granularity = MAX(pagesize, FRONTIER_GRANULARITY),
+		.a_granularity = granularity,
 		.a_vm_allocated = vm_allocation,
 	};
 	return (alloc);
@@ -228,7 +232,7 @@ reify_memory_up_to(allocator_t *alloc, off_t end_offset)
 	if (needed > avail)
 		errx(1, "allocator out of memory");
 	size_t length =
-	    MIN(P2ROUNDUP(needed, alloc->a_frontier_granularity), avail);
+	    MIN(P2ROUNDUP(needed, alloc->a_granularity.frontier), avail);
 	int rc = mprotect(alloc->a_writable_frontier, length,
 	    PROT_READ | PROT_WRITE);
 	if (rc != 0)
@@ -257,23 +261,23 @@ allocator_trim_memory(allocator_t *alloc, size_t delta_bytes)
 		return (0);
 	ssize_t bytes_used = ADDR_TO_OFFSET(alloc, alloc->a_writable_frontier);
 	ssize_t new_max = ROUND_UP(MAX(bytes_used - (ssize_t)delta_bytes, 0),
-	    alloc->a_memory_granularity);
+	    alloc->a_granularity.memory);
 	/* Always free at least one granule */
 	if (new_max >= bytes_used && bytes_used > 0) {
-		ASSERT3U(new_max, >=, alloc->a_memory_granularity);
-		new_max -= alloc->a_memory_granularity;
+		new_max -= alloc->a_granularity.memory;
+		ASSERT3U(new_max, >=, 0);
 	}
 
 	void *eject_start = alloc->a_base_addr + new_max;
 	void *eject_end = alloc->a_writable_frontier;
-	size_t freed_bytes = MAX(0, eject_end - eject_start);
-	if (freed_bytes > 0) {
+	size_t bytes_to_free = MAX(0, eject_end - eject_start);
+	if (bytes_to_free > 0) {
 		if (alloc->a_fd < 0) {
 			errx(1, "no disk backing for allocator, so "
 			    "%s would lose data", __func__);
 		}
-		safe_pwrite(alloc->a_fd, eject_start, freed_bytes, new_max);
-		void *ret = mmap(eject_start, freed_bytes, PROT_NONE,
+		safe_pwrite(alloc->a_fd, eject_start, bytes_to_free, new_max);
+		void *ret = mmap(eject_start, bytes_to_free, PROT_NONE,
 		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
 		if (ret == MAP_FAILED)
 			err(1, "mmap (frontier shrink) failed");
@@ -281,7 +285,7 @@ allocator_trim_memory(allocator_t *alloc, size_t delta_bytes)
 	}
 
 	alloc->a_max_memory = new_max;
-	return (freed_bytes);
+	return (bytes_to_free);
 }
 
 void
@@ -296,7 +300,7 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, loc);
 	} else {
 		reify_memory_up_to(alloc, REC_TO_OFFSET(alloc, record) +
-		    alloc->a_record_size_rounded);
+		    alloc->a_granularity.stride);
 		memcpy(buff, REC_TO_ADDR(alloc, record), alloc->a_record_size);
 	}
 }
@@ -313,7 +317,7 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, loc);
 	} else {
 		reify_memory_up_to(alloc, REC_TO_OFFSET(alloc, record) +
-		    alloc->a_record_size_rounded);
+		    alloc->a_granularity.stride);
 		memcpy(REC_TO_ADDR(alloc, record), buff, alloc->a_record_size);
 	}
 	/* a_count is one past the highest record known to have been written */

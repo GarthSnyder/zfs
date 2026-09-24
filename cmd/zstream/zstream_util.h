@@ -40,6 +40,8 @@ extern "C" {
  */
 #define	ROUND_UP(size, align) ((((size) + (align) - 1) / (align)) * (align))
 
+#define	PESSIMAL_ALIGNMENT _Alignof(worst_case_alignment_t)
+
 /*
  * As with the libzfs-native ZIO_* encodings, only zstd compression has a
  * separately-defined level. gzip levels are bundled into the compression
@@ -55,6 +57,13 @@ typedef struct {
 	uint64_t		rs_offset;
 	compression_spec_t	rs_compression;
 } record_specifier_t;
+
+typedef union {
+	long long	ll;
+	long double	ld;
+	void		*p;
+	void		(*fp)(void);
+} worst_case_alignment_t;
 
 typedef void *
 thread_f(void *);
