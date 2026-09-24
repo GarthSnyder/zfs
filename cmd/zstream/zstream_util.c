@@ -25,6 +25,7 @@
  */
 
 #include <assert.h>
+#include <cityhash.h>
 #include <err.h>
 #include <errno.h>
 #include <libzfs.h>
@@ -49,14 +50,14 @@
 #include <unistd.h>
 
 #include "zstream_util.h"
+#include "zstream_hash.h"
 
 #if defined(__linux__)
 #include <linux/falloc.h>
 #endif
 
-#define	KEYSIZE 128
-
-libzfs_handle_t *libzfs_handle = NULL;
+linear_hash_t	*record_specifiers = NULL;
+libzfs_handle_t	*libzfs_handle = NULL;
 
 void *
 safe_malloc(size_t size)
@@ -287,7 +288,7 @@ parse_record_specifier(const char *str, record_specifier_t *rec,
 	char *buff = static_buff;
 	char *loc;
 	char *obj_str, *offset_str, *end;
-	boolean_t bad = B_TRUE;
+	int return_code = -1;
 	size_t in_size = strlen(str) + 1;
 
 	if (in_size > sizeof (static_buff)) {
@@ -320,16 +321,16 @@ parse_record_specifier(const char *str, record_specifier_t *rec,
 			goto bail;
 		}
 	}
-	bad = B_FALSE;
+	return_code = 0;
 
 bail:	if (buff != static_buff)
 		free(buff);
-	return (bad ? -1 : 0);
+	return (return_code);
 }
 
 /*
  * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the
- * command line as possible, entering them into an hcreate() hash table. The
+ * command line as possible, entering them into a hash table. The
  * OBJECT/OFFSET pairs become the keys and the compression types become the
  * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
  * a placeholder value. This is also the default when accept_compression
@@ -343,11 +344,7 @@ int
 parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 {
 	int num_parsed = 0;
-	char *key;
-
-	if (hcreate(argc) == 0)
-		errx(1, "hcreate failed");
-
+	record_specifiers = lh_init(sizeof (record_specifier_t), 8 << 20, NULL);
 	for (int i = 0; i < argc; i++) {
 		record_specifier_t spec;
 		int rc = parse_record_specifier(argv[i], &spec,
@@ -355,16 +352,8 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		if (rc != 0) {
 			break;
 		}
-		int n_chars = asprintf(&key, "%llu,%llu",
-		    (u_longlong_t)spec.rs_object,
-		    (u_longlong_t)spec.rs_offset);
-		if (n_chars < 0)
-			err(1, "asprintf");
-		ENTRY e = { .key = key };
-		ENTRY *p = hsearch(e, ENTER);
-		if (p == NULL)
-			errx(1, "hsearch failed");
-		p->data = (void *)(intptr_t)spec.rs_compression.cs_type;
+		uint64_t key = cityhash2(spec.rs_object, spec.rs_offset);
+		lh_insert(record_specifiers, key, &spec);
 		num_parsed++;
 	}
 	/*
@@ -385,25 +374,25 @@ boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype)
 {
-	char key[KEYSIZE];
-	boolean_t found = B_FALSE;
-	int n_chars = snprintf(key, sizeof (key), "%llu,%llu",
-	    (u_longlong_t)object, (u_longlong_t)offset);
-	if (n_chars < 0 || (size_t)n_chars >= sizeof (key))
-		errx(1, "snprintf");
-	ENTRY e = { .key = key };
-	ENTRY *p = hsearch(e, FIND);
-	if (p != NULL) {
-		*ctype = (enum zio_compress)(intptr_t)p->data;
-		found = B_TRUE;
+	record_specifier_t spec;
+	uint64_t key = cityhash2(object, offset);
+	lh_iterator_t *iter = lh_initiate_retrieve(record_specifiers, key);
+	while (lh_retrieve_next(iter, &spec)) {
+		if (spec.rs_object == object && spec.rs_offset == offset) {
+			*ctype = spec.rs_compression.cs_type;
+			return (B_TRUE);
+		}
 	}
-	return (found);
+	return (B_FALSE);
 }
 
 void
 destroy_record_specifier_hash(void)
 {
-	hdestroy();
+	if (record_specifiers != NULL) {
+		lh_destroy(record_specifiers);
+		record_specifiers = NULL;
+	}
 }
 
 boolean_t
