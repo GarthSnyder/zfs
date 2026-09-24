@@ -82,7 +82,7 @@
  */
 #define	FRONTIER_GRANULARITY	(8 << 20)	/* 8MB */
 
-#define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_record_size_rounded)
+#define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_granularity.stride)
 #define	OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
 #define	ADDR_TO_OFFSET(alloc, addr) ((addr) - (alloc)->a_base_addr)
 #define	REC_TO_ADDR(alloc, rec) OFFSET_TO_ADDR(alloc, \
@@ -143,7 +143,7 @@ struct allocator {
  * the page size is larger than this value, we can start to round up record
  * sizes, trading some storage efficiency for a lower LCM.
  */
-granularity_t
+static granularity_t
 calc_granularities(size_t record_size)
 {
 	ssize_t pagesize = (ssize_t)sysconf(_SC_PAGESIZE);
@@ -158,19 +158,19 @@ calc_granularities(size_t record_size)
 	granularity_t g;
 	size_t alignment = 1;
 	while (B_TRUE) {
-		g.stride = P2ROUNDUP(record_size, a.alignment);
+		g.stride = P2ROUNDUP(record_size, alignment);
 		size_t waste_bytes = g.stride - record_size;
 		double waste_pct = (double)waste_bytes / g.stride;
 		if (waste_pct > MAX_WASTE)
 			errx(1, "unable to find an efficient rounding for "
 			    "record_size = %llu, page_size = %llu",
 			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
-		g.memory = least_common_multiple(pagesize, rsize_rounded);
-		if (granularity <= TARGET_GRANULARITY) {
+		g.memory = least_common_multiple(pagesize, g.stride);
+		if (g.memory <= TARGET_GRANULARITY) {
 			g.frontier = MAX(pagesize, FRONTIER_GRANULARITY);
 			return (g);
 		}
-		align = align << 1;
+		alignment = alignment << 1;
 	}
 }
 
