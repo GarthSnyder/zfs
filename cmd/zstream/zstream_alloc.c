@@ -31,6 +31,44 @@
 #include "zstream_util.h"
 
 /*
+ * This implementation exploits two features common to most systems in the
+ * UNIX lineage,
+ *
+ * - The first is support for write holes in filesystems. For a dual-backed
+ *   allocator, the memory-resident portion of the data is treated as an
+ *   overlay of the first part of the backing file. Memory and disk share the
+ *   same offset addressing scheme for records: record 100 is always at 100 *
+ *   a_record_size_rounded, whether it's in memory or on disk.
+ *
+ *   The first part of the disk file hides underneath the memory overlay and
+ *   is never written to. Ergo, it occupies no actual storage space. Since
+ *   memory and disk have common addressing, they can be rebalanced with a
+ *   single write when the memory budget changes.
+ *
+ *   If the backing file's filesystem does not support holes (unlikely but
+ *   possible), the code is still correct. However, actual disk space
+ *   consumption will be higher.
+ *
+ * - The second feature is the use of PROT_NONE for virtual pages. You can't
+ *   do anything with these pages, so they are essentially free. They do not
+ *   consume physical memory, TLB entries, or swap space. Because of that,
+ *   allocators can request a large, contiguous VM allocation up front and
+ *   never need to change their addressing scheme, even as memory use
+ *   parameters change.
+ *
+ *   When the allocator needs more pages to work with, it incrementally
+ *   changes their protection from PROT_NONE to PROT_READ | PROT_WRITE, at
+ *   which point they acquire swap reservations and are charged against
+ *   the RSS.
+ *
+ * If the memory budget is reduced, trailing pages are transferred to
+ * disk and then replaced with a fresh PROT_NONE anonymous mapping
+ * (MAP_FIXED). Remapping, unlike a bare mprotect(PROT_NONE), both returns
+ * the physical pages to the kernel and guarantees that the region reads
+ * as zeros if it is later re-exposed.
+ */
+
+/*
  * Inputs to the record-size rounding calculation in allocator_init(). See
  * the discussion there for details. TARGET_GRANULARITY is an upper bound.
  */
@@ -54,49 +92,36 @@
 	    (alloc)->a_max_memory)
 
 /*
- * This implementation exploits two features common to most systems in
- * the UNIX lineage,
+ * Allocators that use memory have two different allocation granularities
+ * that are conceptually separate but that sometimes interact.
  *
- * - The first is support for write holes in filesystems. For a dual-backed
- *   allocator, the memory-resident portion of the data is treated as an
- *   overlay of the first part of the backing file. Memory and disk share
- *   the same offset addressing scheme for records: record 100 is always at
- *   100 * a_record_size_rounded, whether it's in memory or on disk.
+ * a_memory_granularity is the granularity at which a_max_memory, the
+ * boundary between memory storage and disk storage, changes. This
+ * transition must always fall on an address that's both a page boundary and
+ * a record boundary. That way, every record is either completely on disk or
+ * completely in memory.
  *
- *   The first part of the disk file hides underneath the overlay and is never
- *   written to. Ergo, it occupies no actual storage space. Since memory and
- *   disk have common addressing, they can be rebalanced with a single write
- *   when the memory budget changes.
+ * The in-memory region is further subdivided at a_writable_frontier, which
+ * points to the first byte of unwritable (PROT_NONE) memory. If a memory
+ * byte we want to access lies beyond the frontier, we need to move the
+ * frontier and mark the intervening pages as PROT_READ | PROT_WRITE. The
+ * frontier advances in multiples of a_frontier_granularity to keep
+ * mprotect() calls infrequent.
  *
- *   If the backing file's filesystem does not support holes (unlikely but
- *   possible), the code is still correct. However, actual disk space
- *   consumption will be higher.
- *
- * - The second feature is the use of PROT_NONE for virtual pages. You can't
- *   do anything with these pages, so they are essentially free. They do not
- *   consume physical memory, TLB entries, or swap space. Because of that,
- *   allocators can request a large, contiguous VM allocation up front and
- *   never need to change their addressing scheme, even as memory use
- *   parameters change.
- *
- *   When the allocator needs more pages to work with, it incrementally
- *   changes their protection from PROT_NONE to PROT_READ | PROT_WRITE, at
- *   which point they acquire swap reservations and the other normal trappings
- *   of memory.
- *
- *   If the memory budget is reduced, the trailing pages are transferred to
- *   disk and then replaced with a fresh PROT_NONE anonymous mapping
- *   (MAP_FIXED). Remapping, unlike a bare mprotect(PROT_NONE), both returns
- *   the physical pages to the kernel immediately and guarantees that the
- *   region reads as zeros if it is later re-exposed.
+ * a_memory_granularity is a "hard" value that's always enforced.
+ * a_frontier_granularity is more of a vaguer "how much memory do you want
+ * to allocate at once?" guideline. Conceptually, the frontier granularity
+ * is finer than the memory granularity. But both are chosen with an eye to
+ * the system page size, and in odd cases, the frontier granularity may
+ * actually be larger. No matter; the code is designed to handle two
+ * arbitrary (but page-aligned) values and will do the right thing.
  */
-
 struct allocator {
 	int		a_fd;			/* On-disk file descriptor */
 	size_t		a_max_memory;		/* Current memory limit */
 	size_t		a_record_size;		/* As specified by the client */
 
-	uint64_t	a_count;		/* Number of records stored */
+	uint64_t	a_count;		/* Highest index stored +1 */
 	void		*a_base_addr;		/* Start of memory segment */
 	void		*a_writable_frontier;	/* Addr of 1st non-r/w byte */
 
@@ -123,14 +148,13 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 
 	/*
 	 * We want the memory-to-disk transition to occur at an address that
-	 * is both a page boundary and a record boundary. That way, every
-	 * record is either completely on disk or completely in memory.
-	 *
-	 * However, page sizes and record sizes can both vary, so we need
-	 * some idea of what allocation granularity we're trying to achieve
-	 * (TARGET_GRANULARITY). If the natural LCM of the record size and
-	 * page size is larger than this value, we can start to round up
-	 * record sizes, trading some storage efficiency for a lower LCM.
+	 * is both a page boundary and a record boundary. But page sizes and
+	 * record sizes can both vary, so we need some idea of what
+	 * allocation granularity we're actually trying to achieve
+	 * (TARGET_GRANULARITY). If the least common multiple of the record
+	 * size and the page size is larger than this value, we can start to
+	 * round up record sizes, trading some storage efficiency for a
+	 * lower LCM.
 	 */
 	size_t granularity, rsize_rounded;
 	size_t align = 1;
@@ -154,7 +178,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 	}
 
 	/*
-	 * Allocate a full-size chunk of PROT_NONE address space.
+	 * Allocate a full-size region of PROT_NONE address space.
 	 */
 	void *base = NULL;
 	size_t vm_allocation = ROUND_UP(mem_size, granularity);
@@ -183,16 +207,8 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 
 /*
  * Reify: to make something abstract more concrete or real. Here it means to
- * convert an address range we already own into writable pages.
- *
- * a_max_memory locates the boundary between memory and disk storage. The
- * memory region is further subdivided at a_writable_frontier, which points
- * to the first byte of the current PROT_NONE region.
- *
- * PROT_NONE pages can't be read or written to. If a byte we want to access
- * lies beyond the frontier, we need to move the frontier and mark the
- * intervening pages as PROT_READ | PROT_WRITE. The frontier advances in
- * multiples of a_frontier_granularity to keep mprotect() calls infrequent.
+ * convert an address range we already own into writable pages. That is, we
+ * re-protect it from PROT_NONE to PROT_READ | PROT_WRITE.
  *
  * The end_offset parameter and the a_writable_frontier pointer are both
  * "+1" markers. That is, everything below a_writable_fronter is already
@@ -222,9 +238,9 @@ reify_memory_up_to(allocator_t *alloc, off_t end_offset)
 
 /*
  * Free at least delta_bytes of memory, relative to the amount of memory
- * actually in use (not the allocator's theoretical memory limit). Since
- * memory and disk segments share offset addresses, we only need to do one
- * copy from memory to disk to change the split point.
+ * actually in use (not the allocator's theoretical memory limit as found in
+ * a_max_memory). Since memory and disk segments share offset addresses, we
+ * only need to do one copy from memory to disk to change the split point.
  *
  * Only bytes below the writable frontier are written out. Bytes between the
  * frontier and the old memory budget were never written and are logically
