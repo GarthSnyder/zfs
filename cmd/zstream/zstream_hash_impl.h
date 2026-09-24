@@ -100,12 +100,13 @@ struct lh_iterator {
 };
 
 /*
- * Memory-management pacing knobs (defined in zstream_hash.c). They are
- * exposed so that selftests can exercise memory-pressure behavior at small
- * scales: lh_memory_margin is the extra memory reclaimed beyond the strict
- * overage whenever a clawback occurs, and lh_mem_check_interval is the
- * number of insertions between memory-budget checks. Both are process-wide,
- * so a caller that changes them must put them back.
+ * Memory-management controls defined in zstream_hash.c. They're exposed
+ * here so that selftests can exercise memory-pressure behavior at small
+ * scales.
+ *
+ * lh_memory_margin is the extra memory reclaimed beyond the strict overage
+ * whenever a memory clawback occurs. lh_mem_check_interval is the number of
+ * insertions between memory-budget checks. Both are process-wide values.
  */
 extern size_t	lh_memory_margin;
 extern int	lh_mem_check_interval;

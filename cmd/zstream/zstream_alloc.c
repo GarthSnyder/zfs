@@ -166,7 +166,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 		}
 	}
 
-	allocator_t *alloc = safe_calloc(sizeof (allocator_t));
+	allocator_t *alloc = safe_malloc(sizeof (allocator_t));
 	*alloc = (allocator_t) {
 		.a_fd = fd,
 		.a_max_memory = vm_allocation,
