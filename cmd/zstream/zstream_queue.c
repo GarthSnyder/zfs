@@ -188,13 +188,6 @@ typedef struct {
 	uint64_t	tp_unclaimed;		/* Atomic, all queues */
 } thread_pool_t;
 
-typedef union {
-	long long	ll;
-	long double	ld;
-	void		*p;
-	void		(*fp)(void);
-} worst_case_alignment_t;
-
 static void *queue_worker(void *);
 static void *dispatch_worker(void *);
 
@@ -333,7 +326,7 @@ zstream_queue_create(zq_params_t *params)
 #endif
 
 	size_t qpis_rounded = P2ROUNDUP(params->qp_item_size,
-	    _Alignof(worst_case_alignment_t));
+	    PESSIMAL_ALIGNMENT);
 	uint8_t *items = safe_malloc(ZQ_SLOTS_PER_QUEUE * qpis_rounded);
 	for (int i = 0; i < ZQ_SLOTS_PER_QUEUE; i++) {
 		queue->zq_slots[i].qs_item =
