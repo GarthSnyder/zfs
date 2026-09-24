@@ -344,7 +344,8 @@ int
 parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 {
 	int num_parsed = 0;
-	record_specifiers = lh_init(sizeof (record_specifier_t), 8 << 20, NULL);
+	ASSERT(record_specifiers == NULL);
+	record_specifiers = lh_init(sizeof (record_specifier_t), 32 << 20, NULL);
 	for (int i = 0; i < argc; i++) {
 		record_specifier_t spec;
 		int rc = parse_record_specifier(argv[i], &spec,
@@ -366,9 +367,9 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 }
 
 /*
- * Returns a raw zio_compress value rather than a compression_spec_t because
- * no clients are interested in compression levels. They just need to know
- * compression type.
+ * Retrieves a raw zio_compress value rather than a compression_spec_t
+ * because no clients are interested in compression levels. They just need
+ * to know compression type. Returns B_TRUE if a matching record was found.
  */
 boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
