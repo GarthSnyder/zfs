@@ -132,6 +132,36 @@ static unsigned int	next_iterator = 0;
 static lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
 
 /*
+ * Every allocator_t is initialized to the same maximum memory size. We do
+ * memory management from the hash (rather than the allocators) so that we
+ * can control the order in which data gets spilled to disk.
+ */
+linear_hash_t *
+lh_init(size_t record_size, size_t max_mem, const char *dir)
+{
+	if (max_mem == 0 && dir == NULL)
+		errx(1, "linear_hash_t requires memory or disk backing "
+		    "(or both)");
+	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
+	*lh = (linear_hash_t) {
+		.lh_record_size = record_size,
+		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
+		.lh_max_memory = max_mem,
+		.lh_num_top_level_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH
+	};
+	size_t sizes[] = {record_size, sizeof (bucket_t), sizeof (bucket_t)};
+	for (int i = 0; i < NUM_ALLOC; i++) {
+		lh->lh_alloc.all[i] = allocator_init(sizes[i], max_mem, dir);
+		if (lh->lh_alloc.all[i] == NULL)
+			errx(1, "failed to initialize linear hash allocators");
+	}
+	/* The index 0 is a sentinel value for these allocators */
+	allocator_skip(lh->lh_alloc.data);
+	allocator_skip(lh->lh_alloc.overflow);
+	return (lh);
+}
+
+/*
  * Calculate the destination bucket for a given hash value.
  *
  * lh_hash_suffix_length = hash suffix length in effect at or above the
@@ -330,36 +360,6 @@ check_memory_use(linear_hash_t *lh)
 			}
 		}
 	}
-}
-
-/*
- * Every allocator_t is initialized to the same maximum memory size. We do
- * memory management from the hash (rather than the allocators) so that we
- * can control the order in which data gets spilled to disk.
- */
-linear_hash_t *
-lh_init(size_t record_size, size_t max_mem, const char *dir)
-{
-	if (max_mem == 0 && dir == NULL)
-		errx(1, "linear_hash_t requires memory or disk backing "
-		    "(or both)");
-	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
-	*lh = (linear_hash_t) {
-		.lh_record_size = record_size,
-		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
-		.lh_max_memory = max_mem,
-		.lh_num_top_level_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH
-	};
-	size_t sizes[] = {record_size, sizeof (bucket_t), sizeof (bucket_t)};
-	for (int i = 0; i < NUM_ALLOC; i++) {
-		lh->lh_alloc.all[i] = allocator_init(sizes[i], max_mem, dir);
-		if (lh->lh_alloc.all[i] == NULL)
-			errx(1, "failed to initialize linear hash allocators");
-	}
-	/* The index 0 is a sentinel value for these allocators */
-	allocator_skip(lh->lh_alloc.data);
-	allocator_skip(lh->lh_alloc.overflow);
-	return (lh);
 }
 
 void
