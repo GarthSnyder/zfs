@@ -27,13 +27,14 @@
 #include "zstream_util.h"
 
 /*
- * More details about linear hashing:
+ * The Wikipedia article for linear hashing isn't all that thorough, so here
+ * are a few more details on the basic concept.
  *
  * Hash keys are masked to reduce their effective length. At any given time,
  * two mask lengths are in use, the longer being one bit longer than the
  * shorter. Buckets hashed with the long mask appear at the beginning of the
  * table, and the remaining buckets follow. A cursor, the split pointer,
- * points to the first bucket hashed with a shorter mask.
+ * points to the first bucket hashed with the shorter mask.
  *
  *      +----------------------------+ <- index 0
  *      |                            |
@@ -76,9 +77,9 @@
  * This scheme grows the table linearly and incrementally. It's useful for
  * stream processing because it's space-efficient and because we often don't
  * know how long the input stream will be. When the table becomes too large
- * to keep in memory, it can spill over to disk storage without abandoning
- * or reshuffling the existing in-memory entries. If 90% of buckets are in
- * memory, then 90% of lookups will happen at memory speed.
+ * to keep in memory, the tail can spill over to disk storage without
+ * abandoning or reshuffling the existing in-memory entries. If 90% of
+ * buckets are in memory, then 90% of lookups will happen at memory speed.
  *
  * This implementation uses open hashing (overflow buckets) and is
  * insert-only. Linear hashing allows deletions, but they're not useful here
@@ -125,8 +126,8 @@
  * clawbacks (a few dozen) over its lifetime rather than suffering many
  * small bites.
  */
-size_t	lh_memory_margin	= 64ULL << 20;	/* 64MB */
-int	lh_mem_check_interval	= 4096;		/* Insertions per check */
+size_t	lh_memory_margin	= 32ULL << 20;	/* 32MB */
+int	lh_mem_check_interval	= 8192;		/* Insertions per check */
 
 static unsigned int	next_iterator = 0;
 static lh_iterator_t	lh_iterators[MAX_LH_ITERATORS];
@@ -140,21 +141,19 @@ linear_hash_t *
 lh_init(size_t record_size, size_t max_mem, const char *dir)
 {
 	if (max_mem == 0 && dir == NULL)
-		errx(1, "linear_hash_t requires memory or disk backing "
-		    "(or both)");
+		errx(1, "linear_hash_t requires memory or disk backing");
 	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
+		.lh_alloc = {
+		    .data = allocator_init(record_size, max_mem, dir),
+		    .overflow = allocator_init(sizeof (bucket_t), max_mem, dir),
+		    .bucket = allocator_init(sizeof (bucket_t), max_mem, dir),
+		},
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
 		.lh_max_memory = max_mem,
 		.lh_num_top_level_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH
 	};
-	size_t sizes[] = {record_size, sizeof (bucket_t), sizeof (bucket_t)};
-	for (int i = 0; i < NUM_ALLOC; i++) {
-		lh->lh_alloc.all[i] = allocator_init(sizes[i], max_mem, dir);
-		if (lh->lh_alloc.all[i] == NULL)
-			errx(1, "failed to initialize linear hash allocators");
-	}
 	/* The index 0 is a sentinel value for these allocators */
 	allocator_skip(lh->lh_alloc.data);
 	allocator_skip(lh->lh_alloc.overflow);
@@ -200,8 +199,8 @@ save_bucket(entry_iterator_t *iter, boolean_t force)
 }
 
 /*
- * Prepares an entry iterator to examine the next bucket entry. Updates
- * entry_iterator struct and returns a pointer to the current bucket entry.
+ * Prepares an entry iterator to examine the next bucket entry. Updates the
+ * entry_iterator_t struct and returns a pointer to the current bucket entry.
  * Returns NULL when there are no more entries, or, alternately, extends the
  * bucket chain indefinitely.
  */
@@ -221,7 +220,7 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 		} else if (!extend) {
 			return (NULL);
 		} else {
-			/* Extend by adding overflow bucket */
+			/* Extend by adding an overflow bucket */
 			record_ix_t record =
 			    allocator_skip(iter->ei_lh->lh_alloc.overflow);
 			iter->ei_bucket.b_overflow = record;
@@ -249,12 +248,12 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
  * During the partition pass, the source bucket has both a read iterator and
  * a write iterator. This is fine because each iterator has its own copy of
  * the bucket and the read iterator will always precede the write iterator.
- * The bucket will not be modified through the read iterator.
+ * The bucket is not modified through the read iterator.
  *
  * At steady state, bucket entries are packed at the front of buckets and
  * all inactive entries are zeroed out. The first entry with a record number
- * of 0 marks the end of entries. After partitioning a bucket, we have to
- * zero out its now-unoccupied tail.
+ * of 0 marks the end of entries. So after partitioning a bucket, we have to
+ * zero out its now-potentially-unoccupied tail.
  */
 static void
 split_bucket(linear_hash_t *lh)
@@ -283,9 +282,7 @@ split_bucket(linear_hash_t *lh)
 		bucket_entry_t *dest_be = entry_iterator_next(dest, B_TRUE);
 		if (!dest->ei_in_overflow)
 			lh->lh_num_top_level_entries++;
-		/* Don't mark dirty unless actually modified */
-		if (source_be->be_record != dest_be->be_record ||
-		    source_be->be_hash != dest_be->be_hash) {
+		if (source_be->be_record != dest_be->be_record) {
 			*dest_be = *source_be;
 			dest->ei_dirty = B_TRUE;
 		}
@@ -393,7 +390,7 @@ lh_iterator_t *
 lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash)
 {
 	ASSERT(lh != NULL);
-	unsigned int which_iterator = next_iterator++ % MAX_LH_ITERATORS;
+	unsigned which_iterator = next_iterator++ % MAX_LH_ITERATORS;
 	lh_iterator_t *iter = &lh_iterators[which_iterator];
 	record_ix_t bucket = bucket_for_hash(lh, hash);
 	*iter = (lh_iterator_t) {
@@ -410,7 +407,7 @@ lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 	ASSERT(lh_iter != NULL);
 	uint64_t current = lh_iter->lhi_entry_iterator.ei_lh->lh_generation;
 	if (lh_iter->lhi_generation != current)
-		errx(1, "%s() called on an invalidated iterator", __func__);
+		errx(1, "%s called on an invalidated iterator", __func__);
 	entry_iterator_t *ei = &lh_iter->lhi_entry_iterator;
 	bucket_entry_t *entry;
 	while ((entry = entry_iterator_next(ei, B_FALSE))) {
@@ -426,11 +423,11 @@ lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 }
 
 void
-lh_destroy(linear_hash_t *lh) {
+lh_fini(linear_hash_t *lh) {
 	VERIFY(lh != NULL);
 	for (int i = 0; i < NUM_ALLOC; i++) {
 		if (lh->lh_alloc.all[i] != NULL)
-			allocator_destroy(lh->lh_alloc.all[i]);
+			allocator_fini(lh->lh_alloc.all[i]);
 	}
 	free(lh);
 }

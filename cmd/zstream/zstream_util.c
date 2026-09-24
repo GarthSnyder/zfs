@@ -345,7 +345,8 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 {
 	int num_parsed = 0;
 	ASSERT(record_specifiers == NULL);
-	record_specifiers = lh_init(sizeof (record_specifier_t), 32 << 20, NULL);
+	record_specifiers = lh_init(sizeof (record_specifier_t),
+	    256 << 20, NULL);
 	for (int i = 0; i < argc; i++) {
 		record_specifier_t spec;
 		int rc = parse_record_specifier(argv[i], &spec,
@@ -388,10 +389,10 @@ lookup_record_specifier(uint64_t object, uint64_t offset,
 }
 
 void
-destroy_record_specifier_hash(void)
+record_specifier_hash_fini(void)
 {
 	if (record_specifiers != NULL) {
-		lh_destroy(record_specifiers);
+		lh_fini(record_specifiers);
 		record_specifiers = NULL;
 	}
 }
