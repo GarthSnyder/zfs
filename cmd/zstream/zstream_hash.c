@@ -149,8 +149,8 @@ lh_init(size_t record_size, size_t max_mem, const char *dir)
 		.lh_alloc = {
 		    .data = allocator_init(record_size, max_mem, dir),
 		    .overflow = allocator_init(sizeof (bucket_t), max_mem, dir),
-		    .data = allocator_init(sizeof (bucket_t), max_mem, dir),
-		}
+		    .bucket = allocator_init(sizeof (bucket_t), max_mem, dir),
+		},
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
 		.lh_max_memory = max_mem,
 		.lh_num_top_level_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH
