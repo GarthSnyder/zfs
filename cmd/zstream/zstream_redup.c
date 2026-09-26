@@ -242,6 +242,6 @@ zstream_do_redup(int argc, char *argv[])
 	}
 
 	fclose(context.rc_fp);
-	lh_destroy(context.rc_hash);
+	lh_fini(context.rc_hash);
 	return (0);
 }

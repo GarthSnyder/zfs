@@ -175,7 +175,7 @@ lookup_record_specifier(uint64_t object, uint64_t offset,
  * Frees the hash table used by lookup_record_specifier().
  */
 void
-destroy_record_specifier_hash(void);
+record_specifier_hash_fini(void);
 
 boolean_t
 write_is_encrypted(struct drr_write *drrw);

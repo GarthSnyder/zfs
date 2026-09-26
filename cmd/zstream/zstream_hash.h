@@ -89,7 +89,7 @@ boolean_t
 lh_retrieve_next(lh_iterator_t *iter, void *buffer);
 
 void
-lh_destroy(linear_hash_t *lh);
+lh_fini(linear_hash_t *lh);
 
 #ifdef	__cplusplus
 }

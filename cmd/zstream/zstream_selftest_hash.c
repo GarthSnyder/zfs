@@ -425,7 +425,7 @@ run_hash_workload(const htest_config_t *cfg)
 	lh_mem_check_interval = saved_interval;
 	if (cfg->hc_keep)
 		return (lh);
-	lh_destroy(lh);
+	lh_fini(lh);
 	return (NULL);
 }
 
@@ -477,7 +477,7 @@ hash_basic(void)
 	VERIFY(!lh_retrieve_next(iter, buf));
 
 	VERIFY(lh_validate(lh, 3));
-	lh_destroy(lh);
+	lh_fini(lh);
 }
 
 /*
@@ -556,7 +556,7 @@ hash_splits(void)
 	 * amount of growth the workload should have forced.)
 	 */
 	VERIFY3U(lh->lh_num_top_level_buckets, >, 1ULL << 13);
-	lh_destroy(lh);
+	lh_fini(lh);
 }
 
 /*
@@ -601,7 +601,7 @@ hash_adversarial(void)
 	VERIFY(lh_validate(lh, count));
 	verify_table(lh, entries, count, &rng);
 	free(entries);
-	lh_destroy(lh);
+	lh_fini(lh);
 }
 
 /*
@@ -645,7 +645,7 @@ hash_no_disk(void)
 
 	/* Nothing was ever written to disk, so everything is resident */
 	VERIFY3U(total_mem_used(lh), >, 0);
-	lh_destroy(lh);
+	lh_fini(lh);
 }
 
 /*
@@ -707,7 +707,7 @@ hash_memory_pressure(void)
 	verify_table(lh, entries, count, &rng);
 
 	free(entries);
-	lh_destroy(lh);
+	lh_fini(lh);
 	lh_memory_margin = saved_margin;
 	lh_mem_check_interval = saved_interval;
 }
@@ -776,7 +776,7 @@ hash_pressure_priority(void)
 	verify_table(lh, entries, count, &rng);
 
 	free(entries);
-	lh_destroy(lh);
+	lh_fini(lh);
 	lh_memory_margin = saved_margin;
 	lh_mem_check_interval = saved_interval;
 }
@@ -889,8 +889,8 @@ hash_iterators(void)
 	VERIFY3U(nb, ==, 100);
 
 	free(entries);
-	lh_destroy(lh2);
-	lh_destroy(lh);
+	lh_fini(lh2);
+	lh_fini(lh);
 }
 
 /*
