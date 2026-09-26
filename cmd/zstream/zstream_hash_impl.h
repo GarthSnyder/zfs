@@ -62,19 +62,23 @@ typedef union {
 	allocator_t		*all[NUM_ALLOC];
 } lh_allocators_t;
 
-/* Format is wonky here because checkstyle doesn't understand static asserts */
 _Static_assert(sizeof (lh_allocators_t) == NUM_ALLOC * sizeof (allocator_t *),
 	    "lh_allocators_t has padding");
 
+typedef struct {
+	uint64_t	top_buckets;
+	uint64_t	top_entries;
+	uint64_t	max_top_entries;
+} lh_stats_t;
+
 struct linear_hash {
-	size_t		lh_record_size;		/* Params */
+	size_t		lh_record_size;		  /* Params */
 	uint64_t	lh_max_memory;
 	lh_allocators_t	lh_alloc;
 	uint8_t		lh_hash_suffix_length;	  /* Granularity above split */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
 	int		lh_next_memory_check;	  /* # inserts before check */
-	uint64_t	lh_num_top_level_buckets;
-	uint64_t	lh_num_top_level_entries;
+	lh_stats_t	lh_stats;
 	uint64_t	lh_generation;
 };
 
