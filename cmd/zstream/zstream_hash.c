@@ -100,8 +100,11 @@
  * to selftests.
  */
 
-#define	MAX_OCCUPANCY			0.75
 #define	INITIAL_HASH_SUFFIX_LENGTH	10
+#define	MAX_OCCUPANCY			0.75
+
+#define	MAX_TOP_ENTRIES(top_buckets)	\
+	    (double)((top_buckets) * ENTRIES_PER_BUCKET) * MAX_OCCUPANCY
 
 #define	ITER_BUCKET(lh, bucket) {					\
 		.ei_lh = lh,						\
@@ -143,6 +146,7 @@ lh_init(size_t record_size, size_t max_mem, const char *dir)
 	if (max_mem == 0 && dir == NULL)
 		errx(1, "linear_hash_t requires memory or disk backing");
 	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
+	uint64_t top_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH;
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
 		.lh_alloc = {
@@ -152,7 +156,10 @@ lh_init(size_t record_size, size_t max_mem, const char *dir)
 		},
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
 		.lh_max_memory = max_mem,
-		.lh_num_top_level_buckets = 1ULL << INITIAL_HASH_SUFFIX_LENGTH
+		.lh_stats = {
+		    .top_buckets = top_buckets,
+		    .max_top_entries = MAX_TOP_ENTRIES(top_buckets),
+		}
 	};
 	/* The index 0 is a sentinel value for these allocators */
 	allocator_skip(lh->lh_alloc.data);
@@ -275,20 +282,22 @@ split_bucket(linear_hash_t *lh)
 	while ((source_be = entry_iterator_next(&source, B_FALSE)) &&
 	    source_be->be_record != 0) {
 		if (!source.ei_in_overflow)
-			lh->lh_num_top_level_entries--;
+			lh->lh_stats.top_entries--;
 		boolean_t this_entry_stays =
 		    bucket_for_hash(lh, source_be->be_hash) == bucket_ix;
 		entry_iterator_t *dest = this_entry_stays ? &stay : &move;
 		bucket_entry_t *dest_be = entry_iterator_next(dest, B_TRUE);
 		if (!dest->ei_in_overflow)
-			lh->lh_num_top_level_entries++;
+			lh->lh_stats.top_entries++;
 		if (source_be->be_record != dest_be->be_record) {
 			*dest_be = *source_be;
 			dest->ei_dirty = B_TRUE;
 		}
 	}
 
-	lh->lh_num_top_level_buckets++;
+	lh->lh_stats.top_buckets++;
+	lh->lh_stats.max_top_entries =
+	    MAX_TOP_ENTRIES(lh->lh_stats.top_buckets);
 
 	/*
 	 * Continue iterating the "stay" bucket to zero out the tail. This
@@ -309,16 +318,6 @@ split_bucket(linear_hash_t *lh)
 	if (lh->lh_split_pointer >= buckets_this_cycle) {
 		lh->lh_hash_suffix_length++;
 		lh->lh_split_pointer = 0;
-	}
-}
-
-static inline void
-check_split(linear_hash_t *lh)
-{
-	double occupancy = (double)lh->lh_num_top_level_entries /
-	    (lh->lh_num_top_level_buckets * ENTRIES_PER_BUCKET);
-	if (occupancy > MAX_OCCUPANCY) {
-		split_bucket(lh);
 	}
 }
 
@@ -375,9 +374,10 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
 		}
 	}
 	if (!iter.ei_in_overflow) {
-		lh->lh_num_top_level_entries++;
+		lh->lh_stats.top_entries++;
+		while (lh->lh_stats.top_entries > lh->lh_stats.max_top_entries)
+			split_bucket(lh);
 	}
-	check_split(lh);
 	lh->lh_next_memory_check--;
 	if (lh->lh_next_memory_check <= 0) {
 		lh->lh_next_memory_check = lh_mem_check_interval;
