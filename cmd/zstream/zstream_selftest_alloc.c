@@ -50,7 +50,7 @@
  * values must be updated if the ones they shadow are changed.
  */
 #define	TEST_TARGET_GRANULARITY		(32 << 20)
-#define	TEST_FRONTIER_GRANULARITY	(8 << 20)
+#define	TEST_FRONTIER_GRANULARITY	(4 << 20)
 
 typedef enum {
 	REC_EMPTY = 0,		/* Never written; must read as zeros */
@@ -375,8 +375,6 @@ alloc_record_sizes(void)
 		size_t stride = record_stride(rsize);
 		uint64_t cap = 3 * (unit / stride) + 17;
 
-		fprintf(stderr, "unit = %llu, stride = %llu\n",
-		    (u_longlong_t)unit, (u_longlong_t)stride);
 		shadow_allocator_t *sh = shadow_init(rsize, 3 * unit, B_TRUE,
 		    cap);
 		while (sh->sa_count < cap)
