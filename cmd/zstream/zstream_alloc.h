@@ -26,7 +26,7 @@ extern "C" {
 
 /*
  * An allocator_t defines a thin storage API that can be backed by
- * memory, a disk file, or both; the API is the same.
+ * memory, a disk file, or both; the API is identical.
  *
  * Dual-backed allocators keep the first N records in memory and later
  * records on disk. For data that grows linearly but is accessed randomly
@@ -67,7 +67,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path);
 
 /*
  * The basic API, which is essentially just read() and write() but
- * with fixed record sizes and abstracted across memory and disk.
+ * with fixed record sizes.
  */
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);
@@ -99,7 +99,7 @@ allocator_memory_used(allocator_t *alloc);
 
 /*
  * This function attempts to trim at least delta_bytes from the allocator's
- * memory use and returns the number of bytes actually trimmed, which may be
+ * memory use. It returns the number of bytes actually trimmed, which may be
  * different because of internal rounding boundaries.
  *
  * A call to this function will always result in some trimming as long as
