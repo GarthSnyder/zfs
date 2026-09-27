@@ -73,14 +73,16 @@
  * the discussion there for details. TARGET_GRANULARITY is an upper bound.
  */
 #define	TARGET_GRANULARITY	(32 << 20)	/* 32MB */
-#define	MAX_WASTE		0.5
+#define	MAX_WASTE		0.25
 
 /*
  * Granularity at which memory pages are converted from PROT_NONE to
- * PROT_READ | PROT_WRITE. If the system page size is larger, that
- * becomes the granularity.
+ * PROT_READ | PROT_WRITE, expressed as a divisor relative to the calculated
+ * memory granularity. The calculated value will be rounded up to the system
+ * page size. There is no guarantee that this value will be smaller than the
+ * memory granularity, although it virtually always will be.
  */
-#define	FRONTIER_GRANULARITY	(8 << 20)	/* 8MB */
+#define	FRONTIER_DIVISOR	8		/* ~4MB */
 
 #define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_granularity.stride)
 #define	OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
@@ -112,9 +114,10 @@
  * a_granularity.frontier is a vaguer "how much memory do you want to
  * allocate at once?" guideline. Conceptually, the frontier granularity is
  * finer than the memory granularity. But both are chosen with an eye to the
- * system page size, and in odd cases, the frontier granularity may actually
- * be larger. No matter; the code is designed to handle two arbitrary (but
- * page-aligned) values and will do the right thing.
+ * system page size, and in odd cases, the frontier granularity may be as
+ * large as the memory granularity. No matter; the code is designed to
+ * handle two arbitrary (but page-aligned) values and will do the right
+ * thing.
  */
 
 typedef struct {
@@ -138,10 +141,15 @@ struct allocator {
 
 /*
  * Page sizes and record sizes can both vary, so we need some idea of what
- * allocation granularity we're actually trying to achieve
- * (TARGET_GRANULARITY). If the least common multiple of the record size and
- * the page size is larger than this value, we can start to round up record
- * sizes, trading some storage efficiency for a lower LCM.
+ * allocation granularity we're actually trying to achieve. If the least
+ * common multiple of the record size and the page size is larger than the
+ * TARGET_GRANULARITY, we can start to round up record sizes, trading some
+ * storage efficiency for a lower LCM.
+ *
+ * In rare cases, the system page size and/or the record size may be weird
+ * enough that the baseline TARGET_GRANULARITY isn't achievable with
+ * acceptable waste. In that case, we repeatedly double the target until we
+ * find a fit.
  */
 static granularity_t
 calc_granularities(size_t record_size)
@@ -150,27 +158,31 @@ calc_granularities(size_t record_size)
 	if (pagesize < 0) {
 		err(1, "unable to read system page size");
 	}
-	granularity_t g = { .frontier = MAX(pagesize, FRONTIER_GRANULARITY) };
-	/*
-	 * Waste (storage lost by rounding up record sizes) grows
-	 * monotonically with increasing alignment multiple, so this
-	 * calculation is guaranteed to terminate.
-	 */
-	size_t alignment = 1;
-	while (B_TRUE) {
-		g.stride = P2ROUNDUP(record_size, alignment);
-		size_t waste_bytes = g.stride - record_size;
-		double waste_pct = (double)waste_bytes / g.stride;
-		if (waste_pct > MAX_WASTE)
-			errx(1, "unable to find an efficient rounding for "
-			    "record_size = %llu, page_size = %llu",
-			    (u_longlong_t)record_size, (u_longlong_t)pagesize);
-		g.memory = least_common_multiple(pagesize, g.stride);
-		if (g.memory <= TARGET_GRANULARITY) {
-			g.memory = (TARGET_GRANULARITY / g.memory) * g.memory;
-			return (g);
+outer:	for (size_t target = MAX(TARGET_GRANULARITY, pagesize);; target *= 2) {
+		size_t alignment = 1;
+		granularity_t g;
+		/*
+		 * Waste (storage lost by rounding up record sizes) grows
+		 * monotonically with increasing alignment multiple, so this
+		 * inner loop is guaranteed to terminate.
+		 */
+		while (B_TRUE) {
+			g.stride = P2ROUNDUP(record_size, alignment);
+			size_t waste_bytes = g.stride - record_size;
+			double waste_pct = (double)waste_bytes / g.stride;
+			if (waste_pct > MAX_WASTE)
+				continue outer;
+			g.memory = least_common_multiple(pagesize, g.stride);
+			if (g.memory <= target) {
+				if (g.memory <= TARGET_GRANULARITY)
+					g.memory = (TARGET_GRANULARITY /
+					    g.memory) * g.memory;
+				g.frontier = P2ROUNDUP(
+				    g.memory / FRONTIER_DIVISOR, pagesize);
+				return (g);
+			}
+			alignment = alignment << 1;
 		}
-		alignment = alignment << 1;
 	}
 }
 
