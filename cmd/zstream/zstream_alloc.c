@@ -72,8 +72,8 @@
  * Inputs to the record-size rounding calculation in allocator_init(). See
  * the discussion there for details. TARGET_GRANULARITY is an upper bound.
  */
-#define	TARGET_GRANULARITY	(32 << 20)	/* 32MB */
-#define	MAX_WASTE		0.25
+#define	MAX_PAGES_PER_MEMORY_UNIT	33	    /* ~128K with 4K pages */
+#define TARGET_FRONTIER_MOVEMENT	(4 << 20)   /* 4MB */
 
 /*
  * Granularity at which memory pages are converted from PROT_NONE to
@@ -84,14 +84,12 @@
  */
 #define	FRONTIER_DIVISOR	8		/* ~4MB */
 
-#define	REC_TO_OFFSET(alloc, rec) ((rec) * (alloc)->a_granularity.stride)
 #define	OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
 #define	ADDR_TO_OFFSET(alloc, addr) ((addr) - (alloc)->a_base_addr)
 #define	REC_TO_ADDR(alloc, rec) OFFSET_TO_ADDR(alloc, \
-	    REC_TO_OFFSET(alloc, rec))
+	    record_offset(alloc, rec))
 
-#define	REC_IS_ON_DISK(alloc, rec) (REC_TO_OFFSET(alloc, rec) >= \
-	    (alloc)->a_max_memory)
+#define	OFFSET_ON_DISK(alloc, off) ((off) >= (alloc)->a_max_memory)
 
 /*
  * Allocators that use memory have two different allocation granularities
@@ -123,7 +121,7 @@
 typedef struct {
 	size_t		memory;			/* Memory/disk boundary */
 	size_t		frontier;		/* Writable frontier w/in mem */
-	size_t		stride;			/* Record-to-record */
+	size_t		records_per_mem_unit;	/* # of records that fit */
 } granularity_t;
 
 struct allocator {
@@ -139,17 +137,36 @@ struct allocator {
 	size_t		a_vm_allocated;		/* Total VM space reserved */
 };
 
+static inline off_t
+record_offset(allocator_t *alloc, record_ix_t rec)
+{
+	granularity_t *g = &alloc->a_granularity;
+	uint64_t granule = rec / g->records_per_mem_unit;
+	uint64_t granule_start = granule * g->memory;
+	uint64_t record_in_granule = rec - granule * g->records_per_mem_unit;
+	return (granule_start + record_in_granule * alloc->a_record_size);
+}
+
 /*
- * Page sizes and record sizes can both vary, so we need some idea of what
- * allocation granularity we're actually trying to achieve. If the least
- * common multiple of the record size and the page size is larger than the
- * TARGET_GRANULARITY, we can start to round up record sizes, trading some
- * storage efficiency for a lower LCM.
+ * Here we determine both a memory-increment granularity (that is, the
+ * granularity at which the memory/disk boundary can move) and a
+ * frontier-increment granularity. Page sizes and record sizes can both
+ * vary, so these values have to be calculated rather than fixed.
  *
- * In rare cases, the system page size and/or the record size may be weird
- * enough that the baseline TARGET_GRANULARITY isn't achievable with
- * acceptable waste. In that case, we repeatedly double the target until we
- * find a fit.
+ * Each unit of memory granularity is N pages of memory with M records
+ * inside it. Records are stored back to back with no gaps. However, N *
+ * pagesize isn't necessarily divisible by a_record_size, so the trailing
+ * bytes of an allocation unit may be empty waste space.
+ *
+ * We check each possible value of N up to MAX_PAGES_PER_MEMORY_UNIT and
+ * select the smallest N that achieves the least waste. A maximum N of 33
+ * guarantees less than 5% waste as long as the record size is smaller than
+ * the page size. (Zero waste is typical for small struct payloads.)
+ *
+ * The frontier granularity is TARGET_FRONTIER_MOVEMENT rounded up to an
+ * integral number of pages. It's generally larger than the memory increment
+ * granularity, but the code assumes no particular relationship between
+ * them. Frontier allocations are always clipped to a_max_memory.
  */
 static granularity_t
 calc_granularities(size_t record_size)
@@ -158,32 +175,25 @@ calc_granularities(size_t record_size)
 	if (pagesize < 0) {
 		err(1, "unable to read system page size");
 	}
-outer:	for (size_t target = MAX(TARGET_GRANULARITY, pagesize);; target *= 2) {
-		size_t alignment = 1;
-		granularity_t g;
-		/*
-		 * Waste (storage lost by rounding up record sizes) grows
-		 * monotonically with increasing alignment multiple, so this
-		 * inner loop is guaranteed to terminate.
-		 */
-		while (B_TRUE) {
-			g.stride = P2ROUNDUP(record_size, alignment);
-			size_t waste_bytes = g.stride - record_size;
-			double waste_pct = (double)waste_bytes / g.stride;
-			if (waste_pct > MAX_WASTE)
-				continue outer;
-			g.memory = least_common_multiple(pagesize, g.stride);
-			if (g.memory <= target) {
-				if (g.memory <= TARGET_GRANULARITY)
-					g.memory = (TARGET_GRANULARITY /
-					    g.memory) * g.memory;
-				g.frontier = P2ROUNDUP(
-				    g.memory / FRONTIER_DIVISOR, pagesize);
-				return (g);
-			}
-			alignment = alignment << 1;
+	granularity_t g;
+	size_t unit_size = 0;
+	double least_waste = 1.0;
+	for (int i = 1; i <= MAX_PAGES_PER_MEMORY_UNIT; i++) {
+		unit_size += pagesize;
+		size_t waste = unit_size % record_size;
+		if (waste == 0) {
+			g.memory = unit_size;
+			break;
+		}
+		double waste_pct = (double)waste / unit_size;
+		if (waste_pct < least_waste) {
+			least_waste = waste_pct;
+			g.memory = unit_size;
 		}
 	}
+	g.records_per_mem_unit = g.memory / record_size;
+	g.frontier = P2ROUNDUP(TARGET_FRONTIER_MOVEMENT, pagesize);
+	return (g);
 }
 
 allocator_t *
@@ -248,7 +258,7 @@ reify_memory_up_to(allocator_t *alloc, off_t end_offset)
 		 */
 		errx(1, "allocator out of memory");
 	size_t length =
-	    MIN(P2ROUNDUP(needed, alloc->a_granularity.frontier), avail);
+	    MIN(ROUND_UP(needed, alloc->a_granularity.frontier), avail);
 	int rc = mprotect(alloc->a_writable_frontier, length,
 	    PROT_READ | PROT_WRITE);
 	if (rc != 0)
@@ -260,16 +270,15 @@ void
 allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
 	VERIFY(buff != NULL);
-	if (REC_IS_ON_DISK(alloc, record)) {
+	off_t off = record_offset(alloc, record);
+	if (OFFSET_ON_DISK(alloc, off)) {
 		if (alloc->a_fd < 0)
 			errx(1, "no disk file for allocator record %llu "
 			    "(write)", (u_longlong_t)record);
-		off_t loc = REC_TO_OFFSET(alloc, record);
-		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, loc);
+		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, off);
 	} else {
-		reify_memory_up_to(alloc, REC_TO_OFFSET(alloc, record) +
-		    alloc->a_granularity.stride);
-		memcpy(REC_TO_ADDR(alloc, record), buff, alloc->a_record_size);
+		reify_memory_up_to(alloc, off + alloc->a_record_size);
+		memcpy(OFFSET_TO_ADDR(alloc, off), buff, alloc->a_record_size);
 	}
 	/* a_count is one past the highest record known to have been written */
 	alloc->a_count = MAX(alloc->a_count, record + 1);
@@ -279,15 +288,15 @@ void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 {
 	VERIFY(buff != NULL);
-	if (REC_IS_ON_DISK(alloc, record)) {
+	off_t off = record_offset(alloc, record);
+	if (OFFSET_ON_DISK(alloc, off)) {
 		if (alloc->a_fd < 0)
 			errx(1, "no disk file for allocator record %llu (read)",
 			    (u_longlong_t)record);
-		off_t loc = REC_TO_OFFSET(alloc, record);
-		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, loc);
+		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, off);
 	} else {
-		void *first = REC_TO_ADDR(alloc, record);
-		void *last_plus_one = first + alloc->a_granularity.stride;
+		void *first = OFFSET_TO_ADDR(alloc, off);
+		void *last_plus_one = first + alloc->a_record_size;
 		/*
 		 * Unlike a_max_memory, a_writable_frontier may fall in the
 		 * middle of a record. But if the entire record is not
@@ -316,9 +325,10 @@ allocator_append(allocator_t *alloc, const void *data)
 record_ix_t
 allocator_skip(allocator_t *alloc)
 {
-	void *buff = safe_calloc(alloc->a_record_size);
+	ASSERT(alloc->a_record_size > 0);
+	uint8_t buff[alloc->a_record_size];
+	memset(buff, 0, sizeof (buff));
 	record_ix_t ix = allocator_append(alloc, buff);
-	free(buff);
 	return (ix);
 }
 
@@ -330,15 +340,20 @@ allocator_memory_used(allocator_t *alloc)
 }
 
 /*
- * Free at least delta_bytes of memory, relative to the amount of memory
- * actually in use (not the allocator's theoretical memory limit as found in
- * a_max_memory). Since memory and disk segments share offset addresses, we
- * only need to perform one copy from memory to disk to change the split point.
+ * Free at least delta_bytes of memory, relative to a_writable_frontier;
+ * that is, the amount of memory actually in use rather than the allocator's
+ * theoretical memory limit as found in a_max_memory.
  *
- * Only bytes below the writable frontier are written out. Bytes between the
+ * Since memory and disk segments share offset addresses, we only need to
+ * perform one copy from memory to disk to change the split point. 9 Only
+ * bytes below the writable frontier are written out. Bytes between the
  * frontier and the old memory budget were never written and are logically
  * zero. The corresponding file region has never been written, so it already
  * reads back as zeros.
+ *
+ * Since we are limiting future memory use as well as current use, we need
+ * to lower a_max_memory, and since we're doing that, we need to calculate
+ * in terms of memory granularity rather than frontier granularity.
  *
  * Returns the amount of memory actually freed.
  */
