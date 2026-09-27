@@ -123,8 +123,11 @@ record_stride(size_t record_size)
 static size_t
 split_unit(size_t record_size)
 {
-	return (least_common_multiple((size_t)sysconf(_SC_PAGESIZE),
-	    record_stride(record_size)));
+	size_t base_size = least_common_multiple((size_t)sysconf(_SC_PAGESIZE),
+	    record_stride(record_size));
+	if (base_size < TEST_TARGET_GRANULARITY)
+		base_size = (TEST_TARGET_GRANULARITY / base_size) * base_size;
+	return (base_size);
 }
 
 static size_t
@@ -372,6 +375,8 @@ alloc_record_sizes(void)
 		size_t stride = record_stride(rsize);
 		uint64_t cap = 3 * (unit / stride) + 17;
 
+		fprintf(stderr, "unit = %llu, stride = %llu\n",
+		    (u_longlong_t)unit, (u_longlong_t)stride);
 		shadow_allocator_t *sh = shadow_init(rsize, 3 * unit, B_TRUE,
 		    cap);
 		while (sh->sa_count < cap)

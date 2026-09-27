@@ -122,7 +122,7 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 	uint64_t total_top_level = 0;
 	boolean_t warned = B_FALSE;
 
-	for (uint64_t b = 0; b < lh->lh_num_top_buckets; b++) {
+	for (uint64_t b = 0; b < lh->lh_stats.top_buckets; b++) {
 		bucket_t bucket;
 		boolean_t top_level = B_TRUE;
 		uint64_t links = 0;
@@ -174,10 +174,10 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 		    (u_longlong_t)total_entries);
 		warned = B_TRUE;
 	}
-	if (total_top_level != lh->lh_num_top_entries) {
+	if (total_top_level != lh->lh_stats.top_entries) {
 		warnx("linear hash is supposed to have %llu top-level entries, "
 		    "but actually has %llu",
-		    (u_longlong_t)lh->lh_num_top_entries,
+		    (u_longlong_t)lh->lh_stats.top_entries,
 		    (u_longlong_t)total_top_level);
 		warned = B_TRUE;
 	}
@@ -193,10 +193,10 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 	 */
 	uint64_t want_buckets = (1ULL << lh->lh_hash_suffix_length) +
 	    lh->lh_split_pointer;
-	if (lh->lh_num_top_buckets != want_buckets) {
+	if (lh->lh_stats.top_buckets != want_buckets) {
 		warnx("linear hash has %llu top-level buckets, but its split "
 		    "state implies %llu",
-		    (u_longlong_t)lh->lh_num_top_buckets,
+		    (u_longlong_t)lh->lh_stats.top_buckets,
 		    (u_longlong_t)want_buckets);
 		warned = B_TRUE;
 	}
@@ -555,7 +555,7 @@ hash_splits(void)
 	 * the same identity lh_validate() checks, stated as a floor on the
 	 * amount of growth the workload should have forced.)
 	 */
-	VERIFY3U(lh->lh_num_top_buckets, >, 1ULL << 13);
+	VERIFY3U(lh->lh_stats.top_buckets, >, 1ULL << 13);
 	lh_fini(lh);
 }
 
