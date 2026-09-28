@@ -28,6 +28,7 @@
 #include <sys/types.h>
 
 #include "zstream_alloc.h"
+#include "zstream_alloc_impl.h"
 #include "zstream_util.h"
 
 /*
@@ -68,19 +69,6 @@
  * as zeros if it is later re-exposed.
  */
 
-/*
- * Inputs to the record-size rounding calculation in calc_granularities().
- * See the discussion there for details.
- */
-#define	MAX_PAGES_PER_MEMORY_UNIT	33	    /* ~128K with 4K pages */
-
-/*
- * (Rough) granularity at which memory pages are converted from PROT_NONE to
- * PROT_READ | PROT_WRITE, in bytes. This value will be rounded up to a
- * multiple of the system page size.
- */
-#define TARGET_FRONTIER_MOVEMENT	(4 << 20)   /* 4MB */
-
 #define	OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
 #define	ADDR_TO_OFFSET(alloc, addr) ((addr) - (alloc)->a_base_addr)
 #define	OFFSET_ON_DISK(alloc, off) ((off) >= (alloc)->a_max_memory)
@@ -110,12 +98,6 @@
  * handle two arbitrary (but both page-aligned) values and will do the right
  * thing.
  */
-typedef struct {
-	size_t		memory;			/* Memory/disk boundary */
-	size_t		frontier;		/* Writable frontier w/in mem */
-	size_t		records_per_mem_unit;	/* # of records that fit */
-} granularity_t;
-
 struct allocator {
 	int		a_fd;			/* On-disk file descriptor */
 	size_t		a_max_memory;		/* Current memory limit */
@@ -163,13 +145,11 @@ record_offset(allocator_t *alloc, record_ix_t rec)
  * granularity, but the code assumes no particular relationship between
  * them. Frontier allocations are always clipped to a_max_memory.
  */
-static granularity_t
-calc_granularities(size_t record_size)
+granularity_t
+calc_granularities(size_t record_size, size_t pagesize)
 {
-	ssize_t pagesize = (ssize_t)sysconf(_SC_PAGESIZE);
-	if (pagesize < 0) {
-		err(1, "unable to read system page size");
-	}
+	VERIFY(pagesize > 0 && ISP2(pagesize));
+	VERIFY(record_size > 0);
 	if (record_size > MAX_PAGES_PER_MEMORY_UNIT * pagesize)
 		errx(1, "requested allocator_t record size too large "
 		    "(%llu bytes)", (u_longlong_t)record_size);
@@ -203,7 +183,11 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
 	} else if (mem_size == 0) {
 		errx(1, "allocator_t needs either disk or memory backing");
 	}
-	granularity_t granularity = calc_granularities(record_size);
+	long pagesize = sysconf(_SC_PAGESIZE);
+	if (pagesize <= 0)
+		err(1, "unable to read system page size");
+	granularity_t granularity =
+	    calc_granularities(record_size, (size_t)pagesize);
 	/*
 	 * Allocate a full-size region of PROT_NONE address space.
 	 */
