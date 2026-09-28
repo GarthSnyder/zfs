@@ -47,8 +47,8 @@
  *   single write when the memory budget changes.
  *
  *   If the backing file's filesystem does not support holes (unlikely but
- *   possible), the code is still correct. However, actual disk space
- *   consumption will be higher.
+ *   distinctly possible), the code is still correct. However, actual disk
+ *   space consumption will be higher.
  *
  * - The second feature is the use of PROT_NONE for virtual pages. You can't
  *   do anything with these pages, so they are essentially free. They do not
@@ -71,16 +71,17 @@
 
 #define	OFFSET_TO_ADDR(alloc, off) ((off) + (alloc)->a_base_addr)
 #define	ADDR_TO_OFFSET(alloc, addr) ((addr) - (alloc)->a_base_addr)
-#define	OFFSET_ON_DISK(alloc, off) ((off) >= (alloc)->a_max_memory)
+#define	OFFSET_IS_ON_DISK(alloc, off) ((off) >= (alloc)->a_max_memory)
 
 /*
  * Allocators that use memory have two different allocation granularities
  * that are conceptually separate but that sometimes interact.
  *
  * "memory" granularity is the increment by which a_max_memory, the boundary
- * between memory storage and disk storage, moves. This transition must not
- * fall within a record; every record is either completely on disk or
- * completely in memory.
+ * between memory storage and disk storage, moves. It's an integral number
+ * of memory pages. In addition, this transition must not fall within a
+ * record; every record is either completely on disk or completely in
+ * memory.
  *
  * The in-memory region is further subdivided at a_writable_frontier, which
  * points to the first byte of unwritable (PROT_NONE) memory. If a memory
@@ -92,19 +93,20 @@
  * a_granularity.memory is a "hard" value that's always enforced.
  * a_granularity.frontier is a vaguer "how much memory do you want to
  * allocate at once?" guideline. Conceptually, the frontier granularity is
- * much coarser than the memory granularity. But both are chosen with an eye
- * to the system page size, and in odd cases they may be the same, or memory
+ * coarser than the memory granularity. But both are chosen with an eye to
+ * the system page size, and in odd cases they may be the same, or memory
  * granularity may actually be coarser. No matter; the code is designed to
  * handle two arbitrary (but both page-aligned) values and will do the right
  * thing.
  */
+
 struct allocator {
 	int		a_fd;			/* On-disk file descriptor */
 	size_t		a_max_memory;		/* Current memory limit */
 	size_t		a_record_size;		/* As specified by the client */
 
 	uint64_t	a_count;		/* Highest index stored +1 */
-	void		*a_base_addr;		/* Start of memory segment */
+	void		*a_base_addr;		/* Start of VM allotment */
 	void		*a_writable_frontier;	/* Addr of 1st non-r/w byte */
 
 	granularity_t	a_granularity;
@@ -141,15 +143,13 @@ record_offset(allocator_t *alloc, record_ix_t rec)
  * typical for small struct payloads.)
  *
  * The frontier granularity is TARGET_FRONTIER_MOVEMENT rounded up to an
- * integral number of pages. It's generally larger than the memory increment
- * granularity, but the code assumes no particular relationship between
- * them. Frontier allocations are always clipped to a_max_memory.
+ * integral number of pages. Frontier allocations are always clipped
+ * to a_max_memory.
  */
 granularity_t
 calc_granularities(size_t record_size, size_t pagesize)
 {
 	VERIFY(pagesize > 0 && ISP2(pagesize));
-	VERIFY(record_size > 0);
 	if (record_size > MAX_PAGES_PER_MEMORY_UNIT * pagesize)
 		errx(1, "requested allocator_t record size too large "
 		    "(%llu bytes)", (u_longlong_t)record_size);
@@ -219,7 +219,7 @@ allocator_init(size_t record_size, size_t mem_size, const char *dir_path)
  * re-protect it from PROT_NONE to PROT_READ | PROT_WRITE.
  *
  * The end_offset parameter and the a_writable_frontier pointer are both
- * "+1" markers. That is, everything below a_writable_fronter is already
+ * "+1" markers. I.e., everything below a_writable_fronter is already
  * writable, and reify_memory_up_to() reifies up to but not including the
  * end_offset. Because of this accounting convention, a_writable_frontier
  * always points to the first byte of an unreified memory page.
@@ -253,7 +253,7 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
 	VERIFY(alloc != NULL && buff != NULL);
 	off_t off = record_offset(alloc, record);
-	if (OFFSET_ON_DISK(alloc, off)) {
+	if (OFFSET_IS_ON_DISK(alloc, off)) {
 		if (alloc->a_fd < 0)
 			errx(1, "no disk file for allocator record %llu "
 			    "(write)", (u_longlong_t)record);
@@ -271,7 +271,7 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 {
 	VERIFY(alloc != NULL && buff != NULL);
 	off_t off = record_offset(alloc, record);
-	if (OFFSET_ON_DISK(alloc, off)) {
+	if (OFFSET_IS_ON_DISK(alloc, off)) {
 		if (alloc->a_fd < 0)
 			errx(1, "no disk file for allocator record %llu (read)",
 			    (u_longlong_t)record);
@@ -302,12 +302,12 @@ allocator_append(allocator_t *alloc, const void *data)
 
 /*
  * We must write actual data to preserve the invariant that a_count == one
- * past last record known to have been written.
+ * past the last record known to have been written.
  */
 record_ix_t
 allocator_skip(allocator_t *alloc)
 {
-	ASSERT(alloc->a_record_size > 0);
+	ASSERT(alloc != NULL);
 	uint8_t buff[alloc->a_record_size];
 	memset(buff, 0, sizeof (buff));
 	record_ix_t ix = allocator_append(alloc, buff);
@@ -362,8 +362,8 @@ allocator_trim_memory(allocator_t *alloc, size_t delta_bytes)
 	size_t bytes_to_free = MAX(0, eject_end - eject_start);
 	if (bytes_to_free > 0) {
 		if (alloc->a_fd < 0)
-			errx(1, "no disk backing for allocator, so "
-			    "%s would lose data", __func__);
+			errx(1, "allocator has no disk backing, so %s would "
+			    "lose data", __func__);
 		safe_pwrite(alloc->a_fd, eject_start, bytes_to_free, new_max);
 		void *ret = mmap(eject_start, bytes_to_free, PROT_NONE,
 		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
