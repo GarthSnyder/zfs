@@ -131,7 +131,7 @@ list_tests(const selftest_module_t *module)
 static void
 run_case(const test_case_t *tc)
 {
-	(void) printf("Running %-20s ... ", tc->tc_name);
+	(void) printf("Running %-22s ... ", tc->tc_name);
 	(void) fflush(stdout);
 	current_test = tc->tc_name;
 	watchdog_arm();

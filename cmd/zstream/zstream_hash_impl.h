@@ -69,6 +69,7 @@ typedef struct {
 	uint64_t	top_buckets;
 	uint64_t	top_entries;
 	uint64_t	max_top_entries;
+	uint64_t	next_memory_check;
 } lh_stats_t;
 
 struct linear_hash {
@@ -77,7 +78,6 @@ struct linear_hash {
 	lh_allocators_t	lh_alloc;
 	uint8_t		lh_hash_suffix_length;	  /* Granularity above split */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
-	int		lh_next_memory_check;	  /* # inserts before check */
 	lh_stats_t	lh_stats;
 	uint64_t	lh_generation;
 };
