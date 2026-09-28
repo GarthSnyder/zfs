@@ -27,7 +27,7 @@ extern "C" {
 
 /*
  * This module implements linear hashing with 64-bit hash keys. It runs on
- * top of allocator_t, which allows a structured approach to storage
+ * top of allocator_t, which implements a structured approach to storage
  * management and allows the hash table to expand indefinitely as long as
  * disk storage remains available.
  *
@@ -53,19 +53,17 @@ typedef struct lh_iterator lh_iterator_t;
  * The cache_dir should be a place where memory can meaningfully spill over
  * to disk, which rules out /tmp on most systems because it's often
  * implemented as a ramdisk. If cache_dir is NULL, the hash table does not
- * use disk backup and may run out of memory. If max_memory is zero, the
- * hash table is disk-only.
+ * use disk backup and may eventually run out of memory. If max_memory is
+ * zero, the hash table is disk-only.
  *
  * Because memory accounting is only performed periodically, actual memory
- * use may exceed max_memory for a short time. Because of internal rounding,
- * max_memory should be at least 8MB.
+ * use may exceed max_memory for a short time.
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
 
 /*
- * Insert a new record. This operation invalidates all outstanding
- * iterators.
+ * Insertions invalidate all outstanding iterators on this hash table.
  */
 void
 lh_insert(linear_hash_t *lh, uint64_t hash, const void* data);
