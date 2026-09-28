@@ -24,7 +24,7 @@
  * of operations, the entire allocator can be swept and compared against the
  * model byte for byte.
  *
- * The most delicate allocator operation is allocator_trim_memory(), which
+ * The trickiest allocator operation is allocator_trim_memory(), which
  * lowers the split point between the memory-resident and disk-resident
  * portions of the record space. Trimming is relative to memory actually in
  * use. Memory consumption can only be reduced, and the arithmetic has to
@@ -44,14 +44,6 @@
 #include "zstream_alloc_impl.h"
 #include "zstream_selftest.h"
 #include "zstream_util.h"
-
-/*
- * Mirrors of allocator-internal constants. They are duplicated rather than
- * exported to keep the tests independent of the system being tested. These
- * values must be updated if the ones they shadow are changed.
- */
-#define	TEST_MAX_PAGES_PER_UNIT		33
-#define	TEST_FRONTIER_TARGET		(4 << 20)
 
 typedef enum {
 	REC_EMPTY = 0,		/* Never written; must read as zeros */
@@ -104,8 +96,7 @@ all_zero(const uint8_t *buf, size_t len)
 static granularity_t
 host_granularity(size_t record_size)
 {
-	return (calc_granularities(record_size,
-	    (size_t)sysconf(_SC_PAGESIZE)));
+	return (calc_granularities(record_size, (size_t)sysconf(_SC_PAGESIZE)));
 }
 
 /*
@@ -312,7 +303,7 @@ shadow_verify_all(shadow_allocator_t *sh)
 
 /*
  * An independent statement of the memory-unit selection rule: among units
- * of 1 to TEST_MAX_PAGES_PER_UNIT pages that hold at least one record,
+ * of 1 to MAX_PAGES_PER_MEMORY_UNIT pages that hold at least one record,
  * choose the one with the smallest fraction of waste, and among equals, the
  * smallest. Fractions are compared by cross-multiplication rather than in
  * floating point.
@@ -322,7 +313,7 @@ oracle_mem_unit(size_t record_size, size_t pagesize)
 {
 	size_t best = 0, best_waste = 0;
 
-	for (size_t n = 1; n <= TEST_MAX_PAGES_PER_UNIT; n++) {
+	for (size_t n = 1; n <= MAX_PAGES_PER_MEMORY_UNIT; n++) {
 		size_t unit = n * pagesize;
 		if (unit < record_size)
 			continue;
@@ -351,13 +342,13 @@ check_granularity(size_t record_size, size_t pagesize)
 		    "expected %zu", record_size, pagesize, g.memory, want);
 	}
 	VERIFY0(g.memory % pagesize);
-	VERIFY3U(g.memory, <=, TEST_MAX_PAGES_PER_UNIT * pagesize);
+	VERIFY3U(g.memory, <=, MAX_PAGES_PER_MEMORY_UNIT * pagesize);
 	VERIFY3U(g.records_per_mem_unit, ==, g.memory / record_size);
 	VERIFY3U(g.records_per_mem_unit, >=, 1);
 	/* Documented bound: under 5% waste for sub-page records */
 	if (record_size < pagesize)
 		VERIFY3U(20 * (g.memory % record_size), <, g.memory);
-	VERIFY3U(g.frontier, ==, P2ROUNDUP(TEST_FRONTIER_TARGET, pagesize));
+	VERIFY3U(g.frontier, ==, P2ROUNDUP(TARGET_FRONTIER_MOVEMENT, pagesize));
 }
 
 /*
@@ -410,7 +401,7 @@ alloc_granularity(void)
 	static const size_t pages[] = { 4096, 8192, 16384, 65536 };
 	for (size_t p = 0; p < sizeof (pages) / sizeof (pages[0]); p++) {
 		size_t page = pages[p];
-		size_t max = TEST_MAX_PAGES_PER_UNIT * page;
+		size_t max = MAX_PAGES_PER_MEMORY_UNIT * page;
 		for (size_t rsize = 1; rsize <= max; ) {
 			check_granularity(rsize, page);
 			rsize += (page > 16384 && rsize > 2 * page) ? 7 : 1;
@@ -421,7 +412,7 @@ alloc_granularity(void)
 	/* And whatever the host uses */
 	size_t host = (size_t)sysconf(_SC_PAGESIZE);
 	check_granularity(24, host);
-	check_granularity(TEST_MAX_PAGES_PER_UNIT * host, host);
+	check_granularity(MAX_PAGES_PER_MEMORY_UNIT * host, host);
 }
 
 /*
@@ -442,13 +433,16 @@ alloc_basic(void)
 		boolean_t disk = (config != 0);
 		size_t mem;
 		switch (config) {
-		case 0:		/* Memory-only */
+		case 0:
+			/* Memory-only */
 			mem = 2 * full;
 			break;
-		case 1:		/* Disk-only */
+		case 1:
+			/* Disk-only */
 			mem = 0;
 			break;
-		default:	/* Dual: about a quarter of the data fits */
+		default:
+			/* Dual: about a quarter of the data fits */
 			mem = full / 4;
 			break;
 		}
