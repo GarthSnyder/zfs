@@ -31,14 +31,13 @@ extern "C" {
 #include "zstream_hash.h"
 
 #define	ENTRIES_PER_BUCKET	6
-#define	NUM_ALLOC		3
 
 /*
  * Entry in a bucket: hash value + locator to data
  */
 typedef struct {
 	uint64_t  	be_hash;
-	record_ix_t 	be_record;  /* index of actual data */
+	record_ix_t 	be_record;	/* Index of actual data */
 } bucket_entry_t;
 
 /*
@@ -51,30 +50,24 @@ typedef struct {
 } bucket_t;
 
 /*
- * These allocators are in memory clawback order, first to last
+ * These allocators are in memory priority order. The data allocator is
+ * first to be asked to yield memory, and so on. (The actual memory
+ * management is handled by the allocator group.)
  */
-typedef union {
-	struct {
-		allocator_t	*data;		/* Data records */
-		allocator_t	*overflow;	/* Overflow buckets */
-		allocator_t	*bucket;	/* Main buckets */
-	};
-	allocator_t		*all[NUM_ALLOC];
+typedef struct {
+	allocator_t	*data;		/* Data records */
+	allocator_t	*overflow;	/* Overflow buckets */
+	allocator_t	*bucket;	/* Main buckets */
 } lh_allocators_t;
-
-_Static_assert(sizeof (lh_allocators_t) == NUM_ALLOC * sizeof (allocator_t *),
-	    "lh_allocators_t has padding");
 
 typedef struct {
 	uint64_t	top_buckets;
 	uint64_t	top_entries;
 	uint64_t	max_top_entries;
-	uint64_t	next_memory_check;
 } lh_stats_t;
 
 struct linear_hash {
-	size_t		lh_record_size;		  /* Params */
-	uint64_t	lh_max_memory;
+	size_t		lh_record_size;		  /* Param */
 	lh_allocators_t	lh_alloc;
 	uint8_t		lh_hash_suffix_length;	  /* Granularity above split */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
@@ -98,22 +91,10 @@ typedef struct {
  * Client-facing iterator for retrieving records by hash
  */
 struct lh_iterator {
-	uint64_t		lhi_hash;		/* Client's query */
+	uint64_t		lhi_hash_sought;	/* Client's query */
 	uint64_t		lhi_generation;		/* Validity check */
 	entry_iterator_t	lhi_entry_iterator;
 };
-
-/*
- * Memory-management controls defined in zstream_hash.c. They're exposed
- * here so that selftests can exercise memory-pressure behavior at small
- * scales.
- *
- * lh_memory_margin is the extra memory reclaimed beyond the strict overage
- * whenever a memory clawback occurs. lh_mem_check_interval is the number of
- * insertions between memory-budget checks. Both are process-wide values.
- */
-extern size_t	lh_memory_margin;
-extern int	lh_mem_check_interval;
 
 #ifdef __cplusplus
 }
