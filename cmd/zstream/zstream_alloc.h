@@ -47,7 +47,8 @@ extern "C" {
  * All allocators are members of an allocator group, which may be a group
  * of 1. Allocators in a group share a collective memory limit. Regardless
  * of the data stored in the individual allocators, the group will never use
- * more memory than the limit specified at the time the group was created.
+ * more memory than the limit specified at the time the group was created
+ * (modulo rounding; see below).
  */
 
 #define	MAX_ALLOCATOR_GROUPS		6
@@ -64,12 +65,12 @@ typedef struct allocator allocator_t;
  *
  * Over time, a group may internally reassign memory, forcing some records
  * to disk. (If there is no disk backup, this becomes a fatal error.) Memory
- * rebalancing is tranparent to the client.
+ * rebalancing is transparent to the client.
  *
  * Records are evicted from memory one allocator at a time.
- * allocator_init_group()[0] is the first allocator asked to yield memory.
+ * allocator_group_init()[0] is the first allocator asked to yield memory.
  * When it has no more memory to surrender, memory will be drawn from
- * allocator_init_group()[1], and so on. The ultimate end state under high
+ * allocator_group_init()[1], and so on. The ultimate end state under high
  * load is that the last allocator will hold all the group's memory, with
  * other allocators having functionally become disk-only. If this is not the
  * behavior you want, create more than one group.
