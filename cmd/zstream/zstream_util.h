@@ -195,9 +195,6 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 int
 safe_create_temp_file(const char *dir_path);
 
-size_t
-least_common_multiple(size_t a, size_t b);
-
 #ifdef __cplusplus
 }
 #endif
