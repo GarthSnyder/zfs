@@ -52,6 +52,7 @@ extern "C" {
 
 #define	MAX_ALLOCATOR_GROUPS		6
 #define	MAX_ALLOCATORS_PER_GROUP	6
+#define	MAX_PAGES_PER_RECORD		8
 
 typedef uint64_t record_ix_t;
 
@@ -73,11 +74,17 @@ typedef struct allocator allocator_t;
  * other allocators having functionally become disk-only. If this is not the
  * behavior you want, create more than one group.
  *
- * Memory is managed in page clusters of about 1MB, so 8MB is a good working
- * minimum for the mem_limit parameter.
+ * - Memory is managed in page clusters of about 1MB, so 8MB is a good
+ *   working minimum for the mem_limit parameter.
+ *
+ * - The requested mem_limit will be rounded up to the nearest multiple of
+ *   the cluster size.
+ *
+ * - No record size can be larger than MAX_PAGES_PER_RECORD times the
+ *   system memory page size.
  */
 allocator_t **
-allocator_group_init(size_t *record_sizes, unsigned num_allocators,
+allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
     size_t mem_limit, const char *dir_path);
 
 void
