@@ -62,16 +62,14 @@
 #define	ADDR_TO_OFFSET(alloc, addr)	((addr) - (alloc)->a_base_addr)
 #define	OFFSET_IS_ON_DISK(alloc, off)	((off) >= (alloc)->a_first_on_disk)
 
-#define	TARGET_PAGE_CLUSTER_SIZE	(1 << 20)	/* ~1MB */
+#define	PAGE_CLUSTER_SIZE		(1 << 20)	/* 1MB */
 
 /*
  * All allocators are members of an allocator group, which can be a group of
  * 1. Group members share memory accounting.
  *
  * The group's page cluster size is the granularity of memory management for
- * all the group's allocators. It's selected at the time the group is
- * created, taking into account the record sizes of the group's allocators,
- * which may vary.
+ * all the group's allocators.
  *
  * An allocator's memory-to-disk transition always falls at a page cluster
  * boundary, and the group's ag_mem_limit and ag_mem_current values are also
@@ -102,10 +100,9 @@ static boolean_t
 try_make_readwrite(allocator_t *alloc, off_t end_offset);
 
 /*
- * Each page cluster consists of N pages of memory with M records inside of
- * it. Records are stored back to back with no gaps. However, N * pagesize
- * isn't necessarily divisible by a_record_size, so the trailing bytes of a
- * cluster may be waste space.
+ * Each page cluster holds a_records_per_cluster records, stored back to back
+ * with no gaps. The cluster size isn't necessarily divisible by
+ * a_record_size, so the trailing bytes of a cluster may be waste space.
  */
 static inline off_t
 record_offset(allocator_t *alloc, record_ix_t rec)
@@ -119,46 +116,24 @@ record_offset(allocator_t *alloc, record_ix_t rec)
 }
 
 /*
- * Here we search for a page cluster size that is roughly
- * TARGET_PAGE_CLUSTER_SIZE (1MB) and that minimizes waste. All the
- * allocators in a group share the same page cluster size, so we're looking
- * for a cluster size that minimizes waste over all record sizes in the
- * group. For records less than 8K in size, waste will always be less than
- * 0.5% of total storage for page sizes up to 64K.
- *
- * This is a simple brute-force search, but with a target cluster size of
- * ~1MB, there will be at most 256 options to examine.
+ * Every group uses the same cluster size: PAGE_CLUSTER_SIZE, or one page if
+ * pages are larger than that. Records never straddle cluster boundaries, so
+ * the tail of each cluster is wasted when the record size does not divide
+ * the cluster size evenly. Since records are at most MAX_RECORD_SIZE bytes,
+ * the waste is always less than 1% of the cluster.
  */
 static size_t
-optimal_cluster_size(const size_t *record_sizes, unsigned n)
+group_cluster_size(const size_t *record_sizes, unsigned n)
 {
 	long pagesize = sysconf(_SC_PAGESIZE);
-	VERIFY(pagesize > 0 && pagesize <= TARGET_PAGE_CLUSTER_SIZE && n > 0);
-	size_t biggest = 0;
+	VERIFY3S(pagesize, >, 0);
 	for (int i = 0; i < n; i++) {
 		VERIFY3U(record_sizes[i], >, 0);
-		biggest = MAX(biggest, record_sizes[i]);
-		if (record_sizes[i] > MAX_PAGES_PER_RECORD * pagesize)
+		if (record_sizes[i] > MAX_RECORD_SIZE)
 			errx(1, "requested allocator_t record size too large "
 			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
 	}
-
-	size_t best_cluster = 0;
-	size_t least_waste = TARGET_PAGE_CLUSTER_SIZE;
-	int max_pages = TARGET_PAGE_CLUSTER_SIZE / pagesize;
-	for (int np = (biggest / pagesize) + 1; np <= max_pages; np++) {
-		size_t cluster_size = np * pagesize;
-		size_t most_waste = 0;
-		for (int i = 0; i < n; i++) {
-			size_t waste = cluster_size % record_sizes[i];
-			most_waste = MAX(most_waste, waste);
-		}
-		if (most_waste <= least_waste) {
-			least_waste = most_waste;
-			best_cluster = cluster_size;
-		}
-	}
-	return (best_cluster);
+	return (MAX(PAGE_CLUSTER_SIZE, (size_t)pagesize));
 }
 
 static allocator_group_t *
@@ -182,8 +157,7 @@ allocator_group_init(const size_t *record_sizes, unsigned n,
 	if (n < 1 || n > MAX_ALLOCATORS_PER_GROUP)
 		errx(1, "invalid number of allocators: %d", n);
 
-	size_t cluster_size =
-	    optimal_cluster_size(record_sizes, n);
+	size_t cluster_size = group_cluster_size(record_sizes, n);
 
 	allocator_group_t *group = find_empty_group_slot();
 	*group = (allocator_group_t) {
