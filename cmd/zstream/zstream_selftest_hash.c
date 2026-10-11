@@ -37,12 +37,16 @@
  * table's own entry_iterator_t code. That way, a bug in the iterator can't
  * hide from the validator.
  *
- * Beyond store-and-retrieve correctness, the tests exercise the table's
- * memory management with small budgets, margins, and check intervals (see
- * lh_memory_margin and lh_mem_check_interval). The table must reclaim
- * memory from its three allocators in correct priority order (data first,
- * then overflow buckets, then main buckets) while remaining fully correct
- * and keeping total memory use bounded.
+ * Beyond store-and-retrieve correctness, the tests run tables under memory
+ * pressure. The table itself does no memory management; its three
+ * allocators form one allocator group, which must give memory up in
+ * priority order (data first, then overflow buckets, then main buckets)
+ * while the table remains fully correct and never exceeds its budget. The
+ * group's state is read through zstream_alloc_impl.h.
+ *
+ * The fatal paths (a stale iterator, a memory-only table that outgrows its
+ * budget, and bad parameters) run in child processes that must exit with
+ * the expected message.
  */
 
 #include <err.h>
@@ -51,9 +55,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "zstream_alloc_impl.h"
+#include "zstream_hash_impl.h"
 #include "zstream_selftest.h"
 #include "zstream_util.h"
-#include "zstream_hash_impl.h"
 
 #define	ABSENT_BIT	(1ULL << 63)
 
@@ -74,10 +79,8 @@ typedef struct {
 	uint64_t	hc_fixed_mask;	/* Hash bits forced to hc_fixed_bits */
 	uint64_t	hc_fixed_bits;
 	uint64_t	hc_rng_stream;
-	size_t		hc_margin;	/* lh_memory_margin; 0 = leave */
-	int		hc_interval;	/* lh_mem_check_interval; 0 = leave */
 	uint64_t	hc_spot_every;	/* Mid-insert probes; 0 = off */
-	boolean_t	hc_no_disk;	/* Pass a NULL cache directory */
+	boolean_t	hc_no_disk;	/* Pass a NULL spill directory */
 	boolean_t	hc_validate;	/* lh_validate() when done */
 	boolean_t	hc_keep;	/* Return live table to caller */
 } htest_config_t;
@@ -109,8 +112,8 @@ expected_bucket(linear_hash_t *lh, uint64_t hash)
  *
  * - The total number of entries is the number the caller inserted.
  *
- * - lh_num_top_level_entries and lh_num_top_level_buckets agree with what
- *   is actually on disk. Those two drive the split decision, so drift in
+ * - lh_stats.top_entries and lh_stats.top_buckets agree with what is
+ *   actually stored. Those two drive the split decision, so drift in
  *   either one silently stops the table from growing.
  *
  * Returns B_TRUE if the table is OK, warns about each problem found.
@@ -235,14 +238,37 @@ verify_payload(const uint8_t *buf, size_t record_size)
 	free(whole);
 }
 
-static size_t
-total_mem_used(linear_hash_t *lh)
+/*
+ * The table's allocator group. lh_init() must create the allocators in
+ * eviction priority order: data first, then overflow, then main buckets.
+ */
+static allocator_group_t *
+hash_group(linear_hash_t *lh)
 {
-	size_t total = 0;
+	allocator_group_t *g = lh->lh_alloc.data->a_group;
 
-	for (int i = 0; i < NUM_ALLOC; i++)
-		total += allocator_memory_used(lh->lh_alloc.all[i]);
-	return (total);
+	VERIFY3U(g->ag_num_allocators, ==, 3);
+	VERIFY3P(g->ag_allocators[0], ==, lh->lh_alloc.data);
+	VERIFY3P(g->ag_allocators[1], ==, lh->lh_alloc.overflow);
+	VERIFY3P(g->ag_allocators[2], ==, lh->lh_alloc.bucket);
+	VERIFY3U(g->ag_mem_current, ==,
+	    g->ag_allocators[0]->a_writable_frontier +
+	    g->ag_allocators[1]->a_writable_frontier +
+	    g->ag_allocators[2]->a_writable_frontier);
+	VERIFY3U(g->ag_mem_current, <=, g->ag_mem_limit);
+	return (g);
+}
+
+static size_t
+alloc_frontier(allocator_t *a)
+{
+	return ((size_t)a->a_writable_frontier);
+}
+
+static size_t
+alloc_fod(allocator_t *a)
+{
+	return ((size_t)a->a_first_on_disk);
 }
 
 /*
@@ -396,19 +422,13 @@ verify_table(linear_hash_t *lh, htest_entry_t *entries, uint64_t count,
 /*
  * Run a complete generate/insert/verify workload. If hc_keep is set, the
  * table is returned live (for extra caller-side assertions) and the caller
- * must lh_destroy() it. Otherwise NULL is returned.
+ * must lh_fini() it. Otherwise NULL is returned.
  */
 static linear_hash_t *
 run_hash_workload(const htest_config_t *cfg)
 {
-	size_t saved_margin = lh_memory_margin;
-	int saved_interval = lh_mem_check_interval;
 	selftest_rng_t rng;
 
-	if (cfg->hc_margin != 0)
-		lh_memory_margin = cfg->hc_margin;
-	if (cfg->hc_interval != 0)
-		lh_mem_check_interval = cfg->hc_interval;
 	selftest_rng_init(&rng, cfg->hc_rng_stream);
 
 	linear_hash_t *lh = lh_init(cfg->hc_record_size, cfg->hc_max_memory,
@@ -421,8 +441,7 @@ run_hash_workload(const htest_config_t *cfg)
 	verify_table(lh, entries, cfg->hc_count, &rng);
 
 	free(entries);
-	lh_memory_margin = saved_margin;
-	lh_mem_check_interval = saved_interval;
+	(void) hash_group(lh);
 	if (cfg->hc_keep)
 		return (lh);
 	lh_fini(lh);
@@ -477,16 +496,22 @@ hash_basic(void)
 	VERIFY(!lh_retrieve_next(iter, buf));
 
 	VERIFY(lh_validate(lh, 3));
+
+	/* One group of three, with the budget rounded up to whole clusters */
+	allocator_group_t *g = hash_group(lh);
+	VERIFY3U(g->ag_mem_limit, ==, ROUND_UP(64 << 20, g->ag_cluster_size));
 	lh_fini(lh);
 }
 
 /*
- * Different record sizes, including the 8-byte minimum (tag only).
+ * Different record sizes, from the 8-byte minimum (tag only) up to the
+ * allocator's maximum.
  */
 static void
 hash_record_sizes(void)
 {
-	static const size_t sizes[] = { 8, 24, 40, 512 };
+	static const size_t sizes[] = { 8, 24, 40, 72, 512, 4096,
+	    MAX_RECORD_SIZE };
 
 	for (size_t s = 0; s < sizeof (sizes) / sizeof (sizes[0]); s++) {
 		htest_config_t cfg = {
@@ -643,15 +668,19 @@ hash_no_disk(void)
 	};
 	linear_hash_t *lh = run_hash_workload(&cfg);
 
-	/* Nothing was ever written to disk, so everything is resident */
-	VERIFY3U(total_mem_used(lh), >, 0);
+	/* Nothing was ever pushed toward disk */
+	allocator_group_t *g = hash_group(lh);
+	VERIFY3U(g->ag_mem_current, >, 0);
+	for (int i = 0; i < 3; i++)
+		VERIFY3U(alloc_fod(g->ag_allocators[i]), ==, g->ag_mem_limit);
 	lh_fini(lh);
 }
 
 /*
  * Heavy memory pressure: the data alone is more than ten times the memory
- * budget. The table must stay correct throughout, keep its total memory use
- * bounded near the budget, and end with the data allocator fully evicted.
+ * budget. The table must stay correct throughout and its group must never
+ * exceed the budget; accounting is exact, so there is no slack. The data
+ * allocator, as the first eviction target, must end up fully evicted.
  */
 static void
 hash_memory_pressure(void)
@@ -659,66 +688,44 @@ hash_memory_pressure(void)
 	const size_t budget = 2 << 20;
 	const uint64_t count = 100000;
 	const size_t record_size = 256;
-	size_t saved_margin = lh_memory_margin;
-	int saved_interval = lh_mem_check_interval;
 	selftest_rng_t rng;
 
-	lh_memory_margin = 1 << 20;
-	lh_mem_check_interval = 256;
 	selftest_rng_init(&rng, 600);
-
 	linear_hash_t *lh = lh_init(record_size, budget,
 	    selftest_scratch_dir());
+	allocator_group_t *g = hash_group(lh);
+	VERIFY3U(g->ag_mem_limit, ==, ROUND_UP(budget, g->ag_cluster_size));
 	htest_config_t gen_cfg = {
 		.hc_record_size = record_size,
 		.hc_count = count,
 	};
 	htest_entry_t *entries = generate_entries(&gen_cfg, &rng);
 
-	/*
-	 * Insert in slices so total memory use can be sampled along the
-	 * way, not just at the end. The bound is loose (each of the three
-	 * allocators may take one frontier-granularity step past the
-	 * budget before the next check notices) but total use must stay in
-	 * the budget's neighborhood rather than tracking the data size.
-	 */
-	const size_t slack = 8 << 20;
 	uint8_t *buf = safe_malloc(record_size);
-	size_t max_seen = 0;
 	for (uint64_t i = 0; i < count; i++) {
 		make_payload(buf, record_size, entries[i].he_tag);
 		lh_insert(lh, entries[i].he_hash, buf);
 		if ((i + 1) % 1024 == 0)
-			max_seen = MAX(max_seen, total_mem_used(lh));
+			(void) hash_group(lh);
 		if ((i + 1) % 2048 == 0)
 			spot_check(lh, entries, i + 1, &rng, buf);
 	}
 	free(buf);
-	if (max_seen > budget + slack) {
-		errx(1, "memory use reached %zu against a budget of %zu",
-		    max_seen, budget);
-	}
 
-	/* The data allocator is the first eviction target and the largest */
-	VERIFY3U(allocator_memory_used(lh->lh_alloc.data), ==, 0);
-	VERIFY3U(total_mem_used(lh), <=, budget);
+	VERIFY0(alloc_frontier(lh->lh_alloc.data));
+	VERIFY3U(g->ag_mem_current, ==, g->ag_mem_limit);
 
 	VERIFY(lh_validate(lh, count));
 	verify_table(lh, entries, count, &rng);
-
 	free(entries);
 	lh_fini(lh);
-	lh_memory_margin = saved_margin;
-	lh_mem_check_interval = saved_interval;
 }
 
 /*
  * Moderate memory pressure: the budget is big enough for the bucket array
- * but not for the data. Eviction must follow the documented priority order,
- * so the data allocator gets squeezed while the bucket and overflow
- * allocators are never touched. "Never touched" is checked as monotonicity:
- * an allocator that was trimmed has less memory at the end than it had at
- * its high-water mark.
+ * but not for the data. Only the data allocator may give memory up. Its
+ * split moves down, but it keeps part of the budget (gradual degradation),
+ * while the splits of the overflow and bucket allocators never move.
  */
 static void
 hash_pressure_priority(void)
@@ -726,14 +733,9 @@ hash_pressure_priority(void)
 	const size_t budget = 24 << 20;
 	const uint64_t count = 40000;
 	const size_t record_size = 1024;	/* 40MB of data */
-	size_t saved_margin = lh_memory_margin;
-	int saved_interval = lh_mem_check_interval;
 	selftest_rng_t rng;
 
-	lh_memory_margin = 2 << 20;
-	lh_mem_check_interval = 512;
 	selftest_rng_init(&rng, 700);
-
 	linear_hash_t *lh = lh_init(record_size, budget,
 	    selftest_scratch_dir());
 	htest_config_t gen_cfg = {
@@ -742,43 +744,27 @@ hash_pressure_priority(void)
 	};
 	htest_entry_t *entries = generate_entries(&gen_cfg, &rng);
 
-	size_t peak[NUM_ALLOC] = { 0 };
 	uint8_t *buf = safe_malloc(record_size);
 	for (uint64_t i = 0; i < count; i++) {
 		make_payload(buf, record_size, entries[i].he_tag);
 		lh_insert(lh, entries[i].he_hash, buf);
-		if ((i + 1) % 512 == 0) {
-			for (int k = 0; k < NUM_ALLOC; k++) {
-				peak[k] = MAX(peak[k], allocator_memory_used(
-				    lh->lh_alloc.all[k]));
-			}
-		}
 		if ((i + 1) % 1024 == 0)
 			spot_check(lh, entries, i + 1, &rng, buf);
 	}
 	free(buf);
 
-	size_t data = allocator_memory_used(lh->lh_alloc.data);
-	size_t overflow = allocator_memory_used(lh->lh_alloc.overflow);
-	size_t bucket = allocator_memory_used(lh->lh_alloc.bucket);
-
-	/* The data allocator was trimmed... */
-	VERIFY3U(data, <, peak[0]);
-	VERIFY3U(data, <, count * record_size);
-	/* ...but is still partially memory-resident: gradual degradation */
-	VERIFY3U(data, >, 0);
-	/* Bucket and overflow allocators were left alone */
-	VERIFY3U(overflow, ==, peak[1]);
-	VERIFY3U(bucket, ==, peak[2]);
-	VERIFY3U(bucket, >, 0);
+	allocator_group_t *g = hash_group(lh);
+	VERIFY3U(g->ag_mem_current, ==, g->ag_mem_limit);
+	VERIFY3U(alloc_fod(lh->lh_alloc.data), <, g->ag_mem_limit);
+	VERIFY3U(alloc_frontier(lh->lh_alloc.data), >, 0);
+	VERIFY3U(alloc_fod(lh->lh_alloc.overflow), ==, g->ag_mem_limit);
+	VERIFY3U(alloc_fod(lh->lh_alloc.bucket), ==, g->ag_mem_limit);
+	VERIFY3U(alloc_frontier(lh->lh_alloc.bucket), >, 0);
 
 	VERIFY(lh_validate(lh, count));
 	verify_table(lh, entries, count, &rng);
-
 	free(entries);
 	lh_fini(lh);
-	lh_memory_margin = saved_margin;
-	lh_mem_check_interval = saved_interval;
 }
 
 /*
@@ -788,9 +774,10 @@ hash_pressure_priority(void)
  * bleed between iterators or tables.
  *
  * An insert invalidates every outstanding iterator for that hash table, and
- * lh_retrieve_next() treats a stale iterator as a fatal error. It's fine to
- * invalidate the iterators en passant, but not to attempt to use them
- * afterwards.
+ * lh_retrieve_next() treats a stale iterator as a fatal error (see
+ * hash_fatal). It's fine to invalidate the iterators en passant, but not
+ * to use them afterwards. Inserting into one table must not invalidate an
+ * iterator on another.
  */
 static void
 hash_iterators(void)
@@ -888,15 +875,28 @@ hash_iterators(void)
 	VERIFY3U(na, ==, expect[0]);
 	VERIFY3U(nb, ==, 100);
 
+	/* An insert into lh2 midway leaves the iterator on lh valid */
+	VERIFY3U(expect[0], >, 3);
+	ia = lh_initiate_retrieve(lh, hashes[0]);
+	na = 0;
+	while (na < 3 && lh_retrieve_next(ia, buf))
+		na++;
+	make_payload(buf2, sizeof (buf2), 101);
+	lh_insert(lh2, 999, buf2);
+	while (lh_retrieve_next(ia, buf))
+		na++;
+	VERIFY3U(na, ==, expect[0]);
+
 	free(entries);
 	lh_fini(lh2);
 	lh_fini(lh);
 }
 
 /*
- * Seeded randomization of record sizes, counts, duplication levels,
- * budgets, and memory-management pacing. Whatever the targeted tests miss,
- * this net should catch over many CI runs; failures replay with -s.
+ * Seeded randomization of record sizes, counts, duplication levels, and
+ * budgets, which are usually not a whole number of clusters. Whatever the
+ * targeted tests miss, this net should catch over many CI runs; failures
+ * replay with -s.
  */
 static void
 hash_stress(void)
@@ -909,23 +909,152 @@ hash_stress(void)
 		htest_config_t cfg = {
 			.hc_record_size =
 			    8 * (1 + selftest_rng_below(&rng, 32)),
-			.hc_max_memory = (selftest_rng_below(&rng, 4) == 0) ?
+			.hc_max_memory = ((selftest_rng_below(&rng, 4) == 0) ?
 			    (size_t)(1 + selftest_rng_below(&rng, 8)) << 20 :
 			    (size_t)(64 + selftest_rng_below(&rng, 192))
-			    << 20,
+			    << 20) + selftest_rng_below(&rng, 1 << 20),
 			.hc_count = count,
 			.hc_key_space = (selftest_rng_below(&rng, 3) == 0) ?
 			    200 + selftest_rng_below(&rng, 2000) : 0,
 			.hc_rng_stream = 1000000 + round * 1000,
-			.hc_margin = (size_t)(1 + selftest_rng_below(&rng, 8))
-			    << 19,
-			.hc_interval =
-			    64 + (int)selftest_rng_below(&rng, 2048),
 			.hc_spot_every = 512,
 			.hc_validate = count < 30000,
 		};
 		run_hash_workload(&cfg);
 	}
+}
+
+/*
+ * Every table owns one allocator group, so MAX_ALLOCATOR_GROUPS tables can
+ * be live at once (one more is fatal; see hash_fatal). Inserts into all of
+ * them are interleaved, the tables are destroyed in a scrambled order, and
+ * then the whole thing is repeated in the recycled slots.
+ */
+static void
+hash_group_slots(void)
+{
+	const uint64_t count = 2000;
+	const uint64_t chunk = 100;
+	linear_hash_t *tables[MAX_ALLOCATOR_GROUPS];
+	htest_entry_t *entries[MAX_ALLOCATOR_GROUPS];
+	allocator_group_t *slots[MAX_ALLOCATOR_GROUPS];
+	selftest_rng_t rng;
+
+	selftest_rng_init(&rng, 950);
+	for (int round = 0; round < 2; round++) {
+		for (int t = 0; t < MAX_ALLOCATOR_GROUPS; t++) {
+			htest_config_t cfg = {
+				.hc_record_size = 8 + 8 * t,
+				.hc_count = count,
+			};
+			tables[t] = lh_init(cfg.hc_record_size,
+			    (t % 2) ? 0 : 16 << 20, selftest_scratch_dir());
+			entries[t] = generate_entries(&cfg, &rng);
+			allocator_group_t *g = hash_group(tables[t]);
+			for (int u = 0; u < t; u++)
+				VERIFY3P(g, !=, hash_group(tables[u]));
+			if (round == 0) {
+				slots[t] = g;
+			} else {
+				int u;
+				for (u = 0; u < MAX_ALLOCATOR_GROUPS; u++) {
+					if (slots[u] == g)
+						break;
+				}
+				VERIFY3S(u, <, MAX_ALLOCATOR_GROUPS);
+			}
+		}
+
+		for (uint64_t c = 0; c < count; c += chunk) {
+			for (int t = 0; t < MAX_ALLOCATOR_GROUPS; t++)
+				insert_entries(tables[t], entries[t] + c,
+				    chunk, 0, &rng);
+		}
+		for (int t = 0; t < MAX_ALLOCATOR_GROUPS; t++) {
+			VERIFY(lh_validate(tables[t], count));
+			verify_table(tables[t], entries[t], count, &rng);
+			free(entries[t]);
+		}
+
+		for (int left = MAX_ALLOCATOR_GROUPS; left > 0; left--) {
+			int t = selftest_rng_below(&rng, left);
+			lh_fini(tables[t]);
+			tables[t] = tables[left - 1];
+		}
+	}
+}
+
+static void
+child_stale_iterator(void *arg)
+{
+	linear_hash_t *lh = lh_init(16, 16 << 20, NULL);
+	uint8_t buf[16];
+
+	(void) arg;
+	make_payload(buf, sizeof (buf), 1);
+	lh_insert(lh, 7, buf);
+	lh_iterator_t *iter = lh_initiate_retrieve(lh, 7);
+	make_payload(buf, sizeof (buf), 2);
+	lh_insert(lh, 8, buf);
+	(void) lh_retrieve_next(iter, buf);
+}
+
+/*
+ * The argument is { record_size, max_memory, use_spill_dir }.
+ */
+static void
+child_lh_init(void *arg)
+{
+	const size_t *params = arg;
+	(void) lh_init(params[0], params[1],
+	    params[2] ? selftest_scratch_dir() : NULL);
+}
+
+static void
+child_memory_only_overflow(void *arg)
+{
+	linear_hash_t *lh = lh_init(64, 8 << 20, NULL);
+	uint8_t buf[64];
+
+	(void) arg;
+	for (uint64_t i = 1; i < (1ULL << 24); i++) {
+		make_payload(buf, sizeof (buf), i);
+		lh_insert(lh, selftest_mix64(i), buf);
+	}
+}
+
+static void
+child_too_many_tables(void *arg)
+{
+	(void) arg;
+	for (int i = 0; i <= MAX_ALLOCATOR_GROUPS; i++)
+		(void) lh_init(16, 0, selftest_scratch_dir());
+}
+
+/*
+ * The fatal paths, each run in a child process that must exit with the
+ * expected message. A memory-only table can run out while either the data
+ * allocator (which has no one to take from) or a bucket allocator (whose
+ * victim has nowhere to put its data) is growing.
+ */
+static void
+hash_fatal(void)
+{
+	selftest_expect_exit("stale iterator", child_stale_iterator, NULL,
+	    "invalidated iterator");
+
+	size_t no_backing[] = { 16, 0, B_FALSE };
+	selftest_expect_exit("no backing", child_lh_init, no_backing,
+	    "requires memory or disk backing");
+	size_t too_big[] = { MAX_RECORD_SIZE + 1, 16 << 20, B_TRUE };
+	selftest_expect_exit("oversized record", child_lh_init, too_big,
+	    "record size too large");
+
+	selftest_expect_exit("memory-only overflow",
+	    child_memory_only_overflow, NULL,
+	    "memory limit exceeded|would lose data");
+	selftest_expect_exit("too many tables", child_too_many_tables, NULL,
+	    "allocator groups may be active");
 }
 
 const test_case_t selftest_hash_cases[] = {
@@ -940,5 +1069,7 @@ const test_case_t selftest_hash_cases[] = {
 	{ "hash_pressure_priority",	hash_pressure_priority },
 	{ "hash_iterators",		hash_iterators },
 	{ "hash_stress",		hash_stress },
+	{ "hash_group_slots",		hash_group_slots },
+	{ "hash_fatal",			hash_fatal },
 	{ NULL,				NULL },
 };
