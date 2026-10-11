@@ -194,7 +194,7 @@ allocator_group_init(size_t *record_sizes, unsigned n, size_t memory_limit,
 	for (int i = 0; i < n; i++) {
 		void *base = NULL;
 		if (group->ag_mem_limit > 0) {
-			void *base = mmap(NULL, group->ag_mem_limit,
+			base = mmap(NULL, group->ag_mem_limit,
 			    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (base == MAP_FAILED)
 				errx(1, "mmap failed in %s", __func__);
