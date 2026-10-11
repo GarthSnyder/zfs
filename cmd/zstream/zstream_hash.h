@@ -27,9 +27,8 @@ extern "C" {
 
 /*
  * This module implements linear hashing with 64-bit hash keys. It runs on
- * top of allocator_t, which implements a structured approach to storage
- * management and allows the hash table to expand indefinitely as long as
- * disk storage remains available.
+ * top of allocator_t, which allows portions of the hash table to spill from
+ * memory to disk when the memory budget is exhausted.
  *
  * See the comments in zstream_hash.c for more details about linear hashing.
  * Briefly, the table grows linearly as items are inserted. When an
@@ -50,17 +49,17 @@ typedef struct linear_hash linear_hash_t;
 typedef struct lh_iterator lh_iterator_t;
 
 /*
- * The cache_dir should be a place where memory can meaningfully spill over
+ * The spill_dir should be a place where memory can meaningfully spill over
  * to disk, which rules out /tmp on most systems because it's often
- * implemented as a ramdisk. If cache_dir is NULL, the hash table does not
+ * implemented as a ramdisk. If spill_dir is NULL, the hash table does not
  * use disk backup and may eventually run out of memory. If max_memory is
  * zero, the hash table is disk-only.
  *
- * Because memory accounting is only performed periodically, actual memory
- * use may exceed max_memory for a short time.
+ * Internal memory management is performed in terms of page clusters of
+ * about 1MB, so max_memory should be at least 8MB if it is not zero.
  */
 linear_hash_t *
-lh_init(size_t record_size, size_t max_memory, const char *cache_dir);
+lh_init(size_t record_size, size_t max_memory, const char *spill_dir);
 
 /*
  * Insertions invalidate all outstanding iterators on this hash table.
@@ -69,12 +68,12 @@ void
 lh_insert(linear_hash_t *lh, uint64_t hash, const void* data);
 
 /*
- * Set up retrieval for all data records with a given hash value.
- * Use lh_retrieve_next() to iterate through matching records.
+ * Set up retrieval for all data records with a given hash value. Use
+ * lh_retrieve_next() to iterate through matching records.
  *
- * API clients are not required to memory-manage iterators, nor are they
- * obligated to pursue iterations to completion. However, callers must
- * limit themselves to MAX_LH_ITERATORS concurrent iterators.
+ * API clients are not required to memory-manage iterators or to pursue
+ * iterations to completion. However, callers must limit themselves to
+ * MAX_LH_ITERATORS concurrent iterators.
  */
 lh_iterator_t *
 lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash);
