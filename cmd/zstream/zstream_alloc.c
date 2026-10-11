@@ -58,8 +58,7 @@
  *   point the pages acquire swap reservations and are charged against the RSS.
  */
 
-#define	OFFSET_TO_ADDR(alloc, off)	((off) + (alloc)->a_base_addr)
-#define	ADDR_TO_OFFSET(alloc, addr)	((addr) - (alloc)->a_base_addr)
+#define	OFFSET_TO_ADDR(alloc, off)	((char *)(alloc)->a_base_addr + (off))
 #define	OFFSET_IS_ON_DISK(alloc, off)	((off) >= (alloc)->a_first_on_disk)
 
 #define	PAGE_CLUSTER_SIZE		(1 << 20)	/* 1MB */
