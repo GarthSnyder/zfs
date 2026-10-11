@@ -136,6 +136,7 @@ optimal_cluster_size(const size_t *record_sizes, unsigned n)
 	VERIFY(pagesize > 0 && pagesize <= TARGET_PAGE_CLUSTER_SIZE && n > 0);
 	size_t biggest = 0;
 	for (int i = 0; i < n; i++) {
+		VERIFY3U(record_sizes[i], >, 0);
 		biggest = MAX(biggest, record_sizes[i]);
 		if (record_sizes[i] > MAX_PAGES_PER_RECORD * pagesize)
 			errx(1, "requested allocator_t record size too large "
