@@ -135,7 +135,9 @@ optimal_cluster_size(size_t *record_sizes, unsigned n)
 {
 	long pagesize = sysconf(_SC_PAGESIZE);
 	VERIFY(pagesize > 0 && pagesize <= TARGET_PAGE_CLUSTER_SIZE && n > 0);
+	size_t biggest = 0;
 	for (int i = 0; i < n; i++) {
+		biggest = MAX(biggest, record_sizes[i]);
 		if (record_sizes[i] > MAX_PAGES_PER_RECORD * pagesize)
 			errx(1, "requested allocator_t record size too large "
 			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
@@ -144,8 +146,8 @@ optimal_cluster_size(size_t *record_sizes, unsigned n)
 	size_t best_cluster = 0;
 	size_t least_waste = TARGET_PAGE_CLUSTER_SIZE;
 	int max_pages = TARGET_PAGE_CLUSTER_SIZE / pagesize;
-	for (int pages = 1; pages <= max_pages; pages++) {
-		size_t cluster_size = pages * pagesize;
+	for (int np = (biggest / pagesize) + 1; np <= max_pages; np++) {
+		size_t cluster_size = np * pagesize;
 		size_t most_waste = 0;
 		for (int i = 0; i < n; i++) {
 			size_t waste = cluster_size % record_sizes[i];
