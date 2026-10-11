@@ -78,7 +78,7 @@ hash_lookup(linear_hash_t *lh, struct drr_write_byref *drrwb)
 		    entry.rhe_object == drrwb->drr_refobject &&
 		    entry.rhe_offset == drrwb->drr_refoffset;
 		if (matches) {
-			return entry.rhe_stream_offset;
+			return (entry.rhe_stream_offset);
 		}
 	}
 	errx(1, "could not find expected redup table entry");
@@ -241,6 +241,6 @@ zstream_do_redup(int argc, char *argv[])
 	}
 
 	fclose(context.rc_fp);
-	lh_destroy(context.rc_hash);
+	lh_fini(context.rc_hash);
 	return (0);
 }

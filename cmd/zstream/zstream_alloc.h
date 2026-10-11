@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
- *
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
  * You may only use this file in accordance with the terms of version
@@ -9,9 +7,7 @@
  *
  * A full copy of the text of the CDDL should have accompanied this
  * source.  A copy of the CDDL is also available via the Internet at
- * http://www.illumos.org/license/CDDL.
- *
- * CDDL HEADER END
+ * https://opensource.org/license/CDDL-1.0.
  */
 
 /*
@@ -21,64 +17,57 @@
 #ifndef _ZSTREAM_ALLOC_H
 #define	_ZSTREAM_ALLOC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 
 /*
- * zstream_alloc.[ch] defines a thin storage API that can be backed by
- * either memory, a disk file, or both; the API is the same. An allocator's
- * backing strategy can change on the fly without clients being aware that a
- * transition has occurred.
+ * An allocator_t defines a thin storage API that can be backed by
+ * memory, a disk file, or both; the API is the same.
+ *
+ * Dual-backed allocators keep the first N records in memory and later
+ * records on disk. For data that grows linearly but is accessed randomly
+ * (e.g., linear hash tables), this arrangement allows for gradual
+ * performance degradation after memory becomes full.
  *
  * The goal is to use memory as long as it's available but not give up
  * arbitrarily when memory has been exhausted. With sufficient disk space,
  * it's possible to process streams of arbitrary size.
  *
- * Dual-backed allocators keep the first N records in memory and later
- * records on disk. For data that grows linearly but is accessed randomly
- * (e.g., a linear hash tables), this arrangement allows for gradual
- * performance degradation after memory becomes full.
+ * An allocator's memory use can later be trimmed, but not expanded.
  *
  * - Blocks are of uniform fixed size.
  * - Every block lives at a 64-bit record_ix_t address.
- * - Record indexes are in block units, not bytes.
+ * - Record indexes are in ordinal units, not bytes.
  * - You may read a block at any index, even if you haven't written it.
- * - Uninitialized blocks are zero-filled.
+ * - Uninitialized blocks read as zeros.
  * - Allocators are not thread-safe.
  */
 
 typedef uint64_t record_ix_t;
 
-struct allocator;
 typedef struct allocator allocator_t;
 
-typedef struct {
-	allocator_t	*as_allocator;	/* Simplifies things for clients */
-	uint64_t	as_io_ops_mem;	/* Number of stores and retrieves */
-	uint64_t	as_io_ops_disk;
-	size_t		as_mem_used;	/* Current memory use */
-	size_t		as_granularity;	/* Memory allocation granularity */
-	size_t		as_disk_used;	/* Current disk use */
-	size_t		as_max_memory;
-	uint64_t	as_num_records;
-} allocator_stats_t;
-
 /*
- * Initialize an allocator. The backing_fd can be omitted (set to -1), but
- * since it cannot later be changed, the allocator will be memory-only.
+ * Initialize an allocator.
  *
- * The max_memory parameter determines how much RAM the allocator is allowed
- * to consume, in bytes. If it's 0, the allocator will initially be
- * disk-only. The memory limit is recorded for future reference, but actual
- * allocations occur only as memory is actually needed.
+ * If dir_path is non-NULL, the allocator creates a temporary file there for
+ * backup storage on disk.
+ *
+ * The mem_size parameter determines how much RAM the allocator is allowed
+ * to consume, in bytes. If it's 0, the allocator will be disk-only. The
+ * memory limit is recorded for future reference, but allocations occur only
+ * as memory is actually needed.
  */
 allocator_t *
-allocator_init(size_t record_size, size_t mem_size, int backing_fd);
+allocator_init(size_t record_size, size_t mem_size, const char *dir_path);
 
 /*
  * The basic API, which is essentially just read() and write() but
- * abstracted across memory and disk.
+ * with fixed record sizes and abstracted across memory and disk.
  */
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);
@@ -101,36 +90,41 @@ record_ix_t
 allocator_skip(allocator_t *alloc);
 
 /*
- * An allocator's memory budget can be changed at any time. On a dual-backed
- * allocator, this operation incurs a disk-write cost proportional to the
- * difference between old and new budgets. However, all data remains intact.
- *
- * If the allocator is memory-only, the new memory budget must be sufficient
- * to accommodate all existing records. If it is not, the program will
- * abort. You can check the current memory consumption with
- * allocator_get_stats().
- *
- * You can also use this function to convert a disk-only allocator to a
- * dual-backed allocator.
- *
- * The requested new_size will be rounded up to a multiple of the memory
- * allocation granularity. Depending on rounding, a call to
- * allocator_set_max_memory() may in fact be a silent no-op. If this is of
- * concern, double-check the rounded value by calling allocator_get_stats().
+ * Returns the amount of memory actually used. This includes all page
+ * allocations, so it's not necessarily the same as the record size * the
+ * number of records stored.
  */
-void
-allocator_set_max_memory(allocator_t *alloc, size_t new_size);
+size_t
+allocator_memory_used(allocator_t *alloc);
 
 /*
- * Gets general info about allocator utilization.
+ * This function attempts to trim at least delta_bytes from the allocator's
+ * memory use and returns the number of bytes actually trimmed, which may be
+ * different because of internal rounding boundaries.
+ *
+ * A call to this function will always result in some trimming as long as
+ * the current memory use and the specified delta_bytes are both nonzero.
+ *
+ * If the allocator also has disk backing, the allocator will transparently
+ * move records trimmed from memory onto disk.
+ *
+ * The delta is relative to actual memory use (that is, the value returned
+ * by allocator_memory_used()), not to the mem_size specified when the
+ * allocator was created. A corollary is that you must not call this
+ * function on a memory-only allocator. There is nowhere for trimmed data to
+ * go, so it will abort the program rather than silently losing data.
  */
-allocator_stats_t
-allocator_get_stats(allocator_t *alloc);
+size_t
+allocator_trim_memory(allocator_t *alloc, size_t delta_bytes);
 
 /*
  * Destroy allocator and free all resources.
  */
 void
-allocator_destroy(allocator_t *alloc);
+allocator_fini(allocator_t *alloc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ZSTREAM_ALLOC_H */
