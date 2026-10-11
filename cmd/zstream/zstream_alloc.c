@@ -224,7 +224,7 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 	off_t next_off = off + alloc->a_record_size;
 	if (OFFSET_IS_ON_DISK(alloc, off)) {
 		if (alloc->a_fd < 0)
-			errx(1, "no disk file for allocator record %llu "
+			errx(1, "allocator memory limit exceeded, record %llu "
 			    "(write)", (u_longlong_t)record);
 		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, off);
 	} else if (try_make_readwrite(alloc, next_off)) {
