@@ -25,7 +25,7 @@ extern "C" {
 #include <stdint.h>
 
 /*
- * An allocator_t defines a thin storage API that can be backed by
+ * An allocator_t defines a thin record storage API that can be backed by
  * memory, a disk file, or both; the API is identical.
  *
  * Dual-backed allocators keep the first N records in memory and later
@@ -37,31 +37,48 @@ extern "C" {
  * arbitrarily when memory has been exhausted. With sufficient disk space,
  * it's possible to process streams of arbitrary size.
  *
- * An allocator's memory use can later be trimmed, but not expanded.
+ *   - Blocks are of uniform fixed size (sizes may vary per allocator).
+ *   - Every block lives at a 64-bit record_ix_t address.
+ *   - Record indexes are in ordinal units, not bytes.
+ *   - You may read a block at any index, even if you haven't written it.
+ *   - Uninitialized blocks read as zeros.
+ *   - Allocators are not thread-safe.
  *
- * - Blocks are of uniform fixed size.
- * - Every block lives at a 64-bit record_ix_t address.
- * - Record indexes are in ordinal units, not bytes.
- * - You may read a block at any index, even if you haven't written it.
- * - Uninitialized blocks read as zeros.
- * - Allocators are not thread-safe.
+ * All allocators are members of an allocator group, which may be a group
+ * of 1. Allocators in a group share a collective memory limit. Regardless
+ * of the data stored in the individual allocators, the group will never use
+ * more memory than the limit specified at the time the group was created.
  */
+
+#define	MAX_ALLOCATOR_GROUPS		6
+#define	MAX_ALLOCATORS_PER_GROUP	6
 
 typedef uint64_t record_ix_t;
 
 typedef struct allocator allocator_t;
 
 /*
- * If dir_path is non-NULL, the allocator creates a temporary file there for
- * backup storage on disk.
+ * Create a set of num_allocators allocator_t's. One allocator_t is created
+ * for each value in the record_sizes array.
  *
- * The mem_size parameter determines how much RAM the allocator is allowed
- * to consume, in bytes. If it's 0, the allocator will be disk-only. The
- * limit is recorded for future reference, but allocations occur only as
- * memory is actually needed.
+ * Over time, a group may internally reassign memory, forcing some records
+ * to disk. (If there is no disk backup, this becomes a fatal error.) Memory
+ * rebalancing is tranparent to the client.
+ *
+ * Records are evicted from memory one allocator at a time.
+ * allocator_init_group()[0] is the first allocator asked to yield memory.
+ * When it has no more memory to surrender, memory will be drawn from
+ * allocator_init_group()[1], and so on. The ultimate end state under high
+ * load is that the last allocator will hold all the group's memory, with
+ * other allocators having functionally become disk-only. If this is not the
+ * behavior you want, create more than one group.
+ *
+ * Memory is managed in page clusters of about 1MB, so 8MB is a good working
+ * minimum for the mem_limit parameter.
  */
-allocator_t *
-allocator_init(size_t record_size, size_t mem_size, const char *dir_path);
+allocator_t **
+allocator_group_init(size_t *record_sizes, unsigned num_allocators,
+    size_t mem_limit, const char *dir_path);
 
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);
@@ -84,38 +101,10 @@ record_ix_t
 allocator_skip(allocator_t *alloc);
 
 /*
- * Returns the amount of memory actually used. This includes all page
- * allocations, so it's not necessarily the same as the record size * the
- * number of records stored.
- */
-size_t
-allocator_memory_used(allocator_t *alloc);
-
-/*
- * Trim at least delta_bytes from the allocator's memory use. Returns the
- * number of bytes actually trimmed, which may be different because of
- * internal rounding boundaries.
- *
- * A call to this function will always result in some trimming as long as
- * the current memory use and the specified delta_bytes are both nonzero.
- *
- * If the allocator also has disk backing, the allocator will transparently
- * move records trimmed from memory onto disk.
- *
- * The delta is relative to actual memory use (that is, the value returned
- * by allocator_memory_used()), not to the mem_size limit specified when the
- * allocator was created. A corollary is that you must not call this
- * function on a memory-only allocator. There is nowhere for trimmed data to
- * go, so it will abort the program rather than silently losing data.
- */
-size_t
-allocator_trim_memory(allocator_t *alloc, size_t delta_bytes);
-
-/*
- * Destroy allocator and free all resources.
+ * Destroy an allocator group. You can name any allocator in the group.
  */
 void
-allocator_fini(allocator_t *alloc);
+allocator_group_fini(allocator_t *alloc);
 
 #ifdef __cplusplus
 }
