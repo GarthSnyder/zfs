@@ -135,9 +135,9 @@ lh_init(size_t record_size, size_t max_mem, const char *dir)
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
 		.lh_alloc = {
-		    .data     = allocators[0],
+		    .data = allocators[0],
 		    .overflow = allocators[1],
-		    .bucket   = allocators[2],
+		    .bucket = allocators[2],
 		},
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
 		.lh_stats = {
