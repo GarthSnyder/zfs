@@ -24,12 +24,12 @@
  *
  * To verify a table, entries are grouped by hash value and each group is
  * retrieved. Every returned payload must be internally consistent and must
- * match exactly one not-yet-seen model entry, and the number of returned
- * records must equal the group size. Hashes never inserted must return
- * nothing. (Inserted keys always have bit 63 clear, while absent-probe
+ * match exactly one not-yet-seen model entry. The number of returned
+ * records must equal the group size. Hashes never inserted into must
+ * return nothing. (Inserted keys always have bit 63 clear, while absent-probe
  * tests set this bit.)
  *
- * lh_validate() below complements that black-box view with a structural
+ * lh_validate() below complements this black-box view with a structural
  * audit of the table itself. It used to live in zstream_hash_extras.c and
  * was a runtime-callable function. But in the interest of keeping the
  * production code simple, it has moved here. In this context, we
@@ -113,7 +113,7 @@ expected_bucket(linear_hash_t *lh, uint64_t hash)
  * - The total number of entries is the number the caller inserted.
  *
  * - lh_stats.top_entries and lh_stats.top_buckets agree with what is
- *   actually stored. Those two drive the split decision, so drift in
+ *   actually stored. Those two drive split decisions, so drift in
  *   either one silently stops the table from growing.
  *
  * Returns B_TRUE if the table is OK, warns about each problem found.
@@ -422,7 +422,7 @@ verify_table(linear_hash_t *lh, htest_entry_t *entries, uint64_t count,
 /*
  * Run a complete generate/insert/verify workload. If hc_keep is set, the
  * table is returned live (for extra caller-side assertions) and the caller
- * must lh_fini() it. Otherwise NULL is returned.
+ * must lh_fini() it. Otherwise returns NULL.
  */
 static linear_hash_t *
 run_hash_workload(const htest_config_t *cfg)
@@ -449,7 +449,7 @@ run_hash_workload(const htest_config_t *cfg)
 }
 
 /*
- * Basic operation: mostly unique random keys, no memory pressure. Also
+ * Basic operations: mostly unique random keys, no memory pressure. Also
  * covers boundary hash values (0 and ~0) and multiple records under one
  * key, with verification.
  */
@@ -773,11 +773,13 @@ hash_pressure_priority(void)
  * used against two live tables in alternation. Iterator state must not
  * bleed between iterators or tables.
  *
- * An insert invalidates every outstanding iterator for that hash table, and
- * lh_retrieve_next() treats a stale iterator as a fatal error (see
- * hash_fatal). It's fine to invalidate the iterators en passant, but not
- * to use them afterwards. Inserting into one table must not invalidate an
- * iterator on another.
+ * Verify that an insert invalidates every outstanding iterator for that
+ * hash table and that lh_retrieve_next() treats a stale iterator as a fatal
+ * error (see hash_fatal). It's fine to invalidate the iterators en passant,
+ * but not to use them afterwards.
+ *
+ * Inserting into one table must not invalidate an iterator on another
+ * table.
  */
 static void
 hash_iterators(void)
