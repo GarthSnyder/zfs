@@ -26,7 +26,7 @@ extern "C" {
 
 /*
  * An allocator_t defines a thin storage API that can be backed by
- * memory, a disk file, or both; the API is the same.
+ * memory, a disk file, or both; the API is identical.
  *
  * Dual-backed allocators keep the first N records in memory and later
  * records on disk. For data that grows linearly but is accessed randomly
@@ -52,23 +52,17 @@ typedef uint64_t record_ix_t;
 typedef struct allocator allocator_t;
 
 /*
- * Initialize an allocator.
- *
  * If dir_path is non-NULL, the allocator creates a temporary file there for
  * backup storage on disk.
  *
  * The mem_size parameter determines how much RAM the allocator is allowed
  * to consume, in bytes. If it's 0, the allocator will be disk-only. The
- * memory limit is recorded for future reference, but allocations occur only
- * as memory is actually needed.
+ * limit is recorded for future reference, but allocations occur only as
+ * memory is actually needed.
  */
 allocator_t *
 allocator_init(size_t record_size, size_t mem_size, const char *dir_path);
 
-/*
- * The basic API, which is essentially just read() and write() but
- * with fixed record sizes and abstracted across memory and disk.
- */
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);
 
@@ -82,9 +76,9 @@ record_ix_t
 allocator_append(allocator_t *alloc, const void *data);
 
 /*
- * Skip ahead one record. Useful if you want to use index 0 as a sentinel.
- * Like other unwritten records, the skipped record is guaranteed to contain
- * zeros if read. Returns the index that was skipped.
+ * Skip ahead one record. Like other unwritten records, the skipped record
+ * is guaranteed to contain zeros if read. Returns the index that was
+ * skipped.
  */
 record_ix_t
 allocator_skip(allocator_t *alloc);
@@ -98,9 +92,9 @@ size_t
 allocator_memory_used(allocator_t *alloc);
 
 /*
- * This function attempts to trim at least delta_bytes from the allocator's
- * memory use and returns the number of bytes actually trimmed, which may be
- * different because of internal rounding boundaries.
+ * Trim at least delta_bytes from the allocator's memory use. Returns the
+ * number of bytes actually trimmed, which may be different because of
+ * internal rounding boundaries.
  *
  * A call to this function will always result in some trimming as long as
  * the current memory use and the specified delta_bytes are both nonzero.
@@ -109,7 +103,7 @@ allocator_memory_used(allocator_t *alloc);
  * move records trimmed from memory onto disk.
  *
  * The delta is relative to actual memory use (that is, the value returned
- * by allocator_memory_used()), not to the mem_size specified when the
+ * by allocator_memory_used()), not to the mem_size limit specified when the
  * allocator was created. A corollary is that you must not call this
  * function on a memory-only allocator. There is nowhere for trimmed data to
  * go, so it will abort the program rather than silently losing data.
