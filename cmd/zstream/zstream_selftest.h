@@ -44,6 +44,42 @@ typedef struct {
  * Modules with test cases to offer. Each array ends with a NULL tc_name.
  */
 extern const test_case_t selftest_queue_cases[];
+extern const test_case_t selftest_alloc_cases[];
+extern const test_case_t selftest_hash_cases[];
+
+/*
+ * Directory for disk-backed test scratch storage. Honors the
+ * ZSTREAM_SELFTEST_DIR environment variable if present and otherwise
+ * defaults to /var/tmp, which unlike /tmp is unlikely to be a ramdisk;
+ * memory-spillover tests are only meaningful on real storage.
+ */
+const char *
+selftest_scratch_dir(void);
+
+/*
+ * Run fn(arg) in a forked child and require it to terminate either by
+ * exiting with a nonzero status (err(), errx()) or by aborting (a failed
+ * VERIFY). The child's stdout and stderr are captured.
+ *
+ * If the expect argument is non-NULL, the output must contain at least one
+ * of the '|'-separated alternatives. The test fails under any of the
+ * following conditions:
+ *
+ * - The child exits with status 0
+ * - The child dies because of a signal
+ * - The child runs longer than EXPECT_EXIT_TIMEOUT_SECS
+ * - The "expect" pattern does not match the child's output
+ *
+ * Since the child process is forked, fn() must not depend on other
+ * threads, e.g., zstream_queue or zstream_chain workers.
+ */
+#define	EXPECT_EXIT_TIMEOUT_SECS	30
+
+typedef void selftest_child_f(void *arg);
+
+void
+selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
+    const char *expect);
 
 /*
  * The seed for this run, set by the harness before any test runs. Printed
@@ -52,7 +88,7 @@ extern const test_case_t selftest_queue_cases[];
 extern uint64_t selftest_seed;
 
 /*
- * A small deterministic PRNG (splitmix64). Tests derive per-thread
+ * A small, deterministic PRNG (splitmix64). Tests derive per-thread
  * generators from selftest_seed plus a caller-chosen stream number, so
  * workloads are reproducible for a given seed regardless of scheduling.
  */

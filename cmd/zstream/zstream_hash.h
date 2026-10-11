@@ -1,0 +1,100 @@
+// SPDX-License-Identifier: CDDL-1.0
+/*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * https://opensource.org/license/CDDL-1.0.
+ */
+
+/*
+ * Copyright (c) 2026 by Garth Snyder. All rights reserved.
+ */
+
+#ifndef _ZSTREAM_HASH_H
+#define	_ZSTREAM_HASH_H
+
+#ifdef	__cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+#include <stddef.h>
+#include <sys/stdtypes.h>
+
+/*
+ * This module implements linear hashing with 64-bit hash keys. It runs on
+ * top of allocator_t, which allows portions of the hash table to spill from
+ * memory to disk when the memory budget is exhausted.
+ *
+ * See the comments in zstream_hash.c for more details about linear hashing.
+ * Briefly, the table grows linearly as items are inserted. When an
+ * occupancy threshold is crossed, one bucket is split into two, extending
+ * the table by one bucket. This incremental growth is ideal for tables that
+ * we'd really like to keep in memory but that might eventually get too big
+ * to keep there. As more disk storage is used, the performance of the hash
+ * table declines smoothly with the number of entries.
+ *
+ * Hash keys are 64-bit values, and you must supply them yourself. If you
+ * want to use longer hash keys, give the hash table a 64-bit digest and
+ * check returned records against the full hash value.
+ *
+ * Hashes are not thread-safe.
+ */
+
+#define	MAX_LH_ITERATORS 8
+
+typedef struct linear_hash linear_hash_t;
+typedef struct lh_iterator lh_iterator_t;
+
+/*
+ * The spill_dir should be a place where memory can meaningfully spill over
+ * to disk, which rules out /tmp on most systems because it's often
+ * implemented as a ramdisk. If spill_dir is NULL, the hash table does not
+ * use disk backup and may eventually run out of memory. If max_memory is
+ * zero, the hash table is disk-only.
+ *
+ * Internal memory management is performed in terms of 1MB page clusters,
+ * so max_memory should be at least 8MB if it is not zero. record_size may
+ * not exceed MAX_RECORD_SIZE (8KB).
+ */
+linear_hash_t *
+lh_init(size_t record_size, size_t max_memory, const char *spill_dir);
+
+/*
+ * Insertions invalidate all outstanding iterators on this hash table.
+ */
+void
+lh_insert(linear_hash_t *lh, uint64_t hash, const void *data);
+
+/*
+ * Set up retrieval for all data records with a given hash value. Use
+ * lh_retrieve_next() to iterate through matching records.
+ *
+ * API clients are not required to memory-manage iterators or to pursue
+ * iterations to completion. However, callers must limit themselves to
+ * MAX_LH_ITERATORS concurrent iterators.
+ */
+lh_iterator_t *
+lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash);
+
+/*
+ * Get the next data record matching the hash. If the return value is
+ * B_FALSE, there are no more records and the data buffer is invalid.
+ * It is an error to call lh_retrieve_next() on an iterator that has
+ * already returned B_FALSE.
+ */
+boolean_t
+lh_retrieve_next(lh_iterator_t *iter, void *buffer);
+
+void
+lh_fini(linear_hash_t *lh);
+
+#ifdef	__cplusplus
+}
+#endif
+
+#endif /* _ZSTREAM_HASH_H */

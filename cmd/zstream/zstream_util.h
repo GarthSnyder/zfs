@@ -36,6 +36,11 @@ extern "C" {
 #include <sys/zio_compress.h>
 
 /*
+ * Round up to an arbitrary (not necessarily power-of-2) multiple
+ */
+#define	ROUND_UP(size, align) ((((size) + (align) - 1) / (align)) * (align))
+
+/*
  * As with the libzfs-native ZIO_* encodings, only zstd compression has a
  * separately-defined level. gzip levels are bundled into the compression
  * type.
@@ -65,6 +70,25 @@ safe_malloc(size_t size);
 
 void *
 safe_calloc(size_t n);
+
+void *
+safe_realloc(void *buff, size_t new_size);
+
+/*
+ * In addition to quitting on error, safe_pwrite() and safe_pread_zero()
+ * handle partial reads and writes correctly and do not return until the
+ * full buffer has been transferred.
+ */
+void
+safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
+
+/*
+ * Like a safe version of pread(), except that reading past end-of-file is
+ * not an error: any portion of the buffer that lies beyond EOF is filled
+ * with zeros.
+ */
+void
+safe_pread_zero(int fd, void *buf, size_t count, off64_t offset);
 
 void
 safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
@@ -127,10 +151,9 @@ parse_compression_specifier(const char *str, compression_spec_t *spec);
 
 /*
  * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the
- * command line as possible, entering them into an hcreate() hash table. The
- * OBJECT/OFFSET pairs become the keys and the compression types become the
- * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
- * a placeholder value. This is also the default when accept_compression is
+ * command line as possible and enters them into a hash table. If
+ * accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as a
+ * placeholder value. This is also the default when accept_compression is
  * B_TRUE but no compression is specified.
  *
  * Stops at the first unparseable specifier and returns the number of
@@ -141,7 +164,7 @@ int
 parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression);
 
 /*
- * Looks up record specifiers in an hcreate() hash table by object and
+ * Looks up record specifiers in the specifier table by object and
  * offset. Returns B_TRUE and sets the ctype if found.
  */
 boolean_t
@@ -152,7 +175,7 @@ lookup_record_specifier(uint64_t object, uint64_t offset,
  * Frees the hash table used by lookup_record_specifier().
  */
 void
-destroy_record_specifier_hash(void);
+record_specifier_hash_fini(void);
 
 boolean_t
 write_is_encrypted(struct drr_write *drrw);
@@ -164,6 +187,13 @@ decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
 uint8_t *
 compress_buffer(uint8_t *inbuff, size_t inbuff_size,
     compression_spec_t compress_type, size_t *compressed_size);
+
+/*
+ * Create a temporary file in the named directory, returning an open file
+ * descriptor. The file is unlinked on creation, so closing deletes it.
+ */
+int
+safe_create_temp_file(const char *dir_path);
 
 #ifdef __cplusplus
 }
