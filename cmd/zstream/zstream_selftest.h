@@ -64,6 +64,28 @@ int
 selftest_create_tempfile(void);
 
 /*
+ * Run fn(arg) in a forked child and require it to terminate the program,
+ * either by exiting with a nonzero status (err(), errx()) or by aborting
+ * (a failed VERIFY). The child's stdout and stderr are captured. If expect
+ * is non-NULL, the output must contain at least one of its '|'-separated
+ * alternatives. The test fails, showing the child's output, if fn()
+ * returns, if the child exits with status 0 or dies of any other signal,
+ * if it runs longer than EXPECT_EXIT_TIMEOUT_SECS, or if the expected text
+ * is missing. The "what" string identifies the case in failure messages.
+ *
+ * The child is a copy of the test process, so any state that fn() changes
+ * or leaks dies with it. Only the calling thread exists in the child, so
+ * fn() must not depend on other threads, such as zstream_queue workers.
+ */
+#define	EXPECT_EXIT_TIMEOUT_SECS	30
+
+typedef void selftest_child_f(void *arg);
+
+void
+selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
+    const char *expect);
+
+/*
  * The seed for this run, set by the harness before any test runs. Printed
  * at startup and settable with -s so failures can be replayed.
  */
