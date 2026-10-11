@@ -18,7 +18,8 @@
  * This is the internal header for allocator_t. It holds the struct
  * definitions that back the implementation but that shouldn't be part of
  * the public API in zstream_alloc.h. Conceptually it is part of
- * zstream_alloc.c; it exists so that selftests can inspect group state.
+ * zstream_alloc.c; it exists only so that selftests can inspect group
+ * state.
  */
 
 #ifndef _ZSTREAM_ALLOC_IMPL_H
@@ -41,7 +42,8 @@ extern "C" {
  * 1. Group members share memory accounting.
  *
  * The group's page cluster size is the granularity of memory management for
- * all the group's allocators.
+ * all the group's allocators. This will generally be a static value of 1MB
+ * if the system page size is not larger.
  *
  * An allocator's memory-to-disk transition always falls at a page cluster
  * boundary, and the group's ag_mem_limit and ag_mem_current values are also
