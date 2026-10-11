@@ -50,9 +50,9 @@ typedef struct {
 } bucket_t;
 
 /*
- * These allocators are in memory priority order. The data allocator is
- * first to be asked to yield memory, and so on. (The actual memory
- * management is handled by the allocator group.)
+ * These allocators are listed in inverse memory priority order. The data
+ * allocator is first to be asked to yield memory, and so on. (The actual
+ * memory management is handled by the allocator group.)
  */
 typedef struct {
 	allocator_t	*data;		/* Data records */
@@ -69,7 +69,7 @@ typedef struct {
 struct linear_hash {
 	size_t		lh_record_size;		  /* Param */
 	lh_allocators_t	lh_alloc;
-	uint8_t		lh_hash_suffix_length;	  /* Granularity above split */
+	uint8_t		lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
 	lh_stats_t	lh_stats;
 	uint64_t	lh_generation;
