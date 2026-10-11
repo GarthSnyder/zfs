@@ -367,11 +367,11 @@ free_memory_for(allocator_t *alloc, size_t delta_bytes)
  * and return B_FALSE. Retrying the transaction should then succeed as a disk
  * operation.
  *
- * The end_offset parameter and the a_writable_frontier pointer are both
- * "+1" markers. I.e., everything below a_writable_fronter is already
+ * The end_offset parameter and the a_writable_frontier offset are both
+ * "+1" markers. I.e., everything below a_writable_frontier is already
  * writable, and try_make_readwrite() makes memory writable up to but not
- * including the end_offset. a_writable_frontier always points to the first
- * byte of an unwritable memory page.
+ * including the end_offset. a_writable_frontier is always the offset of
+ * the first byte of an unwritable memory page.
  */
 static inline boolean_t
 try_make_readwrite(allocator_t *alloc, off_t end_offset)
