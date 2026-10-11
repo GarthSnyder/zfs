@@ -7,6 +7,9 @@ CPPCHECKTARGETS += zstream
 zstream_SOURCES = \
 	%D%/zstream.c \
 	%D%/zstream.h \
+	%D%/zstream_alloc.c \
+	%D%/zstream_alloc.h \
+	%D%/zstream_alloc_impl.h \
 	%D%/zstream_backtrace.c \
 	%D%/zstream_backtrace.h \
 	%D%/zstream_byteswap.c \
@@ -19,6 +22,9 @@ zstream_SOURCES = \
 	%D%/zstream_dump.h \
 	%D%/zstream_fletcher4.c \
 	%D%/zstream_fletcher4.h \
+	%D%/zstream_hash.c \
+	%D%/zstream_hash.h \
+	%D%/zstream_hash_impl.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
 	%D%/zstream_modules.h \
@@ -28,6 +34,8 @@ zstream_SOURCES = \
 	%D%/zstream_redup.c \
 	%D%/zstream_selftest.c \
 	%D%/zstream_selftest.h \
+	%D%/zstream_selftest_alloc.c \
+	%D%/zstream_selftest_hash.c \
 	%D%/zstream_selftest_queue.c \
 	%D%/zstream_token.c \
 	%D%/zstream_queue.c \
