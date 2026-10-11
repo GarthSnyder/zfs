@@ -90,10 +90,10 @@ struct allocator {
 	size_t		   a_record_size;	  /* Client-specified */
 	uint64_t	   a_records_per_cluster; /* Constant (avoid divs) */
 	off_t		   a_first_on_disk;	  /* Memory/disk split point */
+	off_t		   a_writable_frontier;   /* 1st non-r/w byte */
 	allocator_group_t  *a_group;		  /* Back-pointer to group */
 	uint64_t	   a_count;		  /* Highest index stored +1 */
 	void		   *a_base_addr;	  /* Start of VM allotment */
-	void		   *a_writable_frontier;  /* Addr of 1st non-r/w byte */
 };
 
 static allocator_group_t groups[MAX_ALLOCATOR_GROUPS] = {{0}};
@@ -210,7 +210,7 @@ allocator_group_init(const size_t *record_sizes, unsigned n,
 			.a_first_on_disk = group->ag_mem_limit,
 			.a_group = group,
 			.a_base_addr = base,
-			.a_writable_frontier = base
+			.a_writable_frontier = 0
 		};
 	}
 	return (&group->ag_allocators[0]);
@@ -248,8 +248,6 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 			    (u_longlong_t)record);
 		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, off);
 	} else {
-		void *first = OFFSET_TO_ADDR(alloc, off);
-		void *last_plus_one = first + alloc->a_record_size;
 		/*
 		 * Even though we are reading from below the memory/disk
 		 * split point, we might still be trying to read from a
@@ -257,8 +255,9 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 		 * has never actually been written, so we can safely "read"
 		 * it back as zeros.
 		 */
-		if (last_plus_one <= alloc->a_writable_frontier)
-			memcpy(buff, first, alloc->a_record_size);
+		if (off + alloc->a_record_size <= alloc->a_writable_frontier)
+			memcpy(buff, OFFSET_TO_ADDR(alloc, off),
+			    alloc->a_record_size);
 		else
 			memset(buff, 0, alloc->a_record_size);
 	}
@@ -311,25 +310,23 @@ free_memory_from(allocator_t *alloc, size_t delta_bytes)
 	if (alloc->a_base_addr == NULL || alloc->a_first_on_disk == 0)
 		return (0);
 	size_t delta = ROUND_UP(delta_bytes, alloc->a_group->ag_cluster_size);
-	size_t bytes_used = ADDR_TO_OFFSET(alloc, alloc->a_writable_frontier);
-	size_t new_fod = bytes_used - MIN(delta, bytes_used);
-
-	void *eject_start = OFFSET_TO_ADDR(alloc, new_fod);
-	void *eject_end = alloc->a_writable_frontier;
-	size_t bytes_to_free = MAX(0, eject_end - eject_start);
-	if (bytes_to_free > 0) {
-		if (alloc->a_fd < 0)
-			errx(1, "allocator has no disk backing, so %s would "
-			    "lose data", __func__);
-		safe_pwrite(alloc->a_fd, eject_start, bytes_to_free, new_fod);
-		void *ret = mmap(eject_start, bytes_to_free, PROT_NONE,
-		    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-		if (ret == MAP_FAILED)
-			err(1, "mmap (frontier shrink) failed");
-		alloc->a_writable_frontier = eject_start;
-		alloc->a_first_on_disk = new_fod;
-		alloc->a_group->ag_mem_current -= bytes_to_free;
-	}
+	delta = MIN(delta, alloc->a_writable_frontier);
+	off_t eject_start = alloc->a_writable_frontier - delta;
+	off_t eject_end = alloc->a_writable_frontier;
+	if (eject_end <= eject_start)
+		return (0);
+	if (alloc->a_fd < 0)
+		errx(1, "allocator out of memory, %s would lose data",
+		    __func__);
+	size_t bytes_to_free = eject_end - eject_start;
+	void *eject_start_addr = OFFSET_TO_ADDR(alloc, eject_start);
+	safe_pwrite(alloc->a_fd, eject_start_addr, bytes_to_free, eject_start);
+	if (mmap(eject_start_addr, bytes_to_free, PROT_NONE,
+	    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+		err(1, "mmap (frontier shrink) failed");
+	alloc->a_writable_frontier = eject_start;
+	alloc->a_first_on_disk = eject_start;
+	alloc->a_group->ag_mem_current -= bytes_to_free;
 	return (bytes_to_free);
 }
 
@@ -376,30 +373,26 @@ free_memory_for(allocator_t *alloc, size_t delta_bytes)
 static inline boolean_t
 try_make_readwrite(allocator_t *alloc, off_t end_offset)
 {
-	void *end_addr = OFFSET_TO_ADDR(alloc, end_offset);
-	if (end_addr <= alloc->a_writable_frontier)
+	if (end_offset <= alloc->a_writable_frontier)
 		return (B_TRUE);
 	allocator_group_t *group = alloc->a_group;
-	size_t needed = end_addr - alloc->a_writable_frontier;
+	size_t needed = ROUND_UP(end_offset - alloc->a_writable_frontier,
+	    group->ag_cluster_size);
 	size_t avail = group->ag_mem_limit - group->ag_mem_current;
 	if (needed > avail) {
 		size_t deficit = needed - avail;
-		size_t freed = free_memory_for(alloc, deficit);
-		if (freed < deficit) {
-			alloc->a_first_on_disk =
-			    ADDR_TO_OFFSET(alloc, alloc->a_writable_frontier);
+		if (free_memory_for(alloc, deficit) < deficit) {
+			alloc->a_first_on_disk = alloc->a_writable_frontier;
 			return (B_FALSE);
 		}
 	}
-	size_t length = ROUND_UP(needed, group->ag_cluster_size);
 	/* Checked before, but we may have since done multiple frees */
-	VERIFY3U(group->ag_mem_limit - group->ag_mem_current, >=, length);
-	int rc = mprotect(alloc->a_writable_frontier, length,
-	    PROT_READ | PROT_WRITE);
-	if (rc != 0)
+	VERIFY3U(group->ag_mem_limit - group->ag_mem_current, >=, needed);
+	if (mprotect(OFFSET_TO_ADDR(alloc, alloc->a_writable_frontier),
+	    needed, PROT_READ | PROT_WRITE) != 0)
 		err(1, "mprotect failed");
-	alloc->a_writable_frontier += length;
-	group->ag_mem_current += length;
+	alloc->a_writable_frontier += needed;
+	group->ag_mem_current += needed;
 	return (B_TRUE);
 }
 
