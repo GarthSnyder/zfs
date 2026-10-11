@@ -488,20 +488,3 @@ safe_create_temp_file(const char *dir_path)
 		err(1, "unlink of %s failed", buff);
 	return (fd);
 }
-
-/*
- * Euclid's algorithm
- */
-size_t
-least_common_multiple(size_t a, size_t b)
-{
-	size_t a_orig = a;
-	size_t b_orig = b;
-
-	while (b != 0) {
-		size_t r = a % b;
-		a = b;
-		b = r;
-	}
-	return ((a_orig / a) * b_orig);
-}
