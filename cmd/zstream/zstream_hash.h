@@ -55,8 +55,9 @@ typedef struct lh_iterator lh_iterator_t;
  * use disk backup and may eventually run out of memory. If max_memory is
  * zero, the hash table is disk-only.
  *
- * Internal memory management is performed in terms of page clusters of
- * about 1MB, so max_memory should be at least 8MB if it is not zero.
+ * Internal memory management is performed in terms of 1MB page clusters,
+ * so max_memory should be at least 8MB if it is not zero. record_size may
+ * not exceed MAX_RECORD_SIZE (8KB).
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t max_memory, const char *spill_dir);
