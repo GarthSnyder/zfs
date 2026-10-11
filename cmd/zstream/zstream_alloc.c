@@ -199,7 +199,7 @@ allocator_group_init(const size_t *record_sizes, unsigned n,
 			base = mmap(NULL, group->ag_mem_limit,
 			    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (base == MAP_FAILED)
-				errx(1, "mmap failed in %s", __func__);
+				err(1, "mmap failed in %s", __func__);
 		}
 		group->ag_allocators[i] = safe_malloc(sizeof (allocator_t));
 		*group->ag_allocators[i] = (allocator_t) {
