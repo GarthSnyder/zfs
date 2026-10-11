@@ -63,7 +63,7 @@
 #define	OFFSET_IS_ON_DISK(alloc, off)	((off) >= (alloc)->a_first_on_disk)
 
 #define	TARGET_PAGE_CLUSTER_SIZE	(1 << 20)	/* ~1MB */
-#define MAX_PAGES_PER_RECORD		8
+#define	MAX_PAGES_PER_RECORD		8
 
 /*
  * All allocators are members of an allocator group, which can be a group of
@@ -135,10 +135,11 @@ optimal_cluster_size(size_t *record_sizes, unsigned n)
 {
 	long pagesize = sysconf(_SC_PAGESIZE);
 	VERIFY(pagesize > 0 && pagesize <= TARGET_PAGE_CLUSTER_SIZE && n > 0);
-	for (int i = 0; i < n; i++)
+	for (int i = 0; i < n; i++) {
 		if (record_sizes[i] > MAX_PAGES_PER_RECORD * pagesize)
 			errx(1, "requested allocator_t record size too large "
 			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
+	}
 
 	size_t best_cluster = 0;
 	size_t least_waste = TARGET_PAGE_CLUSTER_SIZE;
@@ -159,7 +160,7 @@ optimal_cluster_size(size_t *record_sizes, unsigned n)
 }
 
 static allocator_group_t *
-find_empty_group_slot()
+find_empty_group_slot(void)
 {
 	int group;
 	for (group = 0; group < MAX_ALLOCATOR_GROUPS; group++) {
@@ -180,7 +181,7 @@ allocator_group_init(size_t *record_sizes, unsigned n, size_t memory_limit,
 		errx(1, "invalid number of allocators: %d", n);
 
 	size_t cluster_size =
-	    optimal_cluster_size(record_sizes, n, (size_t)pagesize);
+	    optimal_cluster_size(record_sizes, n);
 
 	allocator_group_t *group = find_empty_group_slot();
 	*group = (allocator_group_t) {
