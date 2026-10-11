@@ -28,6 +28,7 @@
 #include <sys/types.h>
 
 #include "zstream_alloc.h"
+#include "zstream_alloc_impl.h"
 #include "zstream_util.h"
 
 /*
@@ -60,38 +61,6 @@
 
 #define	OFFSET_TO_ADDR(alloc, off)	((char *)(alloc)->a_base_addr + (off))
 #define	OFFSET_IS_ON_DISK(alloc, off)	((off) >= (alloc)->a_first_on_disk)
-
-#define	PAGE_CLUSTER_SIZE		(1 << 20)	/* 1MB */
-
-/*
- * All allocators are members of an allocator group, which can be a group of
- * 1. Group members share memory accounting.
- *
- * The group's page cluster size is the granularity of memory management for
- * all the group's allocators.
- *
- * An allocator's memory-to-disk transition always falls at a page cluster
- * boundary, and the group's ag_mem_limit and ag_mem_current values are also
- * multiples of the cluster size.
- */
-typedef struct {
-	size_t		ag_mem_limit;		/* Total allowed for group */
-	size_t		ag_mem_current;		/* Currently used by group */
-	size_t		ag_cluster_size;	/* Allocation unit */
-	unsigned int	ag_num_allocators;
-	allocator_t	*ag_allocators[MAX_ALLOCATORS_PER_GROUP];
-} allocator_group_t;
-
-struct allocator {
-	int		   a_fd;		  /* On-disk file descriptor */
-	size_t		   a_record_size;	  /* Client-specified */
-	uint64_t	   a_records_per_cluster; /* Constant (avoid divs) */
-	off_t		   a_first_on_disk;	  /* Memory/disk split point */
-	off_t		   a_writable_frontier;   /* 1st non-r/w byte */
-	allocator_group_t  *a_group;		  /* Back-pointer to group */
-	uint64_t	   a_count;		  /* Highest index stored +1 */
-	void		   *a_base_addr;	  /* Start of VM allotment */
-};
 
 static allocator_group_t groups[MAX_ALLOCATOR_GROUPS] = {{0}};
 
