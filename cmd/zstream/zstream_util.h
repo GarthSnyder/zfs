@@ -66,6 +66,24 @@ safe_malloc(size_t size);
 void *
 safe_calloc(size_t n);
 
+/*
+ * In addition to quitting on error, safe_pwrite() and safe_pread() handle
+ * partial reads and writes correctly and do not return until the full
+ * buffer has been transferred.
+ */
+void
+safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
+
+void
+safe_pread(int fd, void *buf, size_t count, off64_t offset);
+
+/*
+ * Like safe_pread(), except that reading past end-of-file is not an error:
+ * any portion of the buffer that lies beyond EOF is filled with zeros.
+ */
+void
+safe_pread_zero(int fd, void *buf, size_t count, off64_t offset);
+
 void
 safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
 
@@ -164,6 +182,21 @@ decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
 uint8_t *
 compress_buffer(uint8_t *inbuff, size_t inbuff_size,
     compression_spec_t compress_type, size_t *compressed_size);
+
+/*
+ * Ask the filesystem (which may not be ZFS) to deallocate the storage that
+ * backs a region of a regular file. This doesn't change the file size, but
+ * it may/should result in the region reading as zeros.
+ *
+ * This is best-effort. Some systems (older FreeBSD in particular) may not
+ * support it at all.
+ *
+ * Returns 0 if the whole region was punched, -1 with errno set otherwise
+ * (EOPNOTSUPP if this platform or filesystem has no way to do it). Failure
+ * is harmless; file contents outside the given region are never affected.
+ */
+int
+punch_hole(int fd, off_t offset, size_t length);
 
 #ifdef __cplusplus
 }
