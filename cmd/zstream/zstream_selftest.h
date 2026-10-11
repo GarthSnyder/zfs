@@ -49,9 +49,9 @@ extern const test_case_t selftest_hash_cases[];
 
 /*
  * Directory for disk-backed test scratch storage. Honors the
- * ZSTREAM_SELFTEST_DIR environment variable (a lever for ZTS) and
- * otherwise defaults to /var/tmp, which unlike /tmp is unlikely to be a
- * ramdisk; memory-spillover tests are only meaningful on real storage.
+ * ZSTREAM_SELFTEST_DIR environment variable (used by ZTS) and otherwise
+ * defaults to /var/tmp, which unlike /tmp is unlikely to be a ramdisk;
+ * memory-spillover tests are only meaningful on real storage.
  */
 const char *
 selftest_scratch_dir(void);
@@ -64,18 +64,21 @@ int
 selftest_create_tempfile(void);
 
 /*
- * Run fn(arg) in a forked child and require it to terminate the program,
- * either by exiting with a nonzero status (err(), errx()) or by aborting
- * (a failed VERIFY). The child's stdout and stderr are captured. If expect
- * is non-NULL, the output must contain at least one of its '|'-separated
- * alternatives. The test fails, showing the child's output, if fn()
- * returns, if the child exits with status 0 or dies of any other signal,
- * if it runs longer than EXPECT_EXIT_TIMEOUT_SECS, or if the expected text
- * is missing. The "what" string identifies the case in failure messages.
+ * Run fn(arg) in a forked child and require it to terminate either by
+ * exiting with a nonzero status (err(), errx()) or by aborting (a failed
+ * VERIFY). The child's stdout and stderr are captured.
  *
- * The child is a copy of the test process, so any state that fn() changes
- * or leaks dies with it. Only the calling thread exists in the child, so
- * fn() must not depend on other threads, such as zstream_queue workers.
+ * If the expect argument is non-NULL, the output must contain at least one
+ * of the '|'-separated alternatives. The test fails under any of the
+ * following conditions:
+ *
+ * - The child exits with status 0
+ * - The child dies because of a signal
+ * - The child runs longer than EXPECT_EXIT_TIMEOUT_SECS
+ * - The "expect" pattern does not match the child's output
+ *
+ * Since the child process is forked, fn() must not depend on other
+ * threads, e.g., zstream_queue or zstream_chain workers.
  */
 #define	EXPECT_EXIT_TIMEOUT_SECS	30
 
@@ -92,7 +95,7 @@ selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
 extern uint64_t selftest_seed;
 
 /*
- * A small deterministic PRNG (splitmix64). Tests derive per-thread
+ * A small, deterministic PRNG (splitmix64). Tests derive per-thread
  * generators from selftest_seed plus a caller-chosen stream number, so
  * workloads are reproducible for a given seed regardless of scheduling.
  */
