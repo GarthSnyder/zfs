@@ -63,7 +63,6 @@
 #define	OFFSET_IS_ON_DISK(alloc, off)	((off) >= (alloc)->a_first_on_disk)
 
 #define	TARGET_PAGE_CLUSTER_SIZE	(1 << 20)	/* ~1MB */
-#define	MAX_PAGES_PER_RECORD		8
 
 /*
  * All allocators are members of an allocator group, which can be a group of
@@ -131,7 +130,7 @@ record_offset(allocator_t *alloc, record_ix_t rec)
  * ~1MB, there will be at most 256 options to examine.
  */
 static size_t
-optimal_cluster_size(size_t *record_sizes, unsigned n)
+optimal_cluster_size(const size_t *record_sizes, unsigned n)
 {
 	long pagesize = sysconf(_SC_PAGESIZE);
 	VERIFY(pagesize > 0 && pagesize <= TARGET_PAGE_CLUSTER_SIZE && n > 0);
@@ -174,8 +173,8 @@ find_empty_group_slot(void)
 }
 
 allocator_t **
-allocator_group_init(size_t *record_sizes, unsigned n, size_t memory_limit,
-    const char *dir_path)
+allocator_group_init(const size_t *record_sizes, unsigned n,
+    size_t memory_limit, const char *dir_path)
 {
 	if (memory_limit == 0 && dir_path == NULL)
 		errx(1, "allocator group needs either disk or memory backing");
