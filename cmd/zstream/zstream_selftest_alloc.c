@@ -27,9 +27,14 @@
  * The tests also look inside the group through zstream_alloc_impl.h.
  * group_audit() checks the invariants that hold at all times, and every
  * shadowed operation checks how that operation was allowed to change the
- * group: only the member being written may gain memory, victims give memory
- * up strictly in priority order and exactly as much as was needed, a read
- * changes nothing, and no member's memory/disk split ever moves up.
+ * group:
+ *
+ * - Only the member allocator being written may gain memory.
+ * - Memory clawback victims give up memory in strict priority order.
+ * - Victims yield only as much memory as was requested.
+ * - Reads change nothing.
+ * - No allocator's memory/disk split point ever moves in the more-memory
+ *   direction.
  *
  * The layout arithmetic is restated here rather than called. Every stored
  * and verified record is also checked in place, in the allocator's memory
@@ -51,7 +56,7 @@
 
 /*
  * A deliberate duplicate of PAGE_CLUSTER_SIZE. If the cluster policy
- * changes, this has to be changed by hand, on purpose.
+ * changes, this must be changed by hand.
  */
 #define	TEST_PAGE_CLUSTER_SIZE	(1 << 20)
 
@@ -69,15 +74,15 @@ typedef struct {
 } shadow_member_t;
 
 typedef struct {
-	allocator_group_t *sg_group;
-	unsigned	sg_n;
-	boolean_t	sg_disk;	/* Has backing files */
-	size_t		sg_limit;	/* Memory limit as requested */
-	uint64_t	sg_next_tag;
-	uint8_t		*sg_buf;	/* Scratch: retrieved record */
-	uint8_t		*sg_expect;	/* Scratch: expected record */
-	uint8_t		*sg_raw;	/* Scratch: record read in place */
-	shadow_member_t	sg_members[MAX_ALLOCATORS_PER_GROUP];
+	allocator_group_t  *sg_group;
+	unsigned	   sg_n;
+	boolean_t	   sg_disk;	/* Has backing files */
+	size_t		   sg_limit;	/* Memory limit as requested */
+	uint64_t	   sg_next_tag;
+	uint8_t		   *sg_buf;	/* Scratch: retrieved record */
+	uint8_t		   *sg_expect;	/* Scratch: expected record */
+	uint8_t		   *sg_raw;	/* Scratch: record read in place */
+	shadow_member_t	   sg_members[MAX_ALLOCATORS_PER_GROUP];
 } shadow_group_t;
 
 typedef struct {
@@ -157,7 +162,7 @@ take_snapshot(shadow_group_t *sg, group_snapshot_t *ss)
 }
 
 /*
- * Invariants that hold between any two operations.
+ * Invariants that hold across any two operations.
  */
 static void
 group_audit(shadow_group_t *sg)
@@ -235,13 +240,13 @@ check_transition(shadow_group_t *sg, const group_snapshot_t *before,
 	off_t frontier = MEMBER(sg, writer)->a_writable_frontier;
 	off_t fod = MEMBER(sg, writer)->a_first_on_disk;
 	if (fod < before->ss_fod[writer]) {
-		/* Pinned: it gained nothing, and there was nothing to take */
+		/* Pinned: it gained nothing, and there was no memory to take */
 		VERIFY3S(frontier, ==, before->ss_frontier[writer]);
 		VERIFY3S(fod, ==, frontier);
 		for (int m = 0; m < writer; m++)
 			VERIFY0(FRONTIER(sg, m));
 	} else if (highest_victim >= 0) {
-		/* An eviction takes exactly the shortfall, no more */
+		/* An eviction takes exactly the shortfall */
 		VERIFY3U(g->ag_mem_current, ==, g->ag_mem_limit);
 	}
 }
@@ -465,12 +470,18 @@ shadow_verify_all(shadow_group_t *sg)
 }
 
 /*
- * Cluster selection and record layout for single-member groups of all
- * three kinds, at record sizes with awkward relationships to the cluster
- * size. The last record of each cluster and the first record of the next
- * must land exactly where test_record_offset() says, the frontier must
- * advance a cluster at a time, and the gaps must read as zeros. Then the
- * rounding of the memory limit, with a group of mixed record sizes.
+ * Cluster selection and record layout for single-member groups (disk-only,
+ * memory-only, dual-backed) at record sizes with awkward relationships
+ * to the cluster size.
+ *
+ * - The last record of each cluster and the first record of the next
+ *   must land exactly where test_record_offset() says.
+ *
+ * - The frontier must advance a cluster at a time, and the gaps must
+ *   read as zeros.
+ *
+ * - Also check rounding of the memory limit with a group of mixed
+ *   record sizes.
  */
 static void
 alloc_layout(void)
@@ -632,13 +643,18 @@ alloc_record_sizes(void)
 }
 
 /*
- * Moving memory between members. First, a sparse store that needs several
- * clusters at once and gets them all from one victim. Second, a randomized
- * eviction of a member whose records keep changing as the split passes
- * through them. Third, a request that drains every lower-priority member
- * and still falls short: the requester's split is pinned, the memory it
- * freed stays in the group, and a higher-priority member can then use that
- * memory without evicting anyone.
+ * Moving memory among members.
+ *
+ * - First, a sparse store that needs several clusters at once and gets
+ *   them all from one victim.
+ *
+ * - Second, a randomized eviction of a member whose records keep changing
+ *   as the split passes through them.
+ *
+ * - Third, a request that drains every lower-priority member and still
+ *   falls short: the requester's split is pinned, the memory it freed
+ *   stays in the group, and a higher-priority member can then use that
+ *   memory without evicting anyone.
  */
 static void
 alloc_reassignment(void)
@@ -725,9 +741,11 @@ alloc_reassignment(void)
 }
 
 /*
- * The eviction order in a four-member group, step by step: member 0 can
- * never take memory; others take it from lower members, lowest first; and
- * under sustained load the last member ends up with everything.
+ * Test the eviction order in a four-member group, step by step:
+ *
+ * - Allocator 0 can never take memory.
+ * - Others can confiscate it from lower-numbered members (lowest first).
+ * - Under sustained load, the last member ends up with all memory.
  */
 static void
 alloc_priority(void)

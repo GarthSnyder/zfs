@@ -20,14 +20,17 @@
  *   zstream selftest [-l] [-s seed] [-t nthreads] module [test ...]
  *
  * Tests are grouped into modules (see zstream_selftest.h). With no test
- * names, all of a module's tests run in order. -l lists the available
- * tests. -s replays a previous run's PRNG seed. -t sets the size of the
- * shared worker thread pool before any test runs.
+ * names, all of a module's tests run in order.
+ *
+ * -l lists the available tests
+ * -s replays a previous run by using its PRNG seed
+ * -t sets the size of the shared worker thread pool before any test runs
  *
  * This subcommand is intentionally undocumented in zstream_usage() and the
- * man page; it exists to be driven by the ZFS test suite.
+ * man page. It exists to be driven by the ZFS test suite.
  */
 
+#include "zstream_util.h"
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
@@ -51,6 +54,9 @@
 #include "zstream_backtrace.h"
 #include "zstream_queue.h"
 #include "zstream_selftest.h"
+#include "zstream_util.h"
+
+#define	NUM_MODULES	(sizeof (modules) / sizeof (modules[0]))
 
 typedef struct {
 	const char		*sm_name;
@@ -63,10 +69,7 @@ static const selftest_module_t modules[] = {
 	{ "hash",	selftest_hash_cases  },
 };
 
-#define	NUM_MODULES	(sizeof (modules) / sizeof (modules[0]))
-
 uint64_t selftest_seed;
-
 static const char *current_test = "(startup)";
 
 const char *
@@ -79,18 +82,7 @@ selftest_scratch_dir(void)
 int
 selftest_create_tempfile(void)
 {
-	char path[1024];
-
-	if (snprintf(path, sizeof (path), "%s/zstream-selftest-XXXXXX",
-	    selftest_scratch_dir()) >= (int)sizeof (path))
-		errx(1, "scratch dir path too long");
-	int fd = mkstemp(path);
-	if (fd < 0)
-		err(1, "unable to create temp file in %s",
-		    selftest_scratch_dir());
-	if (unlink(path) != 0)
-		err(1, "unlink of %s failed", path);
-	return (fd);
+	return (safe_create_temp_file(selftest_scratch_dir()));
 }
 
 /*
