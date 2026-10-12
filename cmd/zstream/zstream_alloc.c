@@ -185,10 +185,15 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 	VERIFY(alloc != NULL && buff != NULL);
 	off_t off = record_offset(alloc, record);
 	if (OFFSET_IS_ON_DISK(alloc, off)) {
+		/*
+		 * If there's no disk backing, we know this record was
+		 * never written.
+		 */
 		if (alloc->a_fd < 0)
-			errx(1, "no disk file for allocator record %llu (read)",
-			    (u_longlong_t)record);
-		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size, off);
+			memset(buff, 0, alloc->a_record_size);
+		else
+			safe_pread_zero(alloc->a_fd, buff,
+			    alloc->a_record_size, off);
 	} else {
 		/*
 		 * Even though we are reading from below the memory/disk
