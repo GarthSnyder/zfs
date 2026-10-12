@@ -405,6 +405,7 @@ shadow_verify(shadow_group_t *sg, unsigned m, uint64_t ix)
 
 	VERIFY3U(ix, <, sh->sh_capacity);
 	take_snapshot(sg, &before);
+	(void) memset(sg->sg_buf, 0xa5, rsize);
 	allocator_retrieve(MEMBER(sg, m), ix, sg->sg_buf);
 	check_transition(sg, &before, -1);
 	if (sh->sh_state[ix] == REC_KNOWN) {
@@ -426,14 +427,24 @@ shadow_verify(shadow_group_t *sg, unsigned m, uint64_t ix)
 }
 
 /*
- * Reading at or above the split point of a memory-only allocator is fatal,
- * so probes beyond the written records avoid that region.
+ * Read a record that has never been written, at any index, including ones
+ * beyond the model's capacity. It must read as zeros and change nothing.
  */
-static boolean_t
-readable(shadow_group_t *sg, unsigned m, uint64_t ix)
+static void
+verify_unwritten(shadow_group_t *sg, unsigned m, uint64_t ix)
 {
-	size_t rsize = sg->sg_members[m].sh_record_size;
-	return (sg->sg_disk || test_record_offset(rsize, ix) < FOD(sg, m));
+	shadow_member_t *sh = &sg->sg_members[m];
+	group_snapshot_t before;
+
+	VERIFY3U(ix, >=, sh->sh_count);
+	take_snapshot(sg, &before);
+	(void) memset(sg->sg_buf, 0xa5, sh->sh_record_size);
+	allocator_retrieve(MEMBER(sg, m), ix, sg->sg_buf);
+	check_transition(sg, &before, -1);
+	if (!all_zero(sg->sg_buf, sh->sh_record_size)) {
+		errx(1, "member %u unwritten record %llu is not zero-filled",
+		    m, (u_longlong_t)ix);
+	}
 }
 
 /*
@@ -443,10 +454,8 @@ static void
 shadow_verify_around(shadow_group_t *sg, unsigned m, uint64_t ix)
 {
 	uint64_t cap = sg->sg_members[m].sh_capacity;
-	for (uint64_t i = (ix > 0) ? ix - 1 : 0; i <= ix + 1 && i < cap; i++) {
-		if (readable(sg, m, i))
-			shadow_verify(sg, m, i);
-	}
+	for (uint64_t i = (ix > 0) ? ix - 1 : 0; i <= ix + 1 && i < cap; i++)
+		shadow_verify(sg, m, i);
 }
 
 /*
@@ -462,10 +471,8 @@ shadow_verify_all(shadow_group_t *sg)
 		for (uint64_t ix = 0; ix < sh->sh_count; ix++)
 			shadow_verify(sg, m, ix);
 		for (uint64_t ix = sh->sh_count;
-		    ix < MIN(sh->sh_count + 3, sh->sh_capacity); ix++) {
-			if (readable(sg, m, ix))
-				shadow_verify(sg, m, ix);
-		}
+		    ix < MIN(sh->sh_count + 3, sh->sh_capacity); ix++)
+			shadow_verify(sg, m, ix);
 	}
 }
 
@@ -893,13 +900,25 @@ alloc_boundaries(void)
 		shadow_group_fini(sg, 0);
 	}
 
-	/* Reads from groups that have never been written */
+	/*
+	 * Records never written read as zeros and change nothing, in every
+	 * configuration: in an empty group, above the frontier, past a
+	 * memory-only allocator's split (where there is no file to read),
+	 * and far beyond anything ever written.
+	 */
 	for (int config = 0; config < 3; config++) {
+		/* Config 0 is dual, 1 is disk-only, 2 is memory-only */
 		shadow_group_t *sg = shadow_init1(rsize,
-		    (config == 1) ? 0 : cluster, config != 2, 64);
+		    (config == 1) ? 0 : cluster, config != 2, 3 * rpc);
 		shadow_verify_all(sg);
-		shadow_verify(sg, 0, 63);
-		VERIFY0(FRONTIER(sg, 0));
+		verify_unwritten(sg, 0, 1ULL << 30);
+		shadow_append_clusters(sg, 0, 1);
+		shadow_verify_around(sg, 0, rpc);
+		shadow_verify_around(sg, 0, 3 * rpc - 2);
+		verify_unwritten(sg, 0, 1ULL << 30);
+		shadow_verify_all(sg);
+		VERIFY3U(FRONTIER(sg, 0), ==, (config == 1) ? 0 : cluster);
+		VERIFY3U(FOD(sg, 0), ==, sg->sg_group->ag_mem_limit);
 		shadow_group_fini(sg, 0);
 	}
 }
