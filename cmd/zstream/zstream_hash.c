@@ -248,7 +248,6 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 	if (iter->ei_entry_ix < 0) {
 		/* Bucket not yet read */
 		read_bucket(iter);
-		return (BUCKET_ENTRY(iter));
 	} else if (iter->ei_entry_ix == ENTRIES_PER_BUCKET - 1) {
 		/* Moving past the last entry in the current bucket... */
 		save_bucket(iter, B_FALSE);
@@ -257,7 +256,6 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 			iter->ei_in_overflow = B_TRUE;
 			iter->ei_bucket_ix = iter->ei_bucket.b_overflow;
 			read_bucket(iter);
-			return (BUCKET_ENTRY(iter));
 		} else if (!extend) {
 			/* ...or not */
 			return (NULL);
@@ -272,13 +270,11 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 				.ei_in_overflow = B_TRUE,
 				.ei_dirty = B_TRUE
 			};
-			return (BUCKET_ENTRY(iter));
 		}
 	} else {
-		/* Just a garden-variety bucket entry */
 		iter->ei_entry_ix++;
-		return (BUCKET_ENTRY(iter));
 	}
+	return (BUCKET_ENTRY(iter));
 }
 
 /*
