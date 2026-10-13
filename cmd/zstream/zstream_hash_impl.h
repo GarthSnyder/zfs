@@ -111,6 +111,7 @@ typedef struct {
 struct lh_iterator {
 	uint64_t		lhi_hash_sought;	/* Client's query */
 	uint64_t		lhi_generation;		/* Validity check */
+	boolean_t		lhi_completed;		/* Already finalized */
 	entry_iterator_t	lhi_entry_iterator;
 };
 
