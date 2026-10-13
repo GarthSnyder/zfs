@@ -224,18 +224,11 @@ allocator_append(allocator_t *alloc, const void *data)
 	return (loc);
 }
 
-/*
- * We must write actual data to preserve the invariant that a_count == one
- * past the last record known to have been written.
- */
 record_ix_t
 allocator_skip(allocator_t *alloc)
 {
 	ASSERT(alloc != NULL);
-	uint8_t buff[alloc->a_record_size];
-	memset(buff, 0, sizeof (buff));
-	record_ix_t ix = allocator_append(alloc, buff);
-	return (ix);
+	return (alloc->a_count++);
 }
 
 /*
