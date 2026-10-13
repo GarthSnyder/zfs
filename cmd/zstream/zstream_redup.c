@@ -191,10 +191,6 @@ zstream_do_redup(int argc, char *argv[])
 		case 'd':
 			temp_dir = optarg;
 			break;
-		case ':':
-			warnx("missing argument for '%c' option\n", optopt);
-			zstream_usage();
-			break;
 		case '?':
 			warnx("invalid option '%c'", optopt);
 			zstream_usage();
