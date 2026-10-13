@@ -49,7 +49,7 @@ extern const test_case_t selftest_hash_cases[];
 
 /*
  * Directory for disk-backed test scratch storage. Honors the
- * ZSTREAM_SELFTEST_DIR environment variable (used by ZTS) and otherwise
+ * ZSTREAM_SELFTEST_DIR environment variable if present and otherwise
  * defaults to /var/tmp, which unlike /tmp is unlikely to be a ramdisk;
  * memory-spillover tests are only meaningful on real storage.
  */
