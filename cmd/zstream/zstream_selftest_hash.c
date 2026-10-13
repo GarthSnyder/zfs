@@ -129,10 +129,10 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 		bucket_t bucket;
 		boolean_t top_level = B_TRUE;
 		uint64_t links = 0;
+		boolean_t seen_empty = B_FALSE;
 
 		allocator_retrieve(lh->lh_alloc.bucket, b, &bucket);
 		while (B_TRUE) {
-			boolean_t seen_empty = B_FALSE;
 			for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
 				bucket_entry_t *e = &bucket.b_entries[i];
 				if (e->be_record == 0) {
