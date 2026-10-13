@@ -138,6 +138,12 @@ allocator_group_init(const size_t *record_sizes, unsigned n,
 	for (int i = 0; i < n; i++) {
 		void *base = NULL;
 		if (group->ag_mem_limit > 0) {
+			/*
+			 * Each allocator reserves address space for its
+			 * maximum possible memory use. This is not yet
+			 * "real" memory, but it can still fall afoul of
+			 * RLIMIT_AS if that rlimit has been set.
+			 */
 			base = mmap(NULL, group->ag_mem_limit,
 			    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (base == MAP_FAILED)

@@ -57,6 +57,13 @@ typedef struct {
 	allocator_t	*ag_allocators[MAX_ALLOCATORS_PER_GROUP];
 } allocator_group_t;
 
+/*
+ * Invariants:
+ *   a_writable_frontier <= a_first_on_disk <= a_group->ag_mem_limit
+ *   a_group->ag_mem_current <= a_group->ag_mem_limit
+ *   a_group->ag_mem_current = sum_over_group(a_writable_frontier)
+ *   a_first_on_disk decreases monotonically (if at all)
+ */
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
 	size_t		   a_record_size;	  /* Client-specified */

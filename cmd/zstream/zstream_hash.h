@@ -41,6 +41,8 @@ extern "C" {
  * Hash keys are 64-bit values, and you must supply them yourself. If you
  * want to use longer hash keys, give the hash table a 64-bit digest and
  * check returned records against the full hash value.
+ *
+ * Hashes are not thread-safe.
  */
 
 #define	MAX_LH_ITERATORS 8
