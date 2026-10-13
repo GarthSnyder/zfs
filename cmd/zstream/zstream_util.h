@@ -71,6 +71,9 @@ safe_malloc(size_t size);
 void *
 safe_calloc(size_t n);
 
+void *
+safe_realloc(void *buff, size_t new_size);
+
 /*
  * In addition to quitting on error, safe_pwrite() and safe_pread() handle
  * partial reads and writes correctly and do not return until the full
@@ -79,12 +82,10 @@ safe_calloc(size_t n);
 void
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
 
-void
-safe_pread(int fd, void *buf, size_t count, off64_t offset);
-
 /*
- * Like safe_pread(), except that reading past end-of-file is not an error:
- * any portion of the buffer that lies beyond EOF is filled with zeros.
+ * Like a safe version of pread(), except that reading past end-of-file is
+ * not an error: any portion of the buffer that lies beyond EOF is filled
+ * with zeros.
  */
 void
 safe_pread_zero(int fd, void *buf, size_t count, off64_t offset);
