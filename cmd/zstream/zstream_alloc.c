@@ -55,8 +55,7 @@
  *   and need never change their addressing scheme, even as memory use evolves.
  *
  *   When an allocator needs more writable pages, it incrementally changes
- *   pages' protection from PROT_NONE to PROT_READ | PROT_WRITE, at which
- *   point the pages acquire swap reservations and are charged against the RSS.
+ *   pages' protection from PROT_NONE to PROT_READ | PROT_WRITE.
  */
 
 #define	OFFSET_TO_ADDR(alloc, off)	((char *)(alloc)->a_base_addr + (off))
@@ -117,25 +116,25 @@ find_empty_group_slot(void)
 }
 
 allocator_t **
-allocator_group_init(const size_t *record_sizes, unsigned n,
-    size_t memory_limit, const char *dir_path)
+allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
+    size_t mem_limit, const char *dir_path)
 {
-	if (memory_limit == 0 && dir_path == NULL)
+	if (mem_limit == 0 && dir_path == NULL)
 		errx(1, "allocator group needs either disk or memory backing");
-	if (n < 1 || n > MAX_ALLOCATORS_PER_GROUP)
-		errx(1, "invalid number of allocators: %d", n);
+	if (num_allocators < 1 || num_allocators > MAX_ALLOCATORS_PER_GROUP)
+		errx(1, "invalid number of allocators: %u", num_allocators);
 
-	size_t cluster_size = group_cluster_size(record_sizes, n);
+	size_t cluster_size = group_cluster_size(record_sizes, num_allocators);
 
 	allocator_group_t *group = find_empty_group_slot();
 	*group = (allocator_group_t) {
-		.ag_mem_limit = ROUND_UP(memory_limit, cluster_size),
+		.ag_mem_limit = ROUND_UP(mem_limit, cluster_size),
 		.ag_mem_current = 0,
 		.ag_cluster_size = cluster_size,
-		.ag_num_allocators = n
+		.ag_num_allocators = num_allocators
 	};
 
-	for (int i = 0; i < n; i++) {
+	for (int i = 0; i < num_allocators; i++) {
 		void *base = NULL;
 		if (group->ag_mem_limit > 0) {
 			/*
@@ -167,7 +166,7 @@ allocator_group_init(const size_t *record_sizes, unsigned n,
 void
 allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
-	VERIFY(alloc != NULL && buff != NULL && ((record & (1ULL << 63)) == 0));
+	VERIFY(alloc != NULL && buff != NULL);
 	off_t off = record_offset(alloc, record);
 	off_t next_off = off + alloc->a_record_size;
 	if (OFFSET_IS_ON_DISK(alloc, off)) {
@@ -181,14 +180,13 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 		/* Restart if converted to a disk operation */
 		return (allocator_store(alloc, record, buff));
 	}
-	/* a_count is one past the highest record known to have been written */
 	alloc->a_count = MAX(alloc->a_count, record + 1);
 }
 
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 {
-	VERIFY(alloc != NULL && buff != NULL && ((record & (1ULL << 63)) == 0));
+	VERIFY(alloc != NULL && buff != NULL);
 	off_t off = record_offset(alloc, record);
 	if (OFFSET_IS_ON_DISK(alloc, off)) {
 		/*
