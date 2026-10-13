@@ -30,7 +30,6 @@
  * man page. It exists to be driven by the ZFS test suite.
  */
 
-#include "zstream_util.h"
 #include <assert.h>
 #include <err.h>
 #include <errno.h>

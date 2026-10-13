@@ -295,8 +295,12 @@ In this event, it uses files in
 .Pa /var/tmp
 for backup storage.
 You can specify a different location with the
-.Op Fl d
+.Fl d
 option.
+Whether or not you specify a custom directory, the location must be
+writable when
+.Nm zstream
+first starts so that filesystem problems can be discovered early.
 .El
 .It Xo
 .Nm
