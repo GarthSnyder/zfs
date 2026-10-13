@@ -167,7 +167,7 @@ allocator_group_init(const size_t *record_sizes, unsigned n,
 void
 allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
-	VERIFY(alloc != NULL && buff != NULL);
+	VERIFY(alloc != NULL && buff != NULL && ((record & (1ULL << 63)) == 0));
 	off_t off = record_offset(alloc, record);
 	off_t next_off = off + alloc->a_record_size;
 	if (OFFSET_IS_ON_DISK(alloc, off)) {
@@ -188,7 +188,7 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 {
-	VERIFY(alloc != NULL && buff != NULL);
+	VERIFY(alloc != NULL && buff != NULL && ((record & (1ULL << 63)) == 0));
 	off_t off = record_offset(alloc, record);
 	if (OFFSET_IS_ON_DISK(alloc, off)) {
 		/*
