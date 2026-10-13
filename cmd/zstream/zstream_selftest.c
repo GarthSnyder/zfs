@@ -79,12 +79,6 @@ selftest_scratch_dir(void)
 	return ((dir != NULL && dir[0] != '\0') ? dir : "/var/tmp");
 }
 
-int
-selftest_create_tempfile(void)
-{
-	return (safe_create_temp_file(selftest_scratch_dir()));
-}
-
 /*
  * Does the output contain any of the '|'-separated alternatives?
  */
