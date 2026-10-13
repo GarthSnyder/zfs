@@ -423,6 +423,8 @@ boolean_t
 lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 {
 	ASSERT(lh_iter != NULL);
+	if (lh_iter->lhi_completed)
+		errx(1, "%s called on an already-completed iterator", __func__);
 	uint64_t gen_now = lh_iter->lhi_entry_iterator.ei_lh->lh_generation;
 	if (lh_iter->lhi_generation != gen_now)
 		errx(1, "%s called on an invalidated iterator", __func__);
@@ -437,6 +439,7 @@ lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 			return (B_TRUE);
 		}
 	}
+	lh_iter->lhi_completed = B_TRUE;
 	return (B_FALSE);
 }
 
