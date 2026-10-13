@@ -30,7 +30,8 @@ extern "C" {
 #include "zstream_alloc.h"
 #include "zstream_hash.h"
 
-#define	ENTRIES_PER_BUCKET	6
+#define	ENTRIES_PER_BUCKET		6
+#define	FREESTACK_INITIAL_SIZE		8192
 
 /*
  * Entry in a bucket: hash value + locator to data
@@ -66,13 +67,30 @@ typedef struct {
 	uint64_t	max_top_entries;
 } lh_stats_t;
 
+/*
+ * On average, bucket splits relocate half the chain's entries, potentially
+ * freeing up one or more overflow buckets for reuse. It would be correct to
+ * leave the overflow buckets in place, but the storage can probably be
+ * better used elsewhere.
+ *
+ * There's also a read penalty imposed on full buckets that are followed by
+ * empty overflow buckets. Since the overflow bucket exists, it has to be
+ * read to establish that it contains no entries.
+ */
+typedef struct {
+	uint64_t	size;
+	uint64_t	head;
+	record_ix_t	*buckets;
+} lh_freestack_t;
+
 struct linear_hash {
 	size_t		lh_record_size;		  /* Param */
 	lh_allocators_t	lh_alloc;
 	uint8_t		lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
-	lh_stats_t	lh_stats;
-	uint64_t	lh_generation;
+	lh_stats_t	lh_stats;		  /* Occupancy */
+	lh_freestack_t	lh_freestack;		  /* Available overflow bkts */
+	uint64_t	lh_generation;		  /* Changes on insert */
 };
 
 /*
