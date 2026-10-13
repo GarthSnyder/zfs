@@ -57,4 +57,3 @@ cmd-zstream-install-exec-hook:
 	cd $(DESTDIR)$(sbindir) && $(LN_S) -f zstream zstreamdump
 
 INSTALL_EXEC_HOOKS += cmd-zstream-install-exec-hook
-

@@ -68,7 +68,7 @@ lh_init(size_t record_size, size_t max_memory, const char *spill_dir);
  * Insertions invalidate all outstanding iterators on this hash table.
  */
 void
-lh_insert(linear_hash_t *lh, uint64_t hash, const void* data);
+lh_insert(linear_hash_t *lh, uint64_t hash, const void *data);
 
 /*
  * Set up retrieval for all data records with a given hash value. Use
@@ -84,6 +84,8 @@ lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash);
 /*
  * Get the next data record matching the hash. If the return value is
  * B_FALSE, there are no more records and the data buffer is invalid.
+ * It is an error to call lh_retrieve_next() on an iterator that has
+ * already returned B_FALSE.
  */
 boolean_t
 lh_retrieve_next(lh_iterator_t *iter, void *buffer);

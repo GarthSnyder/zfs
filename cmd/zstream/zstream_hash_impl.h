@@ -31,19 +31,35 @@ extern "C" {
 #include "zstream_hash.h"
 
 #define	ENTRIES_PER_BUCKET		6
-#define	FREESTACK_INITIAL_SIZE		8192
+#define	FREESTACK_INITIAL_SIZE		64  /* Small -> better test coverage */
 
 /*
  * Entry in a bucket: hash value + locator to data
  */
 typedef struct {
-	uint64_t  	be_hash;
-	record_ix_t 	be_record;	/* Index of actual data */
+	uint64_t	be_hash;
+	record_ix_t	be_record;	/* Index of actual data */
 } bucket_entry_t;
 
 /*
  * Bucket structure: fixed array of entries + overflow pointer. Overflow
  * buckets have a separate allocator.
+ *
+ * Invariants:
+ *
+ * - An entry whose be_record is zero marks the logical end of a bucket
+ *   chain. If a bucket contains such an entry, it must be the last bucket in
+ *   its chain (and its b_overflow value must therefore be zero).
+ *
+ * - If a bucket contains an entry whose be_record is zero, no element of
+ *   that entry or of any subsequent entry may be nonzero.
+ *
+ * - If a bucket's b_overflow pointer is nonzero, it must point to an
+ *   overflow bucket that contains at least one nonzero entry.
+ *
+ * That last invariant is needed to avoid unnecessary reads when transiting
+ * full buckets. If empty overflow buckets were allowed, it would be necessary
+ * to read the empty bucket to determine whether more entries existed.
  */
 typedef struct {
 	bucket_entry_t	b_entries[ENTRIES_PER_BUCKET];
@@ -69,13 +85,7 @@ typedef struct {
 
 /*
  * On average, bucket splits relocate half the chain's entries, potentially
- * freeing up one or more overflow buckets for reuse. It would be correct to
- * leave the overflow buckets in place, but the storage can probably be
- * better used elsewhere.
- *
- * There's also a read penalty imposed on full buckets that are followed by
- * empty overflow buckets. Since the overflow bucket exists, it has to be
- * read to establish that it contains no entries.
+ * freeing up one or more overflow buckets for reuse.
  */
 typedef struct {
 	uint64_t	size;

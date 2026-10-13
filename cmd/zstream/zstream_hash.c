@@ -81,8 +81,7 @@
  * stream processing because it's space-efficient and because we often don't
  * know how long the input stream will be. When the table becomes too large
  * to keep in memory, the tail can spill over to disk storage without
- * abandoning or reshuffling the existing in-memory entries. If 90% of
- * buckets are in memory, then 90% of lookups will happen at memory speed.
+ * abandoning or reshuffling the existing in-memory entries.
  *
  * This implementation uses open hashing (overflow buckets) and is
  * insert-only.
@@ -187,7 +186,8 @@ freestack_push_bucket(linear_hash_t *lh, record_ix_t bucket)
 	lh_freestack_t *stack = &lh->lh_freestack;
 	if (stack->head >= stack->size) {
 		stack->size *= 2;
-		stack->buckets = safe_realloc(stack->buckets, stack->size);
+		stack->buckets = safe_realloc(stack->buckets,
+		    stack->size * sizeof (record_ix_t));
 	}
 	stack->buckets[stack->head++] = bucket;
 }
@@ -359,7 +359,7 @@ split_bucket(linear_hash_t *lh)
 	if (stay.ei_entry_ix == -1) {
 		bucket_entry_t *bent = entry_iterator_next(&stay, B_FALSE);
 		stay.ei_dirty = bent->be_record != 0;
-		bent->be_record = 0;
+		*bent = (bucket_entry_t) {0};
 	}
 	if (stay.ei_bucket.b_overflow != 0) {
 		free_overflow_chain(lh, stay.ei_bucket.b_overflow);
@@ -383,7 +383,7 @@ split_bucket(linear_hash_t *lh)
 }
 
 void
-lh_insert(linear_hash_t *lh, uint64_t hash, const void* data)
+lh_insert(linear_hash_t *lh, uint64_t hash, const void *data)
 {
 	VERIFY(lh != NULL && data != NULL);
 	record_ix_t record = allocator_append(lh->lh_alloc.data, data);
@@ -444,7 +444,8 @@ lh_retrieve_next(lh_iterator_t *lh_iter, void *buffer)
 }
 
 void
-lh_fini(linear_hash_t *lh) {
+lh_fini(linear_hash_t *lh)
+{
 	VERIFY(lh != NULL);
 	if (lh->lh_alloc.data != NULL)
 		allocator_group_fini(lh->lh_alloc.data);
