@@ -344,6 +344,12 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		if (rc != 0) {
 			break;
 		}
+		enum zio_compress dummy;
+		if (lookup_record_specifier(spec.rs_object, spec.rs_offset,
+		    &dummy) == B_TRUE)
+			errx(1, "duplicate record specifier %llu,%llu",
+			    (u_longlong_t)spec.rs_object,
+			    (u_longlong_t)spec.rs_offset);
 		uint64_t key = cityhash2(spec.rs_object, spec.rs_offset);
 		lh_insert(record_specifiers, key, &spec);
 		num_parsed++;
