@@ -75,9 +75,9 @@ void *
 safe_realloc(void *buff, size_t new_size);
 
 /*
- * In addition to quitting on error, safe_pwrite() and safe_pread() handle
- * partial reads and writes correctly and do not return until the full
- * buffer has been transferred.
+ * In addition to quitting on error, safe_pwrite() and safe_pread_zero()
+ * handle partial reads and writes correctly and do not return until the
+ * full buffer has been transferred.
  */
 void
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
@@ -151,7 +151,7 @@ parse_compression_specifier(const char *str, compression_spec_t *spec);
 
 /*
  * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the
- * command line as possible, entering them into an hcreate() hash table. The
+ * command line as possible, entering them into a hash table. The
  * OBJECT/OFFSET pairs become the keys and the compression types become the
  * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
  * a placeholder value. This is also the default when accept_compression is
