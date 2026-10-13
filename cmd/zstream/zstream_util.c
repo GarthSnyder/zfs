@@ -79,6 +79,15 @@ safe_calloc(size_t size)
 	return (rv);
 }
 
+void *
+safe_realloc(void *buff, size_t new_size)
+{
+	if ((buff == realloc(buff, new_size)) == NULL && new_size != 0)
+		errx(1, "failed to realloc %llu bytes, aborting...",
+		    (u_longlong_t)new_size);
+	return (buff);
+}
+
 void
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
 {
@@ -93,25 +102,6 @@ safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
 		}
 		if (n == 0)
 			errx(1, "pwrite of %llu bytes failed",
-			    (u_longlong_t)count);
-		done += (size_t)n;
-	}
-}
-
-void
-safe_pread(int fd, void *buf, size_t count, off64_t offset)
-{
-	size_t done = 0;
-
-	while (done < count) {
-		ssize_t n = pread(fd, buf + done, count - done, offset + done);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue; /* zero progress this call, retry */
-			err(1, "pread failed");
-		}
-		if (n == 0)
-			errx(1, "pread of %llu bytes failed",
 			    (u_longlong_t)count);
 		done += (size_t)n;
 	}
