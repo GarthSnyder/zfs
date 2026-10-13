@@ -57,13 +57,6 @@ const char *
 selftest_scratch_dir(void);
 
 /*
- * Create an unlinked temporary file in the scratch directory and return
- * its file descriptor. Exits on failure.
- */
-int
-selftest_create_tempfile(void);
-
-/*
  * Run fn(arg) in a forked child and require it to terminate either by
  * exiting with a nonzero status (err(), errx()) or by aborting (a failed
  * VERIFY). The child's stdout and stderr are captured.
