@@ -81,7 +81,7 @@ safe_realloc(void *buff, size_t new_size)
 }
 
 void
-safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
+safe_pwrite(int fd, const void *buf, size_t count, off_t offset, char *where)
 {
 	size_t done = 0;
 
@@ -91,6 +91,9 @@ safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
 		if (n < 0) {
 			if (errno == EINTR)
 				continue; /* zero progress this call, retry */
+			else if (errno == ENOSPC && where != NULL)
+				errx(1, "write failed, out of space in %s"
+				    ", aborting...", where);
 			err(1, "pwrite() failed");
 		}
 		if (n == 0)
@@ -101,7 +104,7 @@ safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
 }
 
 void
-safe_pread_zero(int fd, void *buf, size_t count, off64_t offset)
+safe_pread_zero(int fd, void *buf, size_t count, off_t offset)
 {
 	size_t done = 0;
 
