@@ -122,6 +122,8 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		.ag_allocators =
 		    safe_malloc(num_allocators * sizeof (allocator_t *))
 	};
+	if (dir_path != NULL)
+		asprintf(&group->ag_dir, "%s", dir_path);
 
 	for (int i = 0; i < num_allocators; i++) {
 		void *base = NULL;
@@ -162,7 +164,8 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 		if (alloc->a_fd < 0)
 			errx(1, "allocator memory limit exceeded, record %llu "
 			    "(write)", (u_longlong_t)record);
-		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, off);
+		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size, off,
+		    alloc->a_group->ag_dir);
 	} else if (try_make_readwrite(alloc, next_off)) {
 		memcpy(OFFSET_TO_ADDR(alloc, off), buff, alloc->a_record_size);
 	} else {
@@ -254,7 +257,8 @@ free_memory_from(allocator_t *alloc, size_t delta_bytes)
 		    __func__);
 	size_t bytes_to_free = eject_end - eject_start;
 	void *eject_start_addr = OFFSET_TO_ADDR(alloc, eject_start);
-	safe_pwrite(alloc->a_fd, eject_start_addr, bytes_to_free, eject_start);
+	safe_pwrite(alloc->a_fd, eject_start_addr, bytes_to_free, eject_start,
+	    alloc->a_group->ag_dir);
 	if (mmap(eject_start_addr, bytes_to_free, PROT_NONE,
 	    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
 		err(1, "mmap (frontier shrink) failed");
@@ -348,6 +352,8 @@ allocator_group_fini(allocator_t *alloc)
 		}
 		free(group_alloc);
 	}
+	if (group->ag_dir != NULL)
+		free(group->ag_dir);
 	free(group->ag_allocators);
 	free(group);
 }
