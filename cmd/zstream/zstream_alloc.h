@@ -55,8 +55,6 @@ extern "C" {
  * (modulo rounding; see below).
  */
 
-#define	MAX_ALLOCATOR_GROUPS		6
-#define	MAX_ALLOCATORS_PER_GROUP	6
 #define	MAX_RECORD_SIZE			(8 << 10)	/* 8KB */
 
 typedef uint64_t record_ix_t;
