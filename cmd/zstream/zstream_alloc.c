@@ -55,8 +55,7 @@
  *   and need never change their addressing scheme, even as memory use evolves.
  *
  *   When an allocator needs more writable pages, it incrementally changes
- *   pages' protection from PROT_NONE to PROT_READ | PROT_WRITE, at which
- *   point the pages acquire swap reservations and are charged against the RSS.
+ *   pages' protection from PROT_NONE to PROT_READ | PROT_WRITE.
  */
 
 #define	OFFSET_TO_ADDR(alloc, off)	((char *)(alloc)->a_base_addr + (off))
@@ -117,27 +116,33 @@ find_empty_group_slot(void)
 }
 
 allocator_t **
-allocator_group_init(const size_t *record_sizes, unsigned n,
-    size_t memory_limit, const char *dir_path)
+allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
+    size_t mem_limit, const char *dir_path)
 {
-	if (memory_limit == 0 && dir_path == NULL)
+	if (mem_limit == 0 && dir_path == NULL)
 		errx(1, "allocator group needs either disk or memory backing");
-	if (n < 1 || n > MAX_ALLOCATORS_PER_GROUP)
-		errx(1, "invalid number of allocators: %d", n);
+	if (num_allocators < 1 || num_allocators > MAX_ALLOCATORS_PER_GROUP)
+		errx(1, "invalid number of allocators: %u", num_allocators);
 
-	size_t cluster_size = group_cluster_size(record_sizes, n);
+	size_t cluster_size = group_cluster_size(record_sizes, num_allocators);
 
 	allocator_group_t *group = find_empty_group_slot();
 	*group = (allocator_group_t) {
-		.ag_mem_limit = ROUND_UP(memory_limit, cluster_size),
+		.ag_mem_limit = ROUND_UP(mem_limit, cluster_size),
 		.ag_mem_current = 0,
 		.ag_cluster_size = cluster_size,
-		.ag_num_allocators = n
+		.ag_num_allocators = num_allocators
 	};
 
-	for (int i = 0; i < n; i++) {
+	for (int i = 0; i < num_allocators; i++) {
 		void *base = NULL;
 		if (group->ag_mem_limit > 0) {
+			/*
+			 * Each allocator reserves address space for its
+			 * maximum possible memory use. This is not yet
+			 * "real" memory, but it can still fall afoul of
+			 * RLIMIT_AS if that rlimit has been set.
+			 */
 			base = mmap(NULL, group->ag_mem_limit,
 			    PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (base == MAP_FAILED)
@@ -175,7 +180,6 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 		/* Restart if converted to a disk operation */
 		return (allocator_store(alloc, record, buff));
 	}
-	/* a_count is one past the highest record known to have been written */
 	alloc->a_count = MAX(alloc->a_count, record + 1);
 }
 
@@ -218,18 +222,11 @@ allocator_append(allocator_t *alloc, const void *data)
 	return (loc);
 }
 
-/*
- * We must write actual data to preserve the invariant that a_count == one
- * past the last record known to have been written.
- */
 record_ix_t
 allocator_skip(allocator_t *alloc)
 {
 	ASSERT(alloc != NULL);
-	uint8_t buff[alloc->a_record_size];
-	memset(buff, 0, sizeof (buff));
-	record_ix_t ix = allocator_append(alloc, buff);
-	return (ix);
+	return (alloc->a_count++);
 }
 
 /*

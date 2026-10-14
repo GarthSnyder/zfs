@@ -25,17 +25,14 @@
  * To verify a table, entries are grouped by hash value and each group is
  * retrieved. Every returned payload must be internally consistent and must
  * match exactly one not-yet-seen model entry. The number of returned
- * records must equal the group size. Hashes never inserted into must
- * return nothing. (Inserted keys always have bit 63 clear, while absent-probe
+ * records must equal the group size. Hashes never inserted into must return
+ * nothing. (Inserted keys always have bit 63 clear, while absent-probe
  * tests set this bit.)
  *
  * lh_validate() below complements this black-box view with a structural
- * audit of the table itself. It used to live in zstream_hash_extras.c and
- * was a runtime-callable function. But in the interest of keeping the
- * production code simple, it has moved here. In this context, we
- * deliberately walk bucket chains using separate code rather than the
- * table's own entry_iterator_t code. That way, a bug in the iterator can't
- * hide from the validator.
+ * audit of the table itself. We deliberately walk bucket chains using
+ * separate code rather than the table's own entry_iterator_t code. That
+ * way, a bug in the iterator can't hide from the validator.
  *
  * Beyond store-and-retrieve correctness, the tests run tables under memory
  * pressure. The table itself does no memory management; its three
@@ -129,10 +126,10 @@ lh_validate(linear_hash_t *lh, uint64_t expected_entries)
 		bucket_t bucket;
 		boolean_t top_level = B_TRUE;
 		uint64_t links = 0;
+		boolean_t seen_empty = B_FALSE;
 
 		allocator_retrieve(lh->lh_alloc.bucket, b, &bucket);
 		while (B_TRUE) {
-			boolean_t seen_empty = B_FALSE;
 			for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
 				bucket_entry_t *e = &bucket.b_entries[i];
 				if (e->be_record == 0) {
@@ -773,8 +770,8 @@ hash_pressure_priority(void)
  * used against two live tables in alternation. Iterator state must not
  * bleed between iterators or tables.
  *
- * Verify that an insert invalidates every outstanding iterator for that
- * hash table and that lh_retrieve_next() treats a stale iterator as a fatal
+ * Verify that an insert invalidates outstanding iterators for that hash
+ * table and that lh_retrieve_next() treats a stale iterator as a fatal
  * error (see hash_fatal). It's fine to invalidate the iterators en passant,
  * but not to use them afterwards.
  *

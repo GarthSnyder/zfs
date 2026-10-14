@@ -30,8 +30,6 @@
 #include <errno.h>
 #include <libzfs.h>
 #include <pthread.h>
-#include <search.h>
-#include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,8 +37,6 @@
 #include <sys/abd.h>
 #include <sys/fs/zfs.h>
 #include <sys/spa_checksum.h>
-#include <sys/param.h>
-#include <sys/stat.h>
 #include <sys/stdtypes.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
@@ -52,12 +48,8 @@
 #include "zstream_util.h"
 #include "zstream_hash.h"
 
-#if defined(__linux__)
-#include <linux/falloc.h>
-#endif
-
-linear_hash_t	*record_specifiers = NULL;
 libzfs_handle_t	*libzfs_handle = NULL;
+static linear_hash_t	*record_specifiers = NULL;
 
 void *
 safe_malloc(size_t size)
@@ -79,39 +71,30 @@ safe_calloc(size_t size)
 	return (rv);
 }
 
+void *
+safe_realloc(void *buff, size_t new_size)
+{
+	if ((buff = realloc(buff, new_size)) == NULL && new_size != 0)
+		errx(1, "failed to realloc %llu bytes, aborting...",
+		    (u_longlong_t)new_size);
+	return (buff);
+}
+
 void
 safe_pwrite(int fd, const void *buf, size_t count, off64_t offset)
 {
 	size_t done = 0;
 
 	while (done < count) {
-		ssize_t n = pwrite(fd, buf + done, count - done, offset + done);
+		ssize_t n = pwrite(fd, (uint8_t *)buf + done, count - done,
+		    offset + done);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue; /* zero progress this call, retry */
-			err(1, "pwrite64() failed");
+			err(1, "pwrite() failed");
 		}
 		if (n == 0)
 			errx(1, "pwrite of %llu bytes failed",
-			    (u_longlong_t)count);
-		done += (size_t)n;
-	}
-}
-
-void
-safe_pread(int fd, void *buf, size_t count, off64_t offset)
-{
-	size_t done = 0;
-
-	while (done < count) {
-		ssize_t n = pread(fd, buf + done, count - done, offset + done);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue; /* zero progress this call, retry */
-			err(1, "pread failed");
-		}
-		if (n == 0)
-			errx(1, "pread of %llu bytes failed",
 			    (u_longlong_t)count);
 		done += (size_t)n;
 	}
@@ -123,7 +106,8 @@ safe_pread_zero(int fd, void *buf, size_t count, off64_t offset)
 	size_t done = 0;
 
 	while (done < count) {
-		ssize_t n = pread(fd, buf + done, count - done, offset + done);
+		ssize_t n = pread(fd, (uint8_t *)buf + done, count - done,
+		    offset + done);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue; /* zero progress this call, retry */
@@ -354,6 +338,12 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		if (rc != 0) {
 			break;
 		}
+		enum zio_compress dummy;
+		if (lookup_record_specifier(spec.rs_object, spec.rs_offset,
+		    &dummy) == B_TRUE)
+			errx(1, "duplicate record specifier %llu,%llu",
+			    (u_longlong_t)spec.rs_object,
+			    (u_longlong_t)spec.rs_offset);
 		uint64_t key = cityhash2(spec.rs_object, spec.rs_offset);
 		lh_insert(record_specifiers, key, &spec);
 		num_parsed++;
