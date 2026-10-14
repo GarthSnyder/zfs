@@ -46,7 +46,7 @@ extern "C" {
  *
  * Record indices and record sizes are both 64-bit values, but internal
  * arithmetic is also 64-bit. The largest valid index will vary with
- * record size and is roughly UINT64_MAX / record_size.
+ * record size and is roughly INT64_MAX / record_size.
  *
  * All allocators are members of an allocator group, which may be a group
  * of 1. Allocators in a group share a collective memory limit. Regardless
