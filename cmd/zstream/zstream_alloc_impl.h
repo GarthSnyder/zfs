@@ -53,6 +53,7 @@ typedef struct {
 	size_t		ag_mem_limit;		/* Total allowed for group */
 	size_t		ag_mem_current;		/* Currently used by group */
 	size_t		ag_cluster_size;	/* Allocation unit */
+	char		*ag_dir;		/* Spill dir, for error msgs */
 	unsigned int	ag_num_allocators;
 	allocator_t	**ag_allocators;
 } allocator_group_t;
