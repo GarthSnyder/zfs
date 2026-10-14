@@ -80,7 +80,7 @@ safe_realloc(void *buff, size_t new_size);
  * full buffer has been transferred.
  */
 void
-safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
+safe_pwrite(int fd, const void *buf, size_t count, off_t offset, char *where);
 
 /*
  * Like a safe version of pread(), except that reading past end-of-file is
@@ -88,7 +88,7 @@ safe_pwrite(int fd, const void *buf, size_t count, off64_t offset);
  * with zeros.
  */
 void
-safe_pread_zero(int fd, void *buf, size_t count, off64_t offset);
+safe_pread_zero(int fd, void *buf, size_t count, off_t offset);
 
 void
 safe_pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
