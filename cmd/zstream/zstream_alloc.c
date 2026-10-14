@@ -327,8 +327,22 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	/* Checked before, but we may have since done multiple frees */
 	VERIFY3U(group->ag_mem_limit - group->ag_mem_current, >=, needed);
 	if (mprotect(OFFSET_TO_ADDR(alloc, alloc->a_writable_frontier),
-	    needed, PROT_READ | PROT_WRITE) != 0)
-		err(1, "mprotect failed");
+	    needed, PROT_READ | PROT_WRITE) != 0) {
+		if (errno == ENOMEM) {
+			/*
+			 * There are various oddball situations that might
+			 * result in memory allocation failing despite the
+			 * budget being carefully chosen. Try to salvage the
+			 * operation by clamping the memory budget to the
+			 * empirically-observed limit. This forces spilling.
+			 */
+			warn("memory allocation failed, clamping budget...");
+			group->ag_mem_limit = group->ag_mem_current;
+			return (B_FALSE);
+		} else {
+			err(1, "mprotect failed");
+		}
+	}
 	alloc->a_writable_frontier += needed;
 	group->ag_mem_current += needed;
 	return (B_TRUE);
