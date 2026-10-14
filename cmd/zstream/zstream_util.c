@@ -114,7 +114,7 @@ safe_pread_zero(int fd, void *buf, size_t count, off64_t offset)
 			err(1, "pread failed");
 		}
 		if (n == 0) {
-			memset(buf + done, 0, count - done);
+			memset((uint8_t *)buf + done, 0, count - done);
 			return;
 		}
 		done += (size_t)n;
