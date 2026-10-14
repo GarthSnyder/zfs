@@ -151,10 +151,9 @@ parse_compression_specifier(const char *str, compression_spec_t *spec);
 
 /*
  * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the
- * command line as possible, entering them into a hash table. The
- * OBJECT/OFFSET pairs become the keys and the compression types become the
- * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
- * a placeholder value. This is also the default when accept_compression is
+ * command line as possible and enters them into a hash table. If
+ * accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as a
+ * placeholder value. This is also the default when accept_compression is
  * B_TRUE but no compression is specified.
  *
  * Stops at the first unparseable specifier and returns the number of
@@ -165,7 +164,7 @@ int
 parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression);
 
 /*
- * Looks up record specifiers in an hcreate() hash table by object and
+ * Looks up record specifiers in the specifier table by object and
  * offset. Returns B_TRUE and sets the ctype if found.
  */
 boolean_t

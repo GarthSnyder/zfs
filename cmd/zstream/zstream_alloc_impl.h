@@ -69,7 +69,7 @@ typedef struct {
  * allocator_append() and allocator_skip() some reasonable definition of
  * "the next index." Functionally, it's 1 plus the highest index that was
  * ever written to or returned to the client. Reads don't affect it.
-*/
+ */
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
 	size_t		   a_record_size;	  /* Client-specified */
