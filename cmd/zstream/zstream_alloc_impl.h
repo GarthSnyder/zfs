@@ -57,6 +57,19 @@ typedef struct {
 	allocator_t	*ag_allocators[MAX_ALLOCATORS_PER_GROUP];
 } allocator_group_t;
 
+/*
+ * Invariants:
+ *   a_writable_frontier <= a_first_on_disk <= a_group->ag_mem_limit
+ *   a_group->ag_mem_current <= a_group->ag_mem_limit
+ *   a_group->ag_mem_current = sum_over_group(a_writable_frontier)
+ *   a_first_on_disk decreases monotonically (if at all)
+ *
+ * Given that you can read and write anywhere in the index space, the record
+ * count (a_count) is a bit vaguely defined. It's maintained to give
+ * allocator_append() and allocator_skip() some reasonable definition of
+ * "the next index." Functionally, it's 1 plus the highest index that was
+ * ever written to or returned to the client. Reads don't affect it.
+*/
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
 	size_t		   a_record_size;	  /* Client-specified */
@@ -64,7 +77,7 @@ struct allocator {
 	off_t		   a_first_on_disk;	  /* Memory/disk split point */
 	off_t		   a_writable_frontier;   /* 1st non-r/w byte */
 	allocator_group_t  *a_group;		  /* Back-pointer to group */
-	uint64_t	   a_count;		  /* Highest index stored +1 */
+	uint64_t	   a_count;		  /* See above */
 	void		   *a_base_addr;	  /* Start of VM allotment */
 };
 
