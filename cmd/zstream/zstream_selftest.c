@@ -30,7 +30,6 @@
  * man page. It exists to be driven by the ZFS test suite.
  */
 
-#include "zstream_util.h"
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
@@ -77,12 +76,6 @@ selftest_scratch_dir(void)
 {
 	const char *dir = getenv("ZSTREAM_SELFTEST_DIR");
 	return ((dir != NULL && dir[0] != '\0') ? dir : "/var/tmp");
-}
-
-int
-selftest_create_tempfile(void)
-{
-	return (safe_create_temp_file(selftest_scratch_dir()));
 }
 
 /*

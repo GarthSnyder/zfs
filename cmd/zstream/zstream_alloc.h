@@ -40,9 +40,13 @@ extern "C" {
  *   - Blocks are of uniform fixed size (sizes may vary per allocator).
  *   - Every block lives at a 64-bit record_ix_t address.
  *   - Record indexes are in ordinal units, not bytes.
- *   - You may read a block at any index, even if you haven't written it.
- *   - Uninitialized blocks read as zeros.
  *   - Allocators are not thread-safe.
+ *   - You may read a block at any valid index, even if never written.
+ *   - Uninitialized records read as zeros.
+ *
+ * Record indices and record sizes are both 64-bit values, but internal
+ * arithmetic is also 64-bit. The largest valid index will vary with
+ * record size and is roughly UINT64_MAX / record_size.
  *
  * All allocators are members of an allocator group, which may be a group
  * of 1. Allocators in a group share a collective memory limit. Regardless
@@ -82,6 +86,9 @@ typedef struct allocator allocator_t;
  *   the cluster size.
  *
  * - No record size can be larger than MAX_RECORD_SIZE (8KB).
+ *
+ * - The returned array of allocator_t's is stable and valid until
+ *   the allocator group is finalized.
  */
 allocator_t **
 allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
@@ -100,9 +107,7 @@ record_ix_t
 allocator_append(allocator_t *alloc, const void *data);
 
 /*
- * Skip ahead one record. Like other unwritten records, the skipped record
- * is guaranteed to contain zeros if read. Returns the index that was
- * skipped.
+ * Skip ahead one record. Returns the index that was skipped.
  */
 record_ix_t
 allocator_skip(allocator_t *alloc);
