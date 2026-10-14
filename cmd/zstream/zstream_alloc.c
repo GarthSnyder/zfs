@@ -61,8 +61,6 @@
 #define	OFFSET_TO_ADDR(alloc, off)	((char *)(alloc)->a_base_addr + (off))
 #define	OFFSET_IS_ON_DISK(alloc, off)	((off) >= (alloc)->a_first_on_disk)
 
-static allocator_group_t groups[MAX_ALLOCATOR_GROUPS] = {{0}};
-
 static boolean_t
 try_make_readwrite(allocator_t *alloc, off_t end_offset);
 
@@ -103,35 +101,25 @@ group_cluster_size(const size_t *record_sizes, unsigned n)
 	return (MAX(PAGE_CLUSTER_SIZE, (size_t)pagesize));
 }
 
-static allocator_group_t *
-find_empty_group_slot(void)
-{
-	int group;
-	for (group = 0; group < MAX_ALLOCATOR_GROUPS; group++) {
-		if (groups[group].ag_num_allocators == 0)
-			return (&groups[group]);
-	}
-	errx(1, "only %d allocator groups may be active at once",
-	    MAX_ALLOCATOR_GROUPS);
-}
-
 allocator_t **
 allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
     size_t mem_limit, const char *dir_path)
 {
 	if (mem_limit == 0 && dir_path == NULL)
 		errx(1, "allocator group needs either disk or memory backing");
-	if (num_allocators < 1 || num_allocators > MAX_ALLOCATORS_PER_GROUP)
+	if (num_allocators == 0)
 		errx(1, "invalid number of allocators: %u", num_allocators);
 
 	size_t cluster_size = group_cluster_size(record_sizes, num_allocators);
 
-	allocator_group_t *group = find_empty_group_slot();
+	allocator_group_t *group = safe_malloc(sizeof (allocator_group_t));
 	*group = (allocator_group_t) {
 		.ag_mem_limit = ROUND_UP(mem_limit, cluster_size),
 		.ag_mem_current = 0,
 		.ag_cluster_size = cluster_size,
-		.ag_num_allocators = num_allocators
+		.ag_num_allocators = num_allocators,
+		.ag_allocators =
+		    safe_malloc(num_allocators * sizeof (allocator_t *))
 	};
 
 	for (int i = 0; i < num_allocators; i++) {
@@ -160,7 +148,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 			.a_writable_frontier = 0
 		};
 	}
-	return (&group->ag_allocators[0]);
+	return (group->ag_allocators);
 }
 
 void
@@ -358,7 +346,6 @@ allocator_group_fini(allocator_t *alloc)
 		}
 		free(group_alloc);
 	}
-	*group = (allocator_group_t) {
-		.ag_num_allocators = 0
-	};
+	free(group->ag_allocators);
+	free(group);
 }
