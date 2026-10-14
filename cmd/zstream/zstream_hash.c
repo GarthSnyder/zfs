@@ -193,7 +193,7 @@ freestack_push_bucket(linear_hash_t *lh, record_ix_t bucket)
 }
 
 /*
- * Recyle or create an overflow bucket. No guarantees are made about the
+ * Recycle or create an overflow bucket. No guarantees are made about the
  * current contents of the bucket.
  */
 static inline record_ix_t

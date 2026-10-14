@@ -42,7 +42,7 @@ extern "C" {
  * want to use longer hash keys, give the hash table a 64-bit digest and
  * check returned records against the full hash value.
  *
- * Hashes are not thread-safe.
+ * Multiple threads may not make calls into the same hash table concurrently.
  */
 
 #define	MAX_LH_ITERATORS 8
@@ -75,8 +75,8 @@ lh_insert(linear_hash_t *lh, uint64_t hash, const void *data);
  * lh_retrieve_next() to iterate through matching records.
  *
  * API clients are not required to memory-manage iterators or to pursue
- * iterations to completion. However, callers must limit themselves to
- * MAX_LH_ITERATORS concurrent iterators.
+ * iterations to completion. However, only MAX_LH_ITERATORS may be active
+ * simultaneously across all hash tables.
  */
 lh_iterator_t *
 lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash);

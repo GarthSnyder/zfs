@@ -7,11 +7,11 @@ CPPCHECKTARGETS += zstream
 zstream_SOURCES = \
 	%D%/zstream.c \
 	%D%/zstream.h \
-	%D%/zstream_backtrace.c \
-	%D%/zstream_backtrace.h \
 	%D%/zstream_alloc.c \
 	%D%/zstream_alloc.h \
 	%D%/zstream_alloc_impl.h \
+	%D%/zstream_backtrace.c \
+	%D%/zstream_backtrace.h \
 	%D%/zstream_byteswap.c \
 	%D%/zstream_byteswap.h \
 	%D%/zstream_chain.c \

@@ -18,6 +18,7 @@
 #include <err.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -166,7 +167,8 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 		memcpy(OFFSET_TO_ADDR(alloc, off), buff, alloc->a_record_size);
 	} else {
 		/* Restart if converted to a disk operation */
-		return (allocator_store(alloc, record, buff));
+		allocator_store(alloc, record, buff);
+		return;
 	}
 	alloc->a_count = MAX(alloc->a_count, record + 1);
 }
