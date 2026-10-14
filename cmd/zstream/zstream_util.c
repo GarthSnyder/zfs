@@ -314,11 +314,10 @@ bail:	if (buff != static_buff)
 
 /*
  * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the
- * command line as possible, entering them into a hash table. The
- * OBJECT/OFFSET pairs become the keys and the compression types become the
- * values. If accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as
- * a placeholder value. This is also the default when accept_compression
- * is B_TRUE but no compression is specified.
+ * command line as possible and enters them into a hash table. If
+ * accept_compression is B_FALSE, ZIO_COMPRESS_INHERIT is used as a
+ * placeholder value. This is also the default when accept_compression is
+ * B_TRUE but no compression is specified.
  *
  * Stops at the first unparseable specifier and returns the number of
  * specifiers successfully parsed. Checks a few return codes that should
