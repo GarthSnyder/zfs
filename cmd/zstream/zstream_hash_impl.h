@@ -23,6 +23,7 @@
 #ifndef _ZSTREAM_HASH_IMPL_H
 #define	_ZSTREAM_HASH_IMPL_H
 
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -95,12 +96,12 @@ typedef struct {
 
 struct linear_hash {
 	size_t		lh_record_size;		  /* Param */
+	size_t		lh_key_size;		  /* Record prefix <= 32 */
 	lh_allocators_t	lh_alloc;
 	uint8_t		lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
 	lh_stats_t	lh_stats;		  /* Occupancy */
 	lh_freestack_t	lh_freestack;		  /* Available overflow bkts */
-	uint64_t	lh_generation;		  /* Changes on insert */
 };
 
 /*
@@ -114,16 +115,6 @@ typedef struct {
 	boolean_t	ei_in_overflow;	/* Which allocator: main or overflow? */
 	boolean_t	ei_dirty;	/* Needs writeback? */
 } entry_iterator_t;
-
-/*
- * Client-facing iterator for retrieving records by hash
- */
-struct lh_iterator {
-	uint64_t		lhi_hash_sought;	/* Client's query */
-	uint64_t		lhi_generation;		/* Validity check */
-	boolean_t		lhi_completed;		/* Already finalized */
-	entry_iterator_t	lhi_entry_iterator;
-};
 
 #ifdef __cplusplus
 }

@@ -38,9 +38,13 @@
 #define	SMALLEST_POSSIBLE_HASH_MEMORY_MB	128
 
 typedef struct {
-	uint64_t	rhe_toguid;
-	uint64_t	rhe_object;
-	uint64_t	rhe_offset;
+	uint64_t	rk_toguid;
+	uint64_t	rk_object;
+	uint64_t	rk_offset;
+} redup_key_t;
+
+typedef struct {
+	redup_key_t	rhe_key;
 	uint64_t	rhe_stream_offset;
 } redup_hash_entry_t;
 
@@ -53,34 +57,30 @@ static inline void
 hash_insert(linear_hash_t *lh, struct drr_write *drrw, uint64_t stream_offset)
 {
 	redup_hash_entry_t rhe = {
-		.rhe_toguid = drrw->drr_toguid,
-		.rhe_object = drrw->drr_object,
-		.rhe_offset = drrw->drr_offset,
+		.rhe_key = {
+			.rk_toguid = drrw->drr_toguid,
+			.rk_object = drrw->drr_object,
+			.rk_offset = drrw->drr_offset
+		},
 		.rhe_stream_offset = stream_offset
 	};
-	uint64_t hashcode = cityhash3(rhe.rhe_toguid, rhe.rhe_object,
-	    rhe.rhe_offset);
-	lh_insert(lh, hashcode, &rhe);
+	if (!lh_insert(lh, &rhe))
+		warnx("duplicate redup hash table entry, ignoring...");
 }
 
 static inline uint64_t
 hash_lookup(linear_hash_t *lh, struct drr_write_byref *drrwb)
 {
-	redup_hash_entry_t entry;
-	uint64_t hashcode = cityhash3(drrwb->drr_refguid, drrwb->drr_refobject,
-	    drrwb->drr_refoffset);
-
-	lh_iterator_t *iter = lh_initiate_retrieve(lh, hashcode);
-	while (lh_retrieve_next(iter, &entry)) {
-		boolean_t matches =
-		    entry.rhe_toguid == drrwb->drr_refguid &&
-		    entry.rhe_object == drrwb->drr_refobject &&
-		    entry.rhe_offset == drrwb->drr_refoffset;
-		if (matches) {
-			return (entry.rhe_stream_offset);
-		}
-	}
-	errx(1, "could not find expected redup table entry");
+	redup_hash_entry_t rhe = {
+		.rhe_key = {
+			.rk_toguid = drrwb->drr_refguid,
+			.rk_object = drrwb->drr_refobject,
+			.rk_offset = drrwb->drr_refoffset
+		},
+	};
+	if (!lh_find(lh, &rhe))
+		errx(1, "could not find expected redup table entry");
+	return (rhe.rhe_stream_offset);
 }
 
 static disposition_t
@@ -215,8 +215,8 @@ zstream_do_redup(int argc, char *argv[])
 	    SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20);
 #endif
 
-	context.rc_hash =
-	    lh_init(sizeof (redup_hash_entry_t), hash_memory, temp_dir);
+	context.rc_hash = lh_init(sizeof (redup_hash_entry_t),
+	    sizeof (redup_key_t), hash_memory, temp_dir);
 
 	zstream_chain_t redup_chain = {
 		STANDARD_INPUT_STACK(argv[0]),

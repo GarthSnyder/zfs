@@ -48,7 +48,7 @@
 #include "zstream_util.h"
 #include "zstream_hash.h"
 
-libzfs_handle_t	*libzfs_handle = NULL;
+libzfs_handle_t		*libzfs_handle = NULL;
 static linear_hash_t	*record_specifiers = NULL;
 
 void *
@@ -232,6 +232,10 @@ release_libzfs(void)
 	}
 }
 
+/*
+ * This function calls require_libzfs(). release_libzfs() should be called
+ * at some point after parsing.
+ */
 int
 parse_compression_specifier(const char *str, compression_spec_t *spec)
 {
@@ -260,15 +264,18 @@ parse_compression_specifier(const char *str, compression_spec_t *spec)
 /*
  * Parse a string of the form "OBJECT,OFFSET" or "OBJECT,OFFSET,COMPRESSION"
  * (with accept_compression == B_TRUE) and fill out a corresponding
- * record_specifier_t. Returns 0 if the string was successfully parsed.
+ * record_compression_t. Returns 0 if the string was successfully parsed.
  *
- * The rs_compression field of the record specifier struct is always
+ * The compression type field of the record specifier struct is always
  * initialized to ZIO_COMPRESS_INHERIT, whether accept_compression is true
  * or not. If accept_compression is B_TRUE but the input string does not
  * specify compression, the value remains at ZIO_COMPRESS_INHERIT.
+ *
+ * If accept_compression is B_TRUE, this function (indirectly) calls
+ * require_libzfs(). release_libzfs() should be called after parsing.
  */
 static int
-parse_record_specifier(const char *str, record_specifier_t *rec,
+parse_record_specifier(const char *str, record_compression_t *rec,
     boolean_t accept_compression)
 {
 	char static_buff[256];
@@ -284,24 +291,24 @@ parse_record_specifier(const char *str, record_specifier_t *rec,
 	strcpy(buff, str);
 	loc = buff;
 	errno = 0;
-	rec->rs_compression = (compression_spec_t) {
+	rec->rc_compression = (compression_spec_t) {
 		.cs_type = ZIO_COMPRESS_INHERIT
 	};
 
 	obj_str = strsep(&loc, ",");
 	if (loc == NULL)
 		goto bail;
-	rec->rs_object = strtoull(obj_str, &end, 0);
+	rec->rc_key.rs_object = strtoull(obj_str, &end, 0);
 	if (errno != 0 || *end != '\0' || obj_str == end)
 		goto bail;
 	offset_str = strsep(&loc, ",");
-	rec->rs_offset = strtoull(offset_str, &end, 0);
+	rec->rc_key.rs_offset = strtoull(offset_str, &end, 0);
 	if (errno != 0 || *end != '\0' || offset_str == end)
 		goto bail;
 	if (loc != NULL) {
 		if (accept_compression) {
 			int rc = parse_compression_specifier(loc,
-			    &rec->rs_compression);
+			    &rec->rc_compression);
 			if (rc != 0)
 				goto bail;
 		} else {
@@ -331,29 +338,21 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 {
 	int num_parsed = 0;
 	ASSERT(record_specifiers == NULL);
-	record_specifiers = lh_init(sizeof (record_specifier_t),
-	    256 << 20, NULL);
+	record_specifiers = lh_init(sizeof (record_compression_t),
+	    sizeof (record_specifier_t), 256 << 20, NULL);
 	for (int i = 0; i < argc; i++) {
-		record_specifier_t spec;
-		int rc = parse_record_specifier(argv[i], &spec,
-		    accept_compression);
-		if (rc != 0) {
+		record_compression_t comp;
+		if (parse_record_specifier(argv[i], &comp, accept_compression))
 			break;
-		}
-		enum zio_compress dummy;
-		if (lookup_record_specifier(spec.rs_object, spec.rs_offset,
-		    &dummy) == B_TRUE)
+		if (!lh_insert(record_specifiers, &comp))
 			errx(1, "duplicate record specifier %llu,%llu",
-			    (u_longlong_t)spec.rs_object,
-			    (u_longlong_t)spec.rs_offset);
-		uint64_t key = cityhash2(spec.rs_object, spec.rs_offset);
-		lh_insert(record_specifiers, key, &spec);
+			    (u_longlong_t)comp.rc_key.rs_object,
+			    (u_longlong_t)comp.rc_key.rs_offset);
 		num_parsed++;
 	}
 	/*
 	 * require_libzfs() will not have been called if accept_compression
-	 * is B_FALSE, but it's still fine to call release_libzfs(). In that
-	 * case it's a no-op.
+	 * is B_FALSE, but in that case release_libzfs() is a no-op.
 	 */
 	release_libzfs();
 	return (num_parsed);
@@ -361,23 +360,18 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 
 /*
  * Retrieves a raw zio_compress value rather than a compression_spec_t
- * because no clients are interested in compression levels. They just need
- * to know compression type. Returns B_TRUE if a matching record was found.
+ * because no clients are interested in compression levels. Returns B_TRUE
+ * if a matching record was found.
  */
 boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype)
 {
-	record_specifier_t spec;
-	uint64_t key = cityhash2(object, offset);
-	lh_iterator_t *iter = lh_initiate_retrieve(record_specifiers, key);
-	while (lh_retrieve_next(iter, &spec)) {
-		if (spec.rs_object == object && spec.rs_offset == offset) {
-			*ctype = spec.rs_compression.cs_type;
-			return (B_TRUE);
-		}
-	}
-	return (B_FALSE);
+	record_compression_t comp = { .rc_key = { object, offset } };
+	if (!lh_find(record_specifiers, &comp))
+		return (B_FALSE);
+	*ctype = comp.rc_compression.cs_type;
+	return (B_TRUE);
 }
 
 void
