@@ -123,7 +123,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		    safe_malloc(num_allocators * sizeof (allocator_t *))
 	};
 	if (dir_path != NULL)
-		asprintf(&group->ag_dir, "%s", dir_path);
+		(void) !asprintf(&group->ag_dir, "%s", dir_path);
 
 	for (int i = 0; i < num_allocators; i++) {
 		void *base = NULL;
