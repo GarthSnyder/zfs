@@ -25,10 +25,12 @@ extern "C" {
 #include <stddef.h>
 #include <sys/stdtypes.h>
 
+#define	MAX_KEY_SIZE			32
+
 /*
- * This module implements linear hashing with 64-bit hash keys. It runs on
- * top of allocator_t, which allows portions of the hash table to spill from
- * memory to disk when the memory budget is exhausted.
+ * This module implements a hash table using linear hashing [Litwin 1980].
+ * It runs on top of allocator_t, which allows portions of the hash table to
+ * spill from memory to disk when the memory budget is exhausted.
  *
  * See the comments in zstream_hash.c for more details about linear hashing.
  * Briefly, the table grows linearly as items are inserted. When an
@@ -38,57 +40,52 @@ extern "C" {
  * to keep there. As more disk storage is used, the performance of the hash
  * table declines smoothly with the number of entries.
  *
- * Hash keys are 64-bit values, and you must supply them yourself. If you
- * want to use longer hash keys, give the hash table a 64-bit digest and
- * check returned records against the full hash value.
- *
- * Multiple threads may not make calls into the same hash table concurrently.
+ * Only one thread should make simultaneous calls into the same hash table.
  */
 
-#define	MAX_LH_ITERATORS 8
-
 typedef struct linear_hash linear_hash_t;
-typedef struct lh_iterator lh_iterator_t;
 
 /*
+ * Create a hash table.
+ *
+ * All stored records are of the same record_size. Storage and retrieval
+ * keys are prefixes of the records themselves (of length key_size).
+ * Multiple records cannot be stored under the same key, although attempting
+ * to do so is harmless. The table does not implement deletions, so the
+ * first-inserted record always wins.
+ *
+ * The record_size must be no more than 8K, and the key prefix can be no
+ * longer than MAX_KEY_SIZE bytes.
+ *
+ * At least one of max_memory and spill_dir should have nonzero/non-NULL
+ * values.
+ *
+ * If max_memory is zero, the hash table is disk-only. lh_init() may round
+ * up the requested size to a more convenient value.
+ *
  * The spill_dir should be a place where memory can meaningfully spill over
  * to disk, which rules out /tmp on most systems because it's often
  * implemented as a ramdisk. If spill_dir is NULL, the hash table does not
- * use disk backup and may eventually run out of memory. If max_memory is
- * zero, the hash table is disk-only.
- *
- * Internal memory management is performed in terms of 1MB page clusters,
- * so max_memory should be at least 8MB if it is not zero. record_size may
- * not exceed MAX_RECORD_SIZE (8KB).
+ * use disk backup and may eventually run out of memory.
  */
 linear_hash_t *
-lh_init(size_t record_size, size_t max_memory, const char *spill_dir);
+lh_init(size_t record_size, size_t key_size, size_t max_memory,
+    const char *spill_dir);
 
 /*
- * Insertions invalidate all outstanding iterators on this hash table.
- */
-void
-lh_insert(linear_hash_t *lh, uint64_t hash, const void *data);
-
-/*
- * Set up retrieval for all data records with a given hash value. Use
- * lh_retrieve_next() to iterate through matching records.
- *
- * API clients are not required to memory-manage iterators or to pursue
- * iterations to completion. However, only MAX_LH_ITERATORS may be active
- * simultaneously across all hash tables.
- */
-lh_iterator_t *
-lh_initiate_retrieve(linear_hash_t *lh, uint64_t hash);
-
-/*
- * Get the next data record matching the hash. If the return value is
- * B_FALSE, there are no more records and the data buffer is invalid.
- * It is an error to call lh_retrieve_next() on an iterator that has
- * already returned B_FALSE.
+ * If a second attempt is made to insert the same key, lh_insert() returns
+ * B_FALSE and makes no changes to the table.
  */
 boolean_t
-lh_retrieve_next(lh_iterator_t *iter, void *buffer);
+lh_insert(linear_hash_t *lh, const void *buffer);
+
+/*
+ * Set the key bytes of the buffer before calling lh_find(). If the return
+ * value is B_TRUE, the record was found and the buffer contains a full copy
+ * of the original record.
+ */
+boolean_t
+lh_find(linear_hash_t *lh, void *buffer);
 
 void
 lh_fini(linear_hash_t *lh);
