@@ -53,8 +53,12 @@ typedef struct {
 typedef struct {
 	uint64_t		rs_object;
 	uint64_t		rs_offset;
-	compression_spec_t	rs_compression;
 } record_specifier_t;
+
+typedef struct {
+	record_specifier_t	rc_key;
+	compression_spec_t	rc_compression;
+} record_compression_t;
 
 typedef void *
 thread_f(void *);
