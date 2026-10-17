@@ -160,7 +160,7 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 	VERIFY(alloc != NULL && buff != NULL);
 	off_t off = record_offset(alloc, record);
 	off_t next_off = off + alloc->a_record_size;
-	if (OFFSET_IS_ON_DISK(alloc, off)) {
+retry:	if (OFFSET_IS_ON_DISK(alloc, off)) {
 		if (alloc->a_fd < 0)
 			errx(1, "allocator memory limit exceeded, record %llu "
 			    "(write)", (u_longlong_t)record);
@@ -169,9 +169,8 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 	} else if (try_make_readwrite(alloc, next_off)) {
 		memcpy(OFFSET_TO_ADDR(alloc, off), buff, alloc->a_record_size);
 	} else {
-		/* Restart if converted to a disk operation */
-		allocator_store(alloc, record, buff);
-		return;
+		/* If try_make_readwrite() failed, this is now a disk op */
+		goto retry;
 	}
 	alloc->a_count = MAX(alloc->a_count, record + 1);
 }
@@ -330,7 +329,7 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	    needed, PROT_READ | PROT_WRITE) != 0) {
 		if (errno == ENOMEM) {
 			/*
-			 * There are various oddball situations that might
+			 * There are some oddball situations that might
 			 * result in memory allocation failing despite the
 			 * budget being carefully chosen. Try to salvage the
 			 * operation by clamping the memory budget to the
