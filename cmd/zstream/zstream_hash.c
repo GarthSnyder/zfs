@@ -119,10 +119,6 @@
  */
 #define	BUCKET_ENTRY(iter) (&(iter)->ei_bucket.b_entries[(iter)->ei_entry_ix])
 
-typealias enum {
-	FIND, FIND_OR_INSERT, UPSERT
-} lh_op_mode_t;
-
 linear_hash_t *
 lh_init(size_t record_size, size_t key_size, size_t max_memory,
     const char *spill_dir)
@@ -432,27 +428,29 @@ insert_record(entry_iterator_t *iter, uint64_t hash, const void *buffer)
 }
 
 /*
- * This function implements all operations; they're very similar.
+ * All record-level operations: FIND, FIND_OR_INSERT, and UPSERT
  */
-static lh_result_t
-findsert(linear_hash_t *lh, uint8_t *inbuff, uint8_t *outbuff,
-    lh_op_mode_t op)
+lh_result_t
+lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff_in, void *outbuff_in)
 {
-	VERIFY(lh != NULL && inbuff != NULL && outbuff != NULL);
+	uint8_t *inbuff = inbuff_in;
+	uint8_t *outbuff = outbuff_in;
+	VERIFY(lh != NULL && inbuff != NULL);
 
-	/* Back up the key, zero-pad to 32 bytes, and calculate hash */
-	uint64_t key[4] = {0};
+	/* Zero-pad the key to 32 bytes and calculate hash */
+	uint64_t key[4];
 	size_t key_size = lh->lh_key_size;
-	memcpy((unit8_t *)key, inbuff, key_size);
+	memcpy((uint8_t *)key, inbuff, key_size);
 	memset((uint8_t *)key + key_size, 0, MAX_KEY_SIZE - key_size);
 	uint64_t hash = cityhash4(key[0], key[1], key[2], key[3]);
 
+	/* Set up scratch buffers and buffer wrangling */
 	uint8_t scratch[lh->lh_record_size];
-	uint8_t *writebuff;
-	if (op == FIND)
-		writebuff = inbuff;
-	else
-		writebuff = (outbuff != NULL) outbuff : scratch;
+	uint8_t inbuff_copy[lh->lh_record_size];
+	uint8_t *readbuff = inbuff;
+	uint8_t *writebuff = (outbuff != NULL) ? outbuff : scratch;
+	boolean_t inbuff_needs_copied = readbuff == writebuff && op != FIND;
+	boolean_t inbuff_copied = B_FALSE;
 
 	bucket_entry_t *entry;
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
@@ -460,15 +458,20 @@ findsert(linear_hash_t *lh, uint8_t *inbuff, uint8_t *outbuff,
 		if (entry->be_record == 0) {
 			if (op == FIND)
 				return (NOT_FOUND);
-			insert_record(&iter, hash, inbuff);
+			insert_record(&iter, hash, readbuff);
 			return (INSERTED);
 		} else if (entry->be_hash == hash) {
+			if (inbuff_needs_copied && !inbuff_copied) {
+				memcpy(inbuff_copy, inbuff, lh->lh_record_size);
+				inbuff_copied = B_TRUE;
+				readbuff = inbuff_copy;
+			}
 			allocator_retrieve(lh->lh_alloc.data, entry->be_record,
 			    writebuff);
-			if (memcmp(outbuff, key, key_size) == 0) {
+			if (memcmp(writebuff, key, key_size) == 0) {
 				if (op == UPSERT) {
 					allocator_store(lh->lh_alloc.data,
-					    entry->be_record, inbuff);
+					    entry->be_record, readbuff);
 					return (UPDATED);
 				}
 				return (FOUND);
@@ -477,24 +480,6 @@ findsert(linear_hash_t *lh, uint8_t *inbuff, uint8_t *outbuff,
 	}
 	VERIFY3B(op, ==, FIND);
 	return (NOT_FOUND);
-}
-
-lh_result_t
-lh_find(linear_hash_t *lh, void *buff)
-{
-	return (findsert(lh, buff, buff, FIND));
-}
-
-lh_result_t
-lh_find_or_insert(linear_hash_t *lh, const void *inbuff, void *outbuff)
-{
-	return (findsert(lh, inbuff, outbuff, FIND_OR_INSERT));
-}
-
-lh_result_t
-lh_upsert(linear_hash_t *lh, const void *inbuff, void *outbuff)
-{
-	return (findsert(lh, inbuff, outbuff, UPSERT));
 }
 
 void
