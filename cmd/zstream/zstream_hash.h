@@ -25,12 +25,16 @@ extern "C" {
 #include <stddef.h>
 #include <sys/stdtypes.h>
 
-#define	MAX_KEY_SIZE			32
+#define	MAX_KEY_SIZE 32
+
+#define	lh_find(lh, buff)	lh_findsert(lh, buff, buff, FIND)
+#define	lh_insert(lh, buff)	lh_findsert(lh, buff, NULL, INSERT)
+#define	lh_upsert(lh, buff)	lh_findsert(lh, buff, NULL, UPSERT)
 
 /*
- * This module implements a hash table using linear hashing [Litwin 1980].
- * It runs on top of allocator_t, which allows portions of the hash table to
- * spill from memory to disk when the memory budget is exhausted.
+ * This module implements a linear hash table [Litwin 1980]. It runs on top
+ * of allocator_t, which allows portions of the hash table to spill from
+ * memory to disk when the memory budget is exhausted.
  *
  * See the comments in zstream_hash.c for more details about linear hashing.
  * Briefly, the table grows linearly as items are inserted. When an
@@ -45,17 +49,20 @@ extern "C" {
 
 typedef struct linear_hash linear_hash_t;
 
+typealias enum {
+	FOUND, NOT_FOUND, INSERTED, UPDATED
+} lh_result_t;
+
 /*
- * Create a hash table.
+ * Creates a hash table.
  *
  * All stored records are of the same record_size. Storage and retrieval
- * keys are prefixes of the records themselves (of length key_size).
- * Multiple records cannot be stored under the same key, although attempting
- * to do so is harmless. The table does not implement deletions, so the
- * first-inserted record always wins.
+ * keys are prefixes of the records themselves (key_size is the prefix
+ * length). Multiple records cannot be stored under the same key, but
+ * existing records can be updated.
  *
  * The record_size must be no more than 8K, and the key prefix can be no
- * longer than MAX_KEY_SIZE bytes.
+ * longer than MAX_KEY_SIZE (32) bytes.
  *
  * At least one of max_memory and spill_dir should have nonzero/non-NULL
  * values.
@@ -73,19 +80,46 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
     const char *spill_dir);
 
 /*
- * If a second attempt is made to insert the same key, lh_insert() returns
- * B_FALSE and makes no changes to the table.
+ * lh_find() searches the table for the key passed in buff. buff should
+ * point to a region large enough to accommodate a full record. However,
+ * only the key fields need be filled out. If the key is found, lh_find()
+ * places the full record in buff and returns FOUND. Otherwise, it returns
+ * NOT_FOUND.
+ *
+ * buff may have been modified even if NOT_FOUND is returned, in which case
+ * its contents are undefined.
  */
-boolean_t
-lh_insert(linear_hash_t *lh, const void *buffer);
+lh_result_t
+lh_find(linear_hash_t *lh, void *buff);
 
 /*
- * Set the key bytes of the buffer before calling lh_find(). If the return
- * value is B_TRUE, the record was found and the buffer contains a full copy
- * of the original record.
+ * lh_find_or_insert() searches the table for the key found in inbuff. If
+ * found, it copies the existing record to outbuff and returns FOUND. If the
+ * key is not found, it inserts the contents of inbuff and returns INSERTED.
+ *
+ * You may pass NULL for the outbuff if you don't care about a previous
+ * value stored under this key.
+ *
+ * inbuff is not modified. If non-NULL, outbuff may have been modified even
+ * if INSERTED is returned, in which case its contents are undefined.
  */
-boolean_t
-lh_find(linear_hash_t *lh, void *buffer);
+lh_result_t
+lh_find_or_insert(linear_hash_t *lh, const void *inbuff, void *outbuff);
+
+/*
+ * lh_upsert() searches the table for the key found in inbuff. If found, it
+ * copies the existing record to outbuff, replaces the existing table entry
+ * with the full record from inbuff, and returns UPDATED. If the key is not
+ * found, inserts the full contents of inbuff and returns INSERTED.
+ *
+ * You may pass NULL for the outbuff if you don't care about a previous
+ * value under this key.
+ *
+ * inbuff is not modified. If non-NULL, outbuff may have been modified even
+ * if INSERTED is returned, in which case its contents are undefined.
+ */
+lh_result_t
+lh_upsert(linear_hash_t *lh, const void *inbuff, void *outbuff);
 
 void
 lh_fini(linear_hash_t *lh);

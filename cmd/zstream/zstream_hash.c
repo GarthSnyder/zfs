@@ -109,7 +109,7 @@
 	}
 
 /*
- * Determine the allocator for the given entry_iterator.
+ * Determines the bucket allocator for the given entry_iterator_t
  */
 #define	ALLOC_FOR(iter) ((iter)->ei_in_overflow ? \
 	    (iter)->ei_lh->lh_alloc.overflow : (iter)->ei_lh->lh_alloc.bucket)
@@ -118,6 +118,10 @@
  * Evaluates to a pointer to the iterator's current bucket_entry_t
  */
 #define	BUCKET_ENTRY(iter) (&(iter)->ei_bucket.b_entries[(iter)->ei_entry_ix])
+
+typealias enum {
+	FIND, FIND_OR_INSERT, UPSERT
+} lh_op_mode_t;
 
 linear_hash_t *
 lh_init(size_t record_size, size_t key_size, size_t max_memory,
@@ -138,9 +142,8 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 	size_t record_sizes[] = {
 		record_size, sizeof (bucket_t), sizeof (bucket_t)
 	};
-	allocator_t **allocators = allocator_group_init(record_sizes,
-	    (sizeof (record_sizes))/(sizeof (record_sizes[0])), max_memory,
-	    spill_dir);
+	allocator_t **allocators = allocator_group_init(record_sizes, 3,
+	    max_memory, spill_dir);
 	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
@@ -275,9 +278,8 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 }
 
 /*
- * Calculate the destination bucket for a given hash value. Keep in mind
- * that there are three separate regions where an insertion might land,
- * in this order:
+ * Calculate the destination bucket for a given hash value. There are
+ * three separate regions where an insertion might land, in this order:
  *
  *   Region 1: Long-mask buckets that used to be short-mask and were split
  *   Region 2: As-yet-unsplit short-mask buckets
@@ -409,12 +411,12 @@ split_bucket(linear_hash_t *lh)
 }
 
 /*
- * Store an inserted record. The iterator must already be teed up to an
- * empty slot. If we insert into a top-level bucket, check whether we need
- * to trigger a split.
+ * Insert a new record. The iterator must already be teed up to an empty
+ * slot. If we insert into a top-level bucket, check whether we need to
+ * trigger a split.
  */
 static inline void
-store_record(entry_iterator_t *iter, uint64_t hash, const void *buffer)
+insert_record(entry_iterator_t *iter, uint64_t hash, const void *buffer)
 {
 	linear_hash_t *lh = iter->ei_lh;
 	*BUCKET_ENTRY(iter) = (bucket_entry_t) {
@@ -430,55 +432,69 @@ store_record(entry_iterator_t *iter, uint64_t hash, const void *buffer)
 }
 
 /*
- * Inserting and retrieving are similar. In particular, both require saving
- * the key, calculating the hash, and checking for full-key matches in
- * existing records.
+ * This function implements all operations; they're very similar.
  */
-static boolean_t
-find_insert_impl(linear_hash_t *lh, uint8_t *buffer, boolean_t find)
+static lh_result_t
+findsert(linear_hash_t *lh, uint8_t *inbuff, uint8_t *outbuff,
+    lh_op_mode_t op)
 {
-	VERIFY(lh != NULL && buffer != NULL);
-
-	uint64_t key[4];
-	size_t key_size = lh->lh_key_size;
+	VERIFY(lh != NULL && inbuff != NULL && outbuff != NULL);
 
 	/* Back up the key, zero-pad to 32 bytes, and calculate hash */
-	memcpy(key, buffer, lh->lh_key_size);
+	uint64_t key[4] = {0};
+	size_t key_size = lh->lh_key_size;
+	memcpy((unit8_t *)key, inbuff, key_size);
 	memset((uint8_t *)key + key_size, 0, MAX_KEY_SIZE - key_size);
 	uint64_t hash = cityhash4(key[0], key[1], key[2], key[3]);
 
 	uint8_t scratch[lh->lh_record_size];
-	uint8_t *write_buffer = find ? buffer : scratch;
+	uint8_t *writebuff;
+	if (op == FIND)
+		writebuff = inbuff;
+	else
+		writebuff = (outbuff != NULL) outbuff : scratch;
 
 	bucket_entry_t *entry;
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
-	while ((entry = entry_iterator_next(&iter, !find))) {
+	while ((entry = entry_iterator_next(&iter, op != FIND))) {
 		if (entry->be_record == 0) {
-			if (find)
-				return (B_FALSE);
-			store_record(&iter, hash, buffer);
-			return (B_TRUE);
+			if (op == FIND)
+				return (NOT_FOUND);
+			insert_record(&iter, hash, inbuff);
+			return (INSERTED);
 		} else if (entry->be_hash == hash) {
 			allocator_retrieve(lh->lh_alloc.data, entry->be_record,
-			    write_buffer);
-			if (memcmp(write_buffer, key, key_size) == 0) {
-				return (find);
+			    writebuff);
+			if (memcmp(outbuff, key, key_size) == 0) {
+				if (op == UPSERT) {
+					allocator_store(lh->lh_alloc.data,
+					    entry->be_record, inbuff);
+					return (UPDATED);
+				}
+				return (FOUND);
 			}
 		}
 	}
-	return (B_FALSE);
+	VERIFY3B(op, ==, FIND);
+	return (NOT_FOUND);
 }
 
-boolean_t
-lh_insert(linear_hash_t *lh, const void *buffer)
+lh_result_t
+lh_find(linear_hash_t *lh, void *buff)
 {
-	return (find_insert_impl(lh, (uint8_t *)buffer, B_FALSE));
+	return (findsert(lh, buff, buff, FIND));
 }
 
-boolean_t
-lh_find(linear_hash_t *lh, void *buffer)
+lh_result_t
+lh_find_or_insert(linear_hash_t *lh, const void *inbuff, void *outbuff)
 {
-	return (find_insert_impl(lh, (uint8_t *)buffer, B_TRUE));
+	return (findsert(lh, inbuff, outbuff, FIND_OR_INSERT));
+}
+
+lh_result_t
+lh_upsert(linear_hash_t *lh, const void *inbuff, void *outbuff)
+{
+	return (findsert(lh, inbuff, outbuff, UPSERT));
 }
 
 void

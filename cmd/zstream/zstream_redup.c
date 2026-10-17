@@ -64,7 +64,7 @@ hash_insert(linear_hash_t *lh, struct drr_write *drrw, uint64_t stream_offset)
 		},
 		.rhe_stream_offset = stream_offset
 	};
-	if (!lh_insert(lh, &rhe))
+	if (lh_find_or_insert(lh, &rhe, NULL) == FOUND)
 		warnx("duplicate redup hash table entry, ignoring...");
 }
 
@@ -78,7 +78,7 @@ hash_lookup(linear_hash_t *lh, struct drr_write_byref *drrwb)
 			.rk_offset = drrwb->drr_refoffset
 		},
 	};
-	if (!lh_find(lh, &rhe))
+	if (lh_find(lh, &rhe) == NOT_FOUND)
 		errx(1, "could not find expected redup table entry");
 	return (rhe.rhe_stream_offset);
 }
