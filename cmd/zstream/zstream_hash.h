@@ -27,9 +27,9 @@ extern "C" {
 
 #define	MAX_KEY_SIZE 32
 
-#define	lh_find(lh, buff)	lh_findsert(lh, buff, buff, FIND)
-#define	lh_insert(lh, buff)	lh_findsert(lh, buff, NULL, INSERT)
-#define	lh_upsert(lh, buff)	lh_findsert(lh, buff, NULL, UPSERT)
+#define	lh_find(lh, buff)	lh_record(lh, FIND, buff, buff)
+#define	lh_insert(lh, buff)	lh_record(lh, FIND_OR_INSERT, buff, NULL)
+#define	lh_upsert(lh, buff)	lh_record(lh, UPSERT, buff, NULL)
 
 /*
  * This module implements a linear hash table [Litwin 1980]. It runs on top
@@ -49,12 +49,16 @@ extern "C" {
 
 typedef struct linear_hash linear_hash_t;
 
-typealias enum {
+typedef enum {
+	FIND, FIND_OR_INSERT, UPSERT
+} lh_op_t;
+
+typedef enum {
 	FOUND, NOT_FOUND, INSERTED, UPDATED
 } lh_result_t;
 
 /*
- * Creates a hash table.
+ * Create a hash table.
  *
  * All stored records are of the same record_size. Storage and retrieval
  * keys are prefixes of the records themselves (key_size is the prefix
@@ -67,60 +71,60 @@ typealias enum {
  * At least one of max_memory and spill_dir should have nonzero/non-NULL
  * values.
  *
- * If max_memory is zero, the hash table is disk-only. lh_init() may round
- * up the requested size to a more convenient value.
+ * lh_init() may round up max_memory to a more convenient value. If
+ * max_memory is zero, the hash table is disk-only.
  *
- * The spill_dir should be a place where memory can meaningfully spill over
- * to disk, which rules out /tmp on most systems because it's often
- * implemented as a ramdisk. If spill_dir is NULL, the hash table does not
- * use disk backup and may eventually run out of memory.
+ * If not NULL, the spill_dir should be a place where memory can
+ * meaningfully spill over to disk, which rules out /tmp on most systems
+ * because it's often implemented as a ramdisk. If spill_dir is NULL, the
+ * hash table does not use disk backup and may eventually run out of memory.
  */
 linear_hash_t *
 lh_init(size_t record_size, size_t key_size, size_t max_memory,
     const char *spill_dir);
 
 /*
- * lh_find() searches the table for the key passed in buff. buff should
- * point to a region large enough to accommodate a full record. However,
- * only the key fields need be filled out. If the key is found, lh_find()
- * places the full record in buff and returns FOUND. Otherwise, it returns
- * NOT_FOUND.
+ * There are three possible operations on records (FIND, FIND_OR_INSERT,
+ * and UPSERT), and lh_record() implements all of them. It's a single
+ * function because the implementations are essentially similar. You may
+ * find the #defines above to be a more straightforward API.
  *
- * buff may have been modified even if NOT_FOUND is returned, in which case
- * its contents are undefined.
+ * lh_record() accepts an opcode and pointers to two record buffers, inbuff
+ * and outbuff. All operations require the key fields of inbuff to be filled
+ * out. FIND_OR_INSERT and UPSERT expect a full record there. Any operation
+ * that returns an existing record will store it in outbuff.
+ *
+ * You can pass the same pointer as both inbuff and outbuff. This is fully
+ * supported. However, for operations other than FIND, it may entail an extra
+ * in-memory copy.
+ *
+ * If you don't care about the contents of the existing record (if there
+ * is one), you can pass NULL as the outbuff. The old record still has to
+ * be retrieved, so this isn't any more efficient than providing an output
+ * buffer. It just saves you from having to declare the buffer.
+ *
+ * Opcodes:
+ *
+ * FIND
+ *    Retrieves the matching record from the table, if one exists.
+ *    Returns either FOUND or NOT_FOUND.
+ *
+ * FIND_OR_INSERT
+ *    If the key matches an existing record, returns that record in
+ *    outbuff (if non-NULL). Otherwise, inserts inbuff. Returns either
+ *    FOUND or INSERTED.
+ *
+ * UPSERT
+ *    Saves the inbuff record in the table, overwriting any existing
+ *    record. Returns INSERTED or UPDATED. If the return value is UPDATED,
+ *    also saves a copy of the previous table record in outbuff.
  */
 lh_result_t
-lh_find(linear_hash_t *lh, void *buff);
+lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff, void *outbuff);
 
 /*
- * lh_find_or_insert() searches the table for the key found in inbuff. If
- * found, it copies the existing record to outbuff and returns FOUND. If the
- * key is not found, it inserts the contents of inbuff and returns INSERTED.
- *
- * You may pass NULL for the outbuff if you don't care about a previous
- * value stored under this key.
- *
- * inbuff is not modified. If non-NULL, outbuff may have been modified even
- * if INSERTED is returned, in which case its contents are undefined.
+ * Destroy the table and release all resources.
  */
-lh_result_t
-lh_find_or_insert(linear_hash_t *lh, const void *inbuff, void *outbuff);
-
-/*
- * lh_upsert() searches the table for the key found in inbuff. If found, it
- * copies the existing record to outbuff, replaces the existing table entry
- * with the full record from inbuff, and returns UPDATED. If the key is not
- * found, inserts the full contents of inbuff and returns INSERTED.
- *
- * You may pass NULL for the outbuff if you don't care about a previous
- * value under this key.
- *
- * inbuff is not modified. If non-NULL, outbuff may have been modified even
- * if INSERTED is returned, in which case its contents are undefined.
- */
-lh_result_t
-lh_upsert(linear_hash_t *lh, const void *inbuff, void *outbuff);
-
 void
 lh_fini(linear_hash_t *lh);
 
