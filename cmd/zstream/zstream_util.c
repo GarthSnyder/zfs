@@ -330,8 +330,7 @@ bail:	if (buff != static_buff)
  * B_TRUE but no compression is specified.
  *
  * Stops at the first unparseable specifier and returns the number of
- * specifiers successfully parsed. Checks a few return codes that should
- * never fail and exits with a message if they do.
+ * specifiers successfully parsed.
  */
 int
 parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
@@ -344,9 +343,9 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		record_compression_t comp;
 		if (parse_record_specifier(argv[i], &comp, accept_compression))
 			break;
-		if (!lh_insert(record_specifiers, &comp))
-			errx(1, "duplicate record specifier %llu,%llu",
-			    (u_longlong_t)comp.rc_key.rs_object,
+		if (lh_find_or_insert(record_specifiers, &comp, NULL) == FOUND)
+			warnx("duplicate record specifier %llu,%llu, "
+			    "ignoring...", (u_longlong_t)comp.rc_key.rs_object,
 			    (u_longlong_t)comp.rc_key.rs_offset);
 		num_parsed++;
 	}
@@ -360,15 +359,15 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 
 /*
  * Retrieves a raw zio_compress value rather than a compression_spec_t
- * because no clients are interested in compression levels. Returns B_TRUE
- * if a matching record was found.
+ * because no clients are interested in compression levels. Sets the ctype
+ * and returns B_TRUE if a matching record was found.
  */
 boolean_t
 lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype)
 {
 	record_compression_t comp = { .rc_key = { object, offset } };
-	if (!lh_find(record_specifiers, &comp))
+	if (lh_find(record_specifiers, &comp) == NOT_FOUND)
 		return (B_FALSE);
 	*ctype = comp.rc_compression.cs_type;
 	return (B_TRUE);

@@ -98,7 +98,7 @@ struct linear_hash {
 	size_t		lh_record_size;		  /* Param */
 	size_t		lh_key_size;		  /* Record prefix <= 32 */
 	lh_allocators_t	lh_alloc;
-	uint8_t		lh_hash_suffix_length;	  /* The short mask length */
+	unsigned int	lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
 	lh_stats_t	lh_stats;		  /* Occupancy */
 	lh_freestack_t	lh_freestack;		  /* Available overflow bkts */
