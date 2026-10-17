@@ -343,7 +343,7 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		record_compression_t comp;
 		if (parse_record_specifier(argv[i], &comp, accept_compression))
 			break;
-		if (lh_find_or_insert(record_specifiers, &comp, NULL) == FOUND)
+		if (lh_insert(record_specifiers, &comp) == FOUND)
 			warnx("duplicate record specifier %llu,%llu, "
 			    "ignoring...", (u_longlong_t)comp.rc_key.rs_object,
 			    (u_longlong_t)comp.rc_key.rs_offset);
