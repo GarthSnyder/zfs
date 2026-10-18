@@ -81,10 +81,12 @@ safe_realloc(void *buff, size_t new_size);
 /*
  * In addition to quitting on error, safe_pwrite() and safe_pread_zero()
  * handle partial reads and writes correctly and do not return until the
- * full buffer has been transferred.
+ * full buffer has been transferred. If where is not NULL, safe_pwrite()
+ * names it in the message when a write fails for lack of space or quota.
  */
 void
-safe_pwrite(int fd, const void *buf, size_t count, off_t offset, char *where);
+safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
+    const char *where);
 
 /*
  * Like a safe version of pread(), except that reading past end-of-file is
@@ -152,6 +154,16 @@ release_libzfs(void);
  */
 int
 parse_compression_specifier(const char *str, compression_spec_t *spec);
+
+/*
+ * Converts a size such as "512M", "4G", or "1.5T" to a byte count, using
+ * the same notation that zfs(8) accepts for numeric properties. Returns 0
+ * for successful parsing, nonzero if parsing failed or if the value does
+ * not fit in a size_t. In the case of failure, *size remains unmodified.
+ * Does not require libzfs to be initialized.
+ */
+int
+parse_size_specifier(const char *str, size_t *size);
 
 /*
  * Reads as many OBJECT,OFFSET[,COMPRESSION] record specifiers from the

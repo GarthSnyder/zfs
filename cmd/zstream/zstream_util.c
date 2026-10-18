@@ -264,6 +264,24 @@ parse_compression_specifier(const char *str, compression_spec_t *spec)
 }
 
 /*
+ * Parse "nice" sizes such as "100M"
+ */
+int
+parse_size_specifier(const char *str, size_t *size)
+{
+	uint64_t val;
+
+	/*
+	 * zfs_nicestrtonum() only uses its libzfs handle to record error
+	 * details, and it accepts NULL in that position.
+	 */
+	if (zfs_nicestrtonum(NULL, str, &val) != 0 || (size_t)val != val)
+		return (-1);
+	*size = (size_t)val;
+	return (0);
+}
+
+/*
  * Parse a string of the form "OBJECT,OFFSET" or "OBJECT,OFFSET,COMPRESSION"
  * (with accept_compression == B_TRUE) and fill out a corresponding
  * record_compression_t. Returns 0 if the string was successfully parsed.
