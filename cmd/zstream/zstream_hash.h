@@ -27,9 +27,9 @@ extern "C" {
 
 #define	MAX_KEY_SIZE 32
 
-#define	lh_find(lh, buff)	lh_record(lh, FIND, buff, buff)
-#define	lh_insert(lh, buff)	lh_record(lh, FIND_OR_INSERT, buff, NULL)
-#define	lh_upsert(lh, buff)	lh_record(lh, UPSERT, buff, NULL)
+#define	lh_find(lh, buff)	lh_record(lh, LH_FIND, (buff), (buff))
+#define	lh_insert(lh, buff)	lh_record(lh, LH_FIND_OR_INSERT, (buff), NULL)
+#define	lh_upsert(lh, buff)	lh_record(lh, LH_UPSERT, (buff), NULL)
 
 /*
  * This module implements a linear hash table [Litwin 1980]. It runs on top
@@ -50,11 +50,11 @@ extern "C" {
 typedef struct linear_hash linear_hash_t;
 
 typedef enum {
-	FIND, FIND_OR_INSERT, UPSERT
+	LH_FIND, LH_FIND_OR_INSERT, LH_UPSERT
 } lh_op_t;
 
 typedef enum {
-	FOUND, NOT_FOUND, INSERTED, UPDATED
+	LH_NOT_FOUND, LH_FOUND, LH_INSERTED, LH_UPDATED
 } lh_result_t;
 
 /*
@@ -84,40 +84,42 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
     const char *spill_dir);
 
 /*
- * There are three possible operations on records (FIND, FIND_OR_INSERT,
- * and UPSERT), and lh_record() implements all of them. It's a single
+ * There are three possible operations on records (LH_FIND, LH_FIND_OR_INSERT,
+ * and LH_UPSERT), and lh_record() implements all of them. It's a single
  * function because the implementations are essentially similar. You may
  * find the #defines above to be a more straightforward API.
  *
  * lh_record() accepts an opcode and pointers to two record buffers, inbuff
  * and outbuff. All operations require the key fields of inbuff to be filled
- * out. FIND_OR_INSERT and UPSERT expect a full record there. Any operation
- * that returns an existing record will store it in outbuff.
+ * out. LH_FIND_OR_INSERT and LH_UPSERT expect a full record there. Any
+ * operation that returns an existing record will store it in outbuff.
  *
  * You can pass the same pointer as both inbuff and outbuff. This is fully
- * supported. However, for operations other than FIND, it may entail an extra
- * in-memory copy.
+ * supported. However, for operations other than LH_FIND, it may entail an
+ * extra in-memory copy.
  *
  * If you don't care about the contents of the existing record (if there
  * is one), you can pass NULL as the outbuff. The old record still has to
  * be retrieved, so this isn't any more efficient than providing an output
  * buffer. It just saves you from having to declare the buffer.
  *
+ * Whenever you supply an outbuff pointer, that buffer may be used as a scratch area
+ *
  * Opcodes:
  *
- * FIND
+ * LH_FIND
  *    Retrieves the matching record from the table, if one exists.
- *    Returns either FOUND or NOT_FOUND.
+ *    Returns either LH_FOUND or LH_NOT_FOUND.
  *
- * FIND_OR_INSERT
+ * LH_FIND_OR_INSERT
  *    If the key matches an existing record, returns that record in
  *    outbuff (if non-NULL). Otherwise, inserts inbuff. Returns either
- *    FOUND or INSERTED.
+ *    LH_FOUND or LH_INSERTED.
  *
- * UPSERT
+ * LH_UPSERT
  *    Saves the inbuff record in the table, overwriting any existing
- *    record. Returns INSERTED or UPDATED. If the return value is UPDATED,
- *    also saves a copy of the previous table record in outbuff.
+ *    record. Returns LH_INSERTED or LH_UPDATED. If the return value is
+ *    LH_UPDATED, also saves a copy of the previous table record in outbuff.
  */
 lh_result_t
 lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff, void *outbuff);
