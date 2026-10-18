@@ -122,8 +122,8 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		.ag_allocators =
 		    safe_malloc(num_allocators * sizeof (allocator_t *))
 	};
-	if (dir_path != NULL)
-		(void) !asprintf(&group->ag_dir, "%s", dir_path);
+	if (dir_path != NULL && (group->ag_dir = strdup(dir_path)) == NULL)
+		err(1, "unable to copy dir_path");
 
 	for (int i = 0; i < num_allocators; i++) {
 		void *base = NULL;
