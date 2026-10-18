@@ -329,14 +329,17 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	    needed, PROT_READ | PROT_WRITE) != 0) {
 		if (errno == ENOMEM) {
 			/*
-			 * There are some oddball situations that might
+			 * Some oddball situations might
 			 * result in memory allocation failing despite the
-			 * budget being carefully chosen. Try to salvage the
-			 * operation by clamping the memory budget to the
-			 * empirically-observed limit. This forces spilling.
+			 * budget being carefully chosen. This is
+			 * essentially the same situation as being unable to
+			 * free sufficient memory. It's likely that other
+			 * allocators will also fail at this point, but the
+			 * small expected N makes it unnecessary to address
+			 * the issue at the allocator group level.
 			 */
 			warn("memory allocation failed, clamping budget...");
-			group->ag_mem_limit = group->ag_mem_current;
+			alloc->a_first_on_disk = alloc->a_writable_frontier;
 			return (B_FALSE);
 		} else {
 			err(1, "mprotect failed");
