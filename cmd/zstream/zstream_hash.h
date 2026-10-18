@@ -44,7 +44,7 @@ extern "C" {
  * to keep there. As more disk storage is used, the performance of the hash
  * table declines smoothly with the number of entries.
  *
- * Only one thread should make simultaneous calls into the same hash table.
+ * A linear_hash_t must not be used by more than one thread at a time.
  */
 
 typedef struct linear_hash linear_hash_t;
