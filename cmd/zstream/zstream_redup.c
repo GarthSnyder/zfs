@@ -174,6 +174,21 @@ serial_redup_writes(redup_context_t *context)
 	return (step);
 }
 
+/*
+ * The default memory budget for the reduplication table
+ */
+static size_t
+default_hash_memory(void)
+{
+#ifdef _ILP32
+	return ((size_t)SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20);
+#else
+	uint64_t physbytes = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
+	return (MAX((physbytes * HASH_PHYSMEM_PERCENT) / 100,
+	    SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20));
+#endif
+}
+
 int
 zstream_do_redup(int argc, char *argv[])
 {
@@ -181,14 +196,19 @@ zstream_do_redup(int argc, char *argv[])
 	chain_attrs_t attrs = {0};
 	redup_context_t context = {0};
 	const char *temp_dir = "/var/tmp";
+	size_t hash_memory = default_hash_memory();
 
-	while ((c = getopt(argc, argv, "vd:")) != -1) {
+	while ((c = getopt(argc, argv, "vd:m:")) != -1) {
 		switch (c) {
 		case 'v':
 			ENABLE_OPTION(&attrs, CA_VERBOSE);
 			break;
 		case 'd':
 			temp_dir = optarg;
+			break;
+		case 'm':
+			if (parse_size_specifier(optarg, &hash_memory) != 0)
+				errx(1, "invalid memory size '%s'", optarg);
 			break;
 		case '?':
 			warnx("invalid option '%c'", optopt);
@@ -206,14 +226,6 @@ zstream_do_redup(int argc, char *argv[])
 	if (context.rc_fp == NULL) {
 		err(1, "unable to open %s", argv[0]);
 	}
-
-#ifdef _ILP32
-	uint64_t hash_memory = SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20;
-#else
-	uint64_t physbytes = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
-	uint64_t hash_memory = MAX((physbytes * HASH_PHYSMEM_PERCENT) / 100,
-	    SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20);
-#endif
 
 	context.rc_hash = lh_init(sizeof (redup_hash_entry_t),
 	    sizeof (redup_key_t), hash_memory, temp_dir);
