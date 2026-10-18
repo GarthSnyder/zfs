@@ -27,9 +27,10 @@ extern "C" {
 
 #define	MAX_KEY_SIZE 32
 
-#define	lh_find(lh, buff)	lh_record(lh, LH_FIND, (buff), (buff))
-#define	lh_insert(lh, buff)	lh_record(lh, LH_FIND_OR_INSERT, (buff), NULL)
-#define	lh_upsert(lh, buff)	lh_record(lh, LH_UPSERT, (buff), NULL)
+#define	lh_find(lh, buff)	lh_record((lh), LH_FIND, (buff))
+#define	lh_insert(lh, buff)	lh_record((lh), LH_INSERT, (buff))
+#define lh_update(lh, buff)	lh_record((lh), LH_UPDATE, (buff))
+#define	lh_upsert(lh, buff)	lh_record((lh), LH_UPSERT, (buff))
 
 /*
  * This module implements a linear hash table [Litwin 1980]. It runs on top
@@ -50,7 +51,7 @@ extern "C" {
 typedef struct linear_hash linear_hash_t;
 
 typedef enum {
-	LH_FIND, LH_FIND_OR_INSERT, LH_UPSERT
+	LH_FIND, LH_INSERT, LH_UPDATE, LH_UPSERT, LH_NUM_OPS
 } lh_op_t;
 
 typedef enum {
@@ -84,26 +85,19 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
     const char *spill_dir);
 
 /*
- * There are three possible operations on records (LH_FIND, LH_FIND_OR_INSERT,
- * and LH_UPSERT), and lh_record() implements all of them. It's a single
- * function because the implementations are essentially similar. You may
- * find the #defines above to be a more straightforward API.
+ * There are four possible operations on records (LH_FIND, LH_INSERT,
+ * LH_UPDATE, and LH_UPSERT), and lh_record() implements all of them. It's
+ * a single function because the implementations are essentially similar.
+ * You may find the #defines above to be a nicer API.
  *
- * lh_record() accepts an opcode and pointers to two record buffers, inbuff
- * and outbuff. All operations require the key fields of inbuff to be filled
- * out. LH_FIND_OR_INSERT and LH_UPSERT expect a full record there. Any
- * operation that returns an existing record will store it in outbuff.
+ * lh_record() accepts an opcode and a pointer to a record buffer. All
+ * operations require the key fields of the buffer to be filled out, and
+ * operations other than LH_FIND expect a full record there. The buffer
+ * is both input and output.
  *
- * You can pass the same pointer as both inbuff and outbuff. This is fully
- * supported. However, for operations other than LH_FIND, it may entail an
- * extra in-memory copy.
- *
- * If you don't care about the contents of the existing record (if there
- * is one), you can pass NULL as the outbuff. The old record still has to
- * be retrieved, so this isn't any more efficient than providing an output
- * buffer. It just saves you from having to declare the buffer.
- *
- * Whenever you supply an outbuff pointer, that buffer may be used as a scratch area
+ * When the result code is LH_FOUND or LH_UPDATED, the buffer's contents
+ * have been replaced with an existing record from the table. In other
+ * cases, the buffer is undisturbed on return.
  *
  * Opcodes:
  *
@@ -111,18 +105,23 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
  *    Retrieves the matching record from the table, if one exists.
  *    Returns either LH_FOUND or LH_NOT_FOUND.
  *
- * LH_FIND_OR_INSERT
- *    If the key matches an existing record, returns that record in
- *    outbuff (if non-NULL). Otherwise, inserts inbuff. Returns either
- *    LH_FOUND or LH_INSERTED.
+ * LH_INSERT
+ *    If the key matches an existing record, returns that record. Otherwise
+ *    inserts the contents of the buffer. Returns either LH_FOUND or
+ *    LH_INSERTED.
+ *
+ * LH_UPDATE
+ *    If the key matches an existing record, replaces that record's contents
+ *    with the contents of the buffer and puts a copy of the old record in
+ *    the buffer. Returns either LH_NOT_FOUND or LH_UPDATED.
  *
  * LH_UPSERT
  *    Saves the inbuff record in the table, overwriting any existing
  *    record. Returns LH_INSERTED or LH_UPDATED. If the return value is
- *    LH_UPDATED, also saves a copy of the previous table record in outbuff.
+ *    LH_UPDATED, puts a copy of the previous record in the buffer.
  */
 lh_result_t
-lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff, void *outbuff);
+lh_record(linear_hash_t *lh, lh_op_t op, void *buff);
 
 /*
  * Destroy the table and release all resources.
