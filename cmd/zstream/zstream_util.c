@@ -81,7 +81,8 @@ safe_realloc(void *buff, size_t new_size)
 }
 
 void
-safe_pwrite(int fd, const void *buf, size_t count, off_t offset, char *where)
+safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
+    const char *where)
 {
 	size_t done = 0;
 
@@ -91,7 +92,8 @@ safe_pwrite(int fd, const void *buf, size_t count, off_t offset, char *where)
 		if (n < 0) {
 			if (errno == EINTR)
 				continue; /* zero progress this call, retry */
-			else if (errno == ENOSPC && where != NULL)
+			else if ((errno == ENOSPC || errno == EDQUOT) &&
+			    where != NULL)
 				errx(1, "write failed, out of space in %s"
 				    ", aborting...", where);
 			err(1, "pwrite() failed");
@@ -343,7 +345,7 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		record_compression_t comp;
 		if (parse_record_specifier(argv[i], &comp, accept_compression))
 			break;
-		if (lh_upsert(record_specifiers, &comp) == LH_FOUND)
+		if (lh_upsert(record_specifiers, &comp) == LH_UPDATED)
 			warnx("duplicate record specifier %llu,%llu, "
 			    "overwriting...",
 			    (u_longlong_t)comp.rc_key.rs_object,
