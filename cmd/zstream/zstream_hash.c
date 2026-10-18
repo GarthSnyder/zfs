@@ -407,17 +407,17 @@ split_bucket(linear_hash_t *lh)
 }
 
 /*
- * Insert a new record. The iterator must already be teed up to an empty
- * slot. If we insert into a top-level bucket, check whether we need to
- * trigger a split.
+ * Helper for lh_record() that inserts a new record. The iterator must
+ * already be teed up to an empty slot. If we insert into a top-level
+ * bucket, check whether we need to trigger a split.
  */
 static inline void
-insert_record(entry_iterator_t *iter, uint64_t hash, const void *buffer)
+insert_record(entry_iterator_t *iter, uint64_t hash, const uint8_t *buff)
 {
 	linear_hash_t *lh = iter->ei_lh;
 	*BUCKET_ENTRY(iter) = (bucket_entry_t) {
 		.be_hash = hash,
-		.be_record = allocator_append(lh->lh_alloc.data, buffer)
+		.be_record = allocator_append(lh->lh_alloc.data, buff)
 	};
 	save_bucket(iter, B_TRUE);
 	if (!iter->ei_in_overflow) {
@@ -428,53 +428,42 @@ insert_record(entry_iterator_t *iter, uint64_t hash, const void *buffer)
 }
 
 /*
- * All record-level operations: LH_FIND, LH_FIND_OR_INSERT, and LH_UPSERT
+ * All record-level operations: LH_FIND, LH_INSERT, LH_UPDATE, and LH_UPSERT
  */
 lh_result_t
-lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff_in, void *outbuff_in)
+lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 {
-	uint8_t *inbuff = inbuff_in;
-	uint8_t *outbuff = outbuff_in;
-	VERIFY(lh != NULL && inbuff != NULL);
+	VERIFY(lh != NULL && buff_in != NULL && op < LH_NUM_OPS);
 
 	/* Zero-pad the key to 32 bytes and calculate hash */
-	uint64_t key[4];
+	uint8_t *buff = buff_in;
+	uint64_t key[4] = {0};
+	uint8_t scratch[lh->lh_record_size];
 	size_t key_size = lh->lh_key_size;
-	memcpy((uint8_t *)key, inbuff, key_size);
-	memset((uint8_t *)key + key_size, 0, MAX_KEY_SIZE - key_size);
+	memcpy((uint8_t *)key, buff, key_size);
 	uint64_t hash = cityhash4(key[0], key[1], key[2], key[3]);
 
-	/* Set up scratch buffers and buffer wrangling */
-	uint8_t scratch[lh->lh_record_size];
-	uint8_t inbuff_copy[lh->lh_record_size];
-	uint8_t *readbuff = inbuff;
-	uint8_t *writebuff = (outbuff != NULL) ? outbuff : scratch;
-	boolean_t inbuff_needs_copied = readbuff == writebuff && op != LH_FIND;
-	boolean_t inbuff_copied = B_FALSE;
+	boolean_t insert = op == LH_INSERT || op == LH_UPSERT;
+	boolean_t update = op == LH_UPDATE || op == LH_UPSERT;
 
 	bucket_entry_t *entry;
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
-	while ((entry = entry_iterator_next(&iter, op != LH_FIND))) {
+	while ((entry = entry_iterator_next(&iter, insert))) {
 		if (entry->be_record == 0) {
-			if (op == LH_FIND)
+			if (!insert)
 				return (LH_NOT_FOUND);
-			insert_record(&iter, hash, readbuff);
+			insert_record(&iter, hash, buff);
 			return (LH_INSERTED);
 		} else if (entry->be_hash == hash) {
-			if (inbuff_needs_copied && !inbuff_copied) {
-				memcpy(inbuff_copy, inbuff, lh->lh_record_size);
-				inbuff_copied = B_TRUE;
-				readbuff = inbuff_copy;
-			}
 			allocator_retrieve(lh->lh_alloc.data, entry->be_record,
-			    writebuff);
-			if (memcmp(writebuff, key, key_size) == 0) {
-				if (op == LH_UPSERT) {
+			    scratch);
+			if (memcmp(scratch, key, key_size) == 0) {
+				if (update) {
 					allocator_store(lh->lh_alloc.data,
-					    entry->be_record, readbuff);
-					return (LH_UPDATED);
+					    entry->be_record, buff);
 				}
-				return (LH_FOUND);
+				memcpy(buff, scratch, lh->lh_record_size);
+				return (update ? LH_UPDATED : LH_FOUND);
 			}
 		}
 	}
