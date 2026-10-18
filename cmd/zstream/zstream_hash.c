@@ -428,7 +428,7 @@ insert_record(entry_iterator_t *iter, uint64_t hash, const void *buffer)
 }
 
 /*
- * All record-level operations: FIND, FIND_OR_INSERT, and UPSERT
+ * All record-level operations: LH_FIND, LH_FIND_OR_INSERT, and LH_UPSERT
  */
 lh_result_t
 lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff_in, void *outbuff_in)
@@ -449,17 +449,17 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff_in, void *outbuff_in)
 	uint8_t inbuff_copy[lh->lh_record_size];
 	uint8_t *readbuff = inbuff;
 	uint8_t *writebuff = (outbuff != NULL) ? outbuff : scratch;
-	boolean_t inbuff_needs_copied = readbuff == writebuff && op != FIND;
+	boolean_t inbuff_needs_copied = readbuff == writebuff && op != LH_FIND;
 	boolean_t inbuff_copied = B_FALSE;
 
 	bucket_entry_t *entry;
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
-	while ((entry = entry_iterator_next(&iter, op != FIND))) {
+	while ((entry = entry_iterator_next(&iter, op != LH_FIND))) {
 		if (entry->be_record == 0) {
-			if (op == FIND)
-				return (NOT_FOUND);
+			if (op == LH_FIND)
+				return (LH_NOT_FOUND);
 			insert_record(&iter, hash, readbuff);
-			return (INSERTED);
+			return (LH_INSERTED);
 		} else if (entry->be_hash == hash) {
 			if (inbuff_needs_copied && !inbuff_copied) {
 				memcpy(inbuff_copy, inbuff, lh->lh_record_size);
@@ -469,17 +469,17 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *inbuff_in, void *outbuff_in)
 			allocator_retrieve(lh->lh_alloc.data, entry->be_record,
 			    writebuff);
 			if (memcmp(writebuff, key, key_size) == 0) {
-				if (op == UPSERT) {
+				if (op == LH_UPSERT) {
 					allocator_store(lh->lh_alloc.data,
 					    entry->be_record, readbuff);
-					return (UPDATED);
+					return (LH_UPDATED);
 				}
-				return (FOUND);
+				return (LH_FOUND);
 			}
 		}
 	}
-	VERIFY3B(op, ==, FIND);
-	return (NOT_FOUND);
+	VERIFY(op == LH_FIND);
+	return (LH_NOT_FOUND);
 }
 
 void

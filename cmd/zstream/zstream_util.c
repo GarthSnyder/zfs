@@ -343,7 +343,7 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 		record_compression_t comp;
 		if (parse_record_specifier(argv[i], &comp, accept_compression))
 			break;
-		if (lh_insert(record_specifiers, &comp) == FOUND)
+		if (lh_upsert(record_specifiers, &comp) == LH_FOUND)
 			warnx("duplicate record specifier %llu,%llu, "
 			    "ignoring...", (u_longlong_t)comp.rc_key.rs_object,
 			    (u_longlong_t)comp.rc_key.rs_offset);
@@ -367,7 +367,7 @@ lookup_record_specifier(uint64_t object, uint64_t offset,
     enum zio_compress *ctype)
 {
 	record_compression_t comp = { .rc_key = { object, offset } };
-	if (lh_find(record_specifiers, &comp) == NOT_FOUND)
+	if (lh_find(record_specifiers, &comp) == LH_NOT_FOUND)
 		return (B_FALSE);
 	*ctype = comp.rc_compression.cs_type;
 	return (B_TRUE);
