@@ -66,9 +66,11 @@ static boolean_t
 try_make_readwrite(allocator_t *alloc, off_t end_offset);
 
 /*
- * Each page cluster holds a_records_per_cluster records, stored back to back
- * with no gaps. The cluster size isn't necessarily divisible by
+ * Each page cluster holds a_records_per_cluster records, stored back to
+ * back with no gaps. The cluster size isn't necessarily divisible by
  * a_record_size, so the trailing bytes of a cluster may be waste space.
+ * Since records are at most MAX_RECORD_SIZE bytes, the waste is always less
+ * than 1% of the cluster.
  */
 static inline off_t
 record_offset(allocator_t *alloc, record_ix_t rec)
@@ -81,27 +83,6 @@ record_offset(allocator_t *alloc, record_ix_t rec)
 	return (cluster_offset + record_offset);
 }
 
-/*
- * Every group uses the same cluster size: PAGE_CLUSTER_SIZE, or one page if
- * pages are larger than that. Records never straddle cluster boundaries, so
- * the tail of each cluster is wasted when the record size does not divide
- * the cluster size evenly. Since records are at most MAX_RECORD_SIZE bytes,
- * the waste is always less than 1% of the cluster.
- */
-static size_t
-group_cluster_size(const size_t *record_sizes, unsigned n)
-{
-	long pagesize = sysconf(_SC_PAGESIZE);
-	VERIFY3S(pagesize, >, 0);
-	for (int i = 0; i < n; i++) {
-		VERIFY3U(record_sizes[i], >, 0);
-		if (record_sizes[i] > MAX_RECORD_SIZE)
-			errx(1, "requested allocator_t record size too large "
-			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
-	}
-	return (MAX(PAGE_CLUSTER_SIZE, (size_t)pagesize));
-}
-
 allocator_t **
 allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
     size_t mem_limit, const char *dir_path)
@@ -110,20 +91,26 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		errx(1, "allocator group needs either disk or memory backing");
 	if (num_allocators == 0)
 		errx(1, "invalid number of allocators: %u", num_allocators);
+	for (int i = 0; i < n; i++) {
+		if (record_sizes[i] == 0 || record_sizes[i] > MAX_RECORD_SIZE)
+			errx(1, "requested allocator_t record size is invalid "
+			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
+	}
 
-	size_t cluster_size = group_cluster_size(record_sizes, num_allocators);
+	if ((long pagesize = sysconf(_SC_PAGESIZE)) < 0)
+		err(1, "unable to get system page size");
+	size_t cluster_size = MAX(PAGE_CLUSTER_SIZE, (size_t)pagesize);
 
 	allocator_group_t *group = safe_malloc(sizeof (allocator_group_t));
 	*group = (allocator_group_t) {
 		.ag_mem_limit = ROUND_UP(mem_limit, cluster_size),
 		.ag_mem_current = 0,
 		.ag_cluster_size = cluster_size,
+		.ag_dir = (dir_path != NULL) ? strdup(dir_path) : NULL,
 		.ag_num_allocators = num_allocators,
 		.ag_allocators =
 		    safe_malloc(num_allocators * sizeof (allocator_t *))
 	};
-	if (dir_path != NULL && (group->ag_dir = strdup(dir_path)) == NULL)
-		err(1, "unable to copy dir_path");
 
 	for (int i = 0; i < num_allocators; i++) {
 		void *base = NULL;
