@@ -82,6 +82,17 @@ selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
     const char *expect);
 
 /*
+ * The converse of selftest_expect_exit(): fn(arg) runs in a forked child
+ * that must return normally (exit status 0) and, if expect is non-NULL,
+ * print a matching message. This is for tests that change process-wide
+ * state, such as resource limits, that the rest of the run must not
+ * inherit. The same restrictions on threads apply.
+ */
+void
+selftest_expect_success(const char *what, selftest_child_f *fn, void *arg,
+    const char *expect);
+
+/*
  * The seed for this run, set by the harness before any test runs. Printed
  * at startup and settable with -s so failures can be replayed.
  */
