@@ -54,7 +54,7 @@ extern "C" {
  * (modulo rounding; see below).
  */
 
-#define	MAX_RECORD_SIZE			(8 << 10)	/* 8KB */
+#define	MAX_RECORD_SIZE		(8 << 10)	/* 8KB */
 
 typedef uint64_t record_ix_t;
 
@@ -78,9 +78,9 @@ typedef struct {
  * allocator_group_init()[0] is the first allocator asked to yield memory.
  * When it has no more memory to surrender, memory will be drawn from
  * allocator_group_init()[1], and so on. The ultimate end state under high
- * load is that the last allocator will hold all the group's memory, with
- * other allocators having functionally become disk-only. If this is not the
- * behavior you want, create more than one group.
+ * load is that the last allocator holds all the group's memory, with other
+ * allocators having functionally become disk-only. If this is not the
+ * behavior you want, create multiple groups.
  *
  * - Memory is managed in page clusters of 1MB (or one page, on systems with
  *   larger pages), so 8MB is a good working minimum for mem_limit.
@@ -110,7 +110,8 @@ record_ix_t
 allocator_append(allocator_t *alloc, const void *data);
 
 /*
- * Skip ahead one record. Returns the index that was skipped.
+ * Skip ahead one record. Returns the index that was skipped. It's guaranteed
+ * that this record has never been written, so it reads as zeros.
  */
 record_ix_t
 allocator_skip(allocator_t *alloc);
@@ -119,7 +120,8 @@ allocator_stats_t
 allocator_get_stats(allocator_t *alloc);
 
 /*
- * Destroy an allocator group. You can name any allocator in the group.
+ * Destroy an allocator group and all of the allocators it contains. You
+ * can name any allocator in the group.
  */
 void
 allocator_group_fini(allocator_t *alloc);

@@ -358,8 +358,14 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 {
 	int num_parsed = 0;
 	ASSERT(record_specifiers == NULL);
+	/*
+	 * Each of the table's three allocators needs at least a cluster, even
+	 * for a few specifiers, so start from the 8MB minimum recommended in
+	 * zstream_alloc.h. Then allow 128 bytes per specifier, about 2.5 times
+	 * the measured cost of an entry.
+	 */
 	record_specifiers = lh_init(sizeof (record_compression_t),
-	    sizeof (record_specifier_t), 256 << 20, NULL);
+	    sizeof (record_specifier_t), (8 << 20) + (size_t)argc * 128, NULL);
 	for (int i = 0; i < argc; i++) {
 		record_compression_t comp;
 		if (parse_record_specifier(argv[i], &comp, accept_compression))
@@ -492,7 +498,7 @@ nicenums(int count, ...)
 		zfs_nicenum(num, buff.nice[i], NICENUM_BUFF_SIZE);
 	}
 	va_end(ap);
-	return buff;
+	return (buff);
 }
 
 int
@@ -505,7 +511,7 @@ safe_create_temp_file(const char *dir_path)
 		errx(1, "filename too long in %s", __func__);
 	int fd = mkstemp(buff);
 	if (fd < 0)
-		err(1, "%s", buff);
+		err(1, "unable to create temp file in %s", dir_path);
 	if (unlink(buff) < 0)
 		err(1, "unlink of %s failed", buff);
 	return (fd);
