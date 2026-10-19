@@ -35,10 +35,8 @@ extern "C" {
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
 
-/*
- * Round up to an arbitrary (not necessarily power-of-2) multiple
- */
-#define	ROUND_UP(size, align) ((((size) + (align) - 1) / (align)) * (align))
+#define	NICENUM_BUFF_SIZE	32
+#define	MAX_NICENUMS		10
 
 /*
  * As with the libzfs-native ZIO_* encodings, only zstd compression has a
@@ -59,6 +57,10 @@ typedef struct {
 	record_specifier_t	rc_key;
 	compression_spec_t	rc_compression;
 } record_compression_t;
+
+typedef struct {
+	char			nice[MAX_NICENUMS][NICENUM_BUFF_SIZE];
+} nicebuff_t;
 
 typedef void *
 thread_f(void *);
@@ -203,6 +205,15 @@ decompress_buffer(uint8_t *inbuff, size_t inbuff_size, size_t logical_size,
 uint8_t *
 compress_buffer(uint8_t *inbuff, size_t inbuff_size,
     compression_spec_t compress_type, size_t *compressed_size);
+
+/*
+ * Mass-convert uint64_t's to their zfs_nicenum equivalents.
+ *
+ *   "Nice, nice, very nice / So many different people / In the same device"
+ *     -- Kurt Vonnegut, Cat's Cradle
+ */
+nicebuff_t
+nicenums(int count, ...);
 
 /*
  * Create a temporary file in the named directory, returning an open file
