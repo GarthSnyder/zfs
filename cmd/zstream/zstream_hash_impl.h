@@ -87,8 +87,8 @@ typedef struct {
 } lh_occupancy_t;
 
 /*
- * On average, bucket splits relocate half the chain's entries, potentially
- * freeing up one or more overflow buckets for reuse.
+ * Overflow free list. On average, bucket splits relocate half the chain's
+ * entries, potentially freeing up one or more overflow buckets for reuse.
  */
 typedef struct {
 	uint64_t	size;
@@ -97,19 +97,19 @@ typedef struct {
 } lh_freestack_t;
 
 /*
- * Reduces a key, zero-padded to MAX_KEY_SIZE bytes, to the 64-bit hash
- * that selects its bucket. lh_init() installs CityHash. Selftests replace
- * it to control hash values, which is safe only before the first record
+ * Reduce a 32-byte key (zero-padded if necessary) to a 64-bit hash value.
+ * lh_init() uses CityHash by default. Selftests replace the hash function
+ * to control hash values, which is safe only before the first record
  * operation on the table.
  */
-typedef uint64_t lh_hash_func_f(const uint64_t
-    key[MAX_KEY_SIZE / sizeof (uint64_t)]);
+typedef uint64_t lh_hash_func_f(const uint64_t key[MAX_KEY_SIZE /
+    sizeof (uint64_t)]);
 
 struct linear_hash {
 	size_t		lh_record_size;		  /* Param */
 	size_t		lh_key_size;		  /* Record prefix <= 32 */
 	lh_hash_func_f	*lh_hash_func;		  /* Key -> 64-bit hash */
-	lh_allocators_t	lh_alloc;
+	lh_allocators_t	lh_alloc;		  /* Three allocators */
 	unsigned int	lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
 	lh_occupancy_t	lh_occupancy;		  /* Occupancy */

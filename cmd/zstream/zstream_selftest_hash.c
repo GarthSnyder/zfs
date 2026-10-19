@@ -479,8 +479,8 @@ ht_verify_all(htest_t *ht)
  * - The entry total matches the model, and so does the data allocator's
  *   record count (updates rewrite records in place rather than appending).
  *
- * - lh_stats.top_entries and lh_stats.top_buckets agree with what is
- *   actually stored. Those drive split decisions, so drift in either one
+ * - lh_occupancy.top_entries and lh_occupancy.top_buckets agree with what
+ *   is actually stored. Those drive split decisions, so drift in either one
  *   silently stops the table from growing.
  *
  * - Every overflow bucket ever allocated is either in exactly one chain or

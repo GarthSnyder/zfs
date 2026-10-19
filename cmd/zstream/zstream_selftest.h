@@ -66,7 +66,7 @@ selftest_scratch_dir(void);
  * following conditions:
  *
  * - The child exits with status 0
- * - The child dies because of a signal
+ * - The child dies because of a signal other than SIGABRT
  * - The child runs longer than EXPECT_EXIT_TIMEOUT_SECS
  * - The "expect" pattern does not match the child's output
  *
