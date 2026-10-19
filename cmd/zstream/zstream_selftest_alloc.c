@@ -39,14 +39,20 @@
  * The layout arithmetic is restated here rather than called. Every stored
  * and verified record is also checked in place, in the allocator's memory
  * or in its backing file, at the offset test_record_offset() predicts.
+ *
+ * Paths that end the process, or that need resource limits the rest of the
+ * run must not inherit, run in forked children (selftest_expect_exit() and
+ * selftest_expect_success()).
  */
 
 #include <err.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/resource.h>
 #include <sys/sysmacros.h>
 
 #include "zstream_alloc.h"
@@ -59,6 +65,12 @@
  * changes, this must be changed by hand.
  */
 #define	TEST_PAGE_CLUSTER_SIZE	(1 << 20)
+
+/*
+ * Groups have no size limit, but the shadow model needs one. This is more
+ * than the hash table's three members, so larger groups get exercised too.
+ */
+#define	TEST_MAX_MEMBERS	8
 
 typedef enum {
 	REC_EMPTY = 0,		/* Never written; must read as zeros */
@@ -82,12 +94,12 @@ typedef struct {
 	uint8_t		   *sg_buf;	/* Scratch: retrieved record */
 	uint8_t		   *sg_expect;	/* Scratch: expected record */
 	uint8_t		   *sg_raw;	/* Scratch: record read in place */
-	shadow_member_t	   sg_members[MAX_ALLOCATORS_PER_GROUP];
+	shadow_member_t	   sg_members[TEST_MAX_MEMBERS];
 } shadow_group_t;
 
 typedef struct {
-	off_t		ss_frontier[MAX_ALLOCATORS_PER_GROUP];
-	off_t		ss_fod[MAX_ALLOCATORS_PER_GROUP];
+	off_t		ss_frontier[TEST_MAX_MEMBERS];
+	off_t		ss_fod[TEST_MAX_MEMBERS];
 } group_snapshot_t;
 
 #define	MEMBER(sg, m)	((sg)->sg_group->ag_allocators[m])
@@ -174,6 +186,9 @@ group_audit(shadow_group_t *sg)
 	VERIFY3U(g->ag_cluster_size, ==, cluster);
 	VERIFY3U(g->ag_num_allocators, ==, sg->sg_n);
 	VERIFY3U(g->ag_mem_limit, ==, ROUND_UP(sg->sg_limit, cluster));
+	VERIFY3S(sg->sg_disk, ==, g->ag_dir != NULL);
+	if (sg->sg_disk)
+		VERIFY0(strcmp(g->ag_dir, selftest_scratch_dir()));
 	for (unsigned m = 0; m < sg->sg_n; m++) {
 		allocator_t *a = MEMBER(sg, m);
 		shadow_member_t *sh = &sg->sg_members[m];
@@ -320,11 +335,8 @@ shadow_init1(size_t record_size, size_t limit, boolean_t disk,
 static void
 shadow_group_fini(shadow_group_t *sg, unsigned via)
 {
-	allocator_group_t *g = sg->sg_group;
-
 	group_audit(sg);
 	allocator_group_fini(MEMBER(sg, via));
-	VERIFY0(g->ag_num_allocators);		/* Slot is free again */
 	for (unsigned m = 0; m < sg->sg_n; m++) {
 		free(sg->sg_members[m].sh_tags);
 		free(sg->sg_members[m].sh_state);
@@ -946,14 +958,18 @@ process_size(size_t *total_out, size_t *resident_out)
 
 /*
  * Repeated create/destroy cycles must not leak file descriptors or (on
- * Linux) address space, and group slots must be reusable. All
- * MAX_ALLOCATOR_GROUPS groups can be live at once, and a slot freed through
- * any member is the one the next group gets.
+ * Linux) address space. There is no limit on the number of live groups, so
+ * many groups are also kept live at once, used in interleaved fashion, and
+ * destroyed in scrambled order through arbitrary members.
  */
+#define	MANY_GROUPS	24
+
 static void
 alloc_lifecycle(void)
 {
 	const size_t cluster = cluster_size();
+	selftest_rng_t rng;
+	selftest_rng_init(&rng, 45);
 	int probe = open("/dev/null", O_RDONLY);
 	VERIFY3S(probe, >=, 0);
 	int baseline_fd = probe;
@@ -964,9 +980,9 @@ alloc_lifecycle(void)
 #endif
 
 	for (int i = 0; i < 60; i++) {
-		unsigned n = 1 + i % MAX_ALLOCATORS_PER_GROUP;
-		size_t sizes[MAX_ALLOCATORS_PER_GROUP];
-		uint64_t caps[MAX_ALLOCATORS_PER_GROUP];
+		unsigned n = 1 + i % TEST_MAX_MEMBERS;
+		size_t sizes[TEST_MAX_MEMBERS];
+		uint64_t caps[TEST_MAX_MEMBERS];
 		for (unsigned m = 0; m < n; m++) {
 			sizes[m] = 64 * (m + 1);
 			caps[m] = 64;
@@ -981,6 +997,41 @@ alloc_lifecycle(void)
 		shadow_group_fini(sg, i % n);
 	}
 
+	/*
+	 * Each group gets six half-cluster appends, split randomly between
+	 * its two members: at most four clusters in all, so memory-only
+	 * groups fit in four, while dual-backed groups (two clusters) must
+	 * evict.
+	 */
+	shadow_group_t *sgs[MANY_GROUPS];
+	for (int i = 0; i < MANY_GROUPS; i++) {
+		size_t sizes[] = { 4096, 2048 + 8 * i };
+		uint64_t caps[] = { 3 * recs_per_cluster(sizes[0]) + 1,
+		    3 * recs_per_cluster(sizes[1]) + 1 };
+		/* Mix dual-backed, disk-only, and memory-only groups */
+		size_t limit = (i % 3 == 0) ? 2 * cluster :
+		    (i % 3 == 1) ? 0 : 4 * cluster;
+		sgs[i] = shadow_group_init(sizes, 2, limit, i % 3 != 2, caps);
+		for (int j = 0; j < i; j++)
+			VERIFY3P(sgs[i]->sg_group, !=, sgs[j]->sg_group);
+	}
+	for (int round = 0; round < 6; round++) {
+		for (int i = 0; i < MANY_GROUPS; i++) {
+			shadow_group_t *sg = sgs[i];
+			unsigned m = selftest_rng_below(&rng, 2);
+			uint64_t half = recs_per_cluster(
+			    sg->sg_members[m].sh_record_size) / 2;
+			for (uint64_t j = 0; j < half; j++)
+				shadow_append(sg, m);
+		}
+	}
+	for (int left = MANY_GROUPS; left > 0; left--) {
+		int i = selftest_rng_below(&rng, left);
+		shadow_verify_all(sgs[i]);
+		shadow_group_fini(sgs[i], selftest_rng_below(&rng, 2));
+		sgs[i] = sgs[left - 1];
+	}
+
 	probe = open("/dev/null", O_RDONLY);
 	VERIFY3S(probe, >=, 0);
 	if (probe > baseline_fd + 2) {
@@ -989,7 +1040,7 @@ alloc_lifecycle(void)
 	}
 	(void) close(probe);
 #if defined(__linux__)
-	/* 30 leaked groups of up to 6 x 4MB would be hard to miss */
+	/* Leaked groups of up to 8 x 4MB would be hard to miss */
 	size_t vm_after;
 	process_size(&vm_after, NULL);
 	if (vm_after > vm_before + 16 * cluster) {
@@ -997,22 +1048,6 @@ alloc_lifecycle(void)
 		    vm_before, vm_after);
 	}
 #endif
-
-	shadow_group_t *sgs[MAX_ALLOCATOR_GROUPS];
-	for (int i = 0; i < MAX_ALLOCATOR_GROUPS; i++) {
-		sgs[i] = shadow_init1(64, cluster, B_TRUE, 8);
-		for (int j = 0; j < i; j++)
-			VERIFY3P(sgs[i]->sg_group, !=, sgs[j]->sg_group);
-	}
-	allocator_group_t *freed = sgs[2]->sg_group;
-	shadow_group_fini(sgs[2], 0);
-	sgs[2] = shadow_init1(64, 0, B_TRUE, 8);
-	VERIFY3P(sgs[2]->sg_group, ==, freed);
-	for (int i = 0; i < MAX_ALLOCATOR_GROUPS; i++) {
-		shadow_append(sgs[i], 0);
-		shadow_verify_all(sgs[i]);
-		shadow_group_fini(sgs[i], 0);
-	}
 }
 
 /*
@@ -1070,10 +1105,10 @@ alloc_stress(void)
 
 	for (int round = 0; round < 8; round++) {
 		unsigned n = 1 + selftest_rng_below(&rng,
-		    MAX_ALLOCATORS_PER_GROUP);
+		    TEST_MAX_MEMBERS);
 		boolean_t disk = selftest_rng_below(&rng, 4) != 0;
-		size_t sizes[MAX_ALLOCATORS_PER_GROUP];
-		uint64_t caps[MAX_ALLOCATORS_PER_GROUP];
+		size_t sizes[TEST_MAX_MEMBERS];
+		uint64_t caps[TEST_MAX_MEMBERS];
 		size_t full = 0;
 		for (unsigned m = 0; m < n; m++) {
 			sizes[m] = (selftest_rng_below(&rng, 2) == 0) ?
@@ -1119,28 +1154,21 @@ alloc_stress(void)
 }
 
 typedef struct {
-	size_t		fa_sizes[MAX_ALLOCATORS_PER_GROUP + 1];
+	size_t		fa_sizes[TEST_MAX_MEMBERS];
 	unsigned	fa_n;
 	size_t		fa_limit;
 	boolean_t	fa_disk;
+	const char	*fa_dir;	/* Overrides the scratch directory */
 } fatal_args_t;
 
 static void
 child_group_init(void *arg)
 {
 	fatal_args_t *fa = arg;
+	const char *dir = (fa->fa_dir != NULL) ? fa->fa_dir :
+	    selftest_scratch_dir();
 	(void) allocator_group_init(fa->fa_sizes, fa->fa_n, fa->fa_limit,
-	    fa->fa_disk ? selftest_scratch_dir() : NULL);
-}
-
-static void
-child_too_many_groups(void *arg)
-{
-	size_t size = 64;
-	(void) arg;
-	for (int i = 0; i <= MAX_ALLOCATOR_GROUPS; i++)
-		(void) allocator_group_init(&size, 1, 0,
-		    selftest_scratch_dir());
+	    fa->fa_disk ? dir : NULL);
 }
 
 /*
@@ -1167,6 +1195,126 @@ child_memory_only_overflow(void *arg)
 }
 
 /*
+ * A write to a backing file that fails must be fatal, whether it comes
+ * from a store on the disk side or from an eviction. Writes fail here
+ * because they cross RLIMIT_FSIZE; with SIGXFSZ ignored, they return EFBIG.
+ * The eviction writes a whole cluster, so its first pwrite() is partial,
+ * and the failure comes on the retry.
+ */
+static void
+child_write_failure(void *arg)
+{
+	boolean_t evict = *(boolean_t *)arg;
+	size_t sizes[] = { 4096, 4096 };
+	uint8_t buf[4096] = { 0 };
+	struct rlimit fsize = { 16 * 4096, 16 * 4096 };
+
+	(void) signal(SIGXFSZ, SIG_IGN);
+	VERIFY0(setrlimit(RLIMIT_FSIZE, &fsize));
+	allocator_t **a = allocator_group_init(sizes, 2,
+	    evict ? cluster_size() : 0, selftest_scratch_dir());
+	if (evict) {
+		/* Member 0 fills the only cluster; member 1 evicts it */
+		for (uint64_t i = 0; i < recs_per_cluster(4096); i++)
+			(void) allocator_append(a[0], buf);
+		(void) allocator_append(a[1], buf);
+	} else {
+		/* Disk-only appends cross the limit at record 16 */
+		for (int i = 0; i < 32; i++)
+			(void) allocator_append(a[0], buf);
+	}
+}
+
+#if defined(__linux__)
+/*
+ * The process's data size, in the terms that RLIMIT_DATA counts
+ */
+static size_t
+vm_data_bytes(void)
+{
+	FILE *fp = fopen("/proc/self/status", "r");
+	char line[256];
+	unsigned long kb = 0;
+
+	VERIFY(fp != NULL);
+	while (fgets(line, sizeof (line), fp) != NULL) {
+		if (sscanf(line, "VmData: %lu kB", &kb) == 1)
+			break;
+	}
+	(void) fclose(fp);
+	VERIFY3U(kb, >, 0);
+	return ((size_t)kb << 10);
+}
+
+/*
+ * Under RLIMIT_DATA, mprotect() fails with ENOMEM long before the group's
+ * budget runs out. A disk-backed allocator must pin its split at its
+ * frontier and carry on from disk with every record intact. A memory-only
+ * allocator has nowhere to go and must exit.
+ */
+static void
+child_data_rlimit(void *arg)
+{
+	boolean_t disk = *(boolean_t *)arg;
+	const size_t cluster = cluster_size();
+	const uint64_t nrecs = 8 * recs_per_cluster(4096);
+	size_t size = 4096;
+	uint8_t buf[4096];
+	uint8_t expect[4096];
+	allocator_t **a = allocator_group_init(&size, 1, 32 * cluster,
+	    disk ? selftest_scratch_dir() : NULL);
+	allocator_t *alloc = a[0];
+	rlim_t lim = vm_data_bytes() + 3 * cluster;
+	struct rlimit data = { lim, lim };
+
+	VERIFY0(setrlimit(RLIMIT_DATA, &data));
+	for (uint64_t i = 0; i < nrecs; i++) {
+		fill_record(buf, size, i + 1);
+		VERIFY3U(allocator_append(alloc, buf), ==, i);
+	}
+
+	/* The split was pinned at the frontier, well short of the budget */
+	VERIFY3S(alloc->a_first_on_disk, ==, alloc->a_writable_frontier);
+	VERIFY3S(alloc->a_writable_frontier, <=, 3 * cluster);
+	VERIFY3U(alloc->a_group->ag_mem_current, ==,
+	    alloc->a_writable_frontier);
+	for (uint64_t i = 0; i < nrecs; i++) {
+		allocator_retrieve(alloc, i, buf);
+		fill_record(expect, size, i + 1);
+		if (memcmp(buf, expect, size) != 0) {
+			errx(1, "record %llu corrupted after ENOMEM spill",
+			    (u_longlong_t)i);
+		}
+	}
+	allocator_group_fini(alloc);
+}
+#endif
+
+/*
+ * Behavior when the operating system, rather than the group's budget,
+ * refuses a request. The RLIMIT_DATA cases are Linux-only, since other
+ * systems apply that limit only to the heap.
+ */
+static void
+alloc_resource_limits(void)
+{
+	boolean_t evict = B_FALSE;
+	selftest_expect_exit("disk write failure", child_write_failure,
+	    &evict, "pwrite() failed");
+	evict = B_TRUE;
+	selftest_expect_exit("eviction write failure", child_write_failure,
+	    &evict, "pwrite() failed");
+#if defined(__linux__)
+	boolean_t disk = B_TRUE;
+	selftest_expect_success("ENOMEM spill", child_data_rlimit, &disk,
+	    "memory allocation failed, spilling to disk");
+	disk = B_FALSE;
+	selftest_expect_exit("ENOMEM, memory-only", child_data_rlimit, &disk,
+	    "memory limit exceeded");
+#endif
+}
+
+/*
  * The fatal paths, each run in a child process that must exit with the
  * expected message.
  */
@@ -1181,22 +1329,17 @@ alloc_fatal(void)
 		.fa_disk = B_TRUE
 	};
 	selftest_expect_exit("oversized record", child_group_init, &fa,
-	    "record size too large");
+	    "record size is invalid");
 
 	fa.fa_sizes[0] = 64;
 	fa.fa_sizes[1] = 0;
 	fa.fa_n = 2;
 	selftest_expect_exit("zero-size record", child_group_init, &fa,
-	    "record_sizes[i]");
+	    "record size is invalid");
 
 	fa.fa_sizes[1] = 64;
 	fa.fa_n = 0;
 	selftest_expect_exit("empty group", child_group_init, &fa,
-	    "invalid number of allocators");
-	for (int i = 0; i <= MAX_ALLOCATORS_PER_GROUP; i++)
-		fa.fa_sizes[i] = 64;
-	fa.fa_n = MAX_ALLOCATORS_PER_GROUP + 1;
-	selftest_expect_exit("oversized group", child_group_init, &fa,
 	    "invalid number of allocators");
 
 	fa.fa_n = 1;
@@ -1205,8 +1348,11 @@ alloc_fatal(void)
 	selftest_expect_exit("no backing", child_group_init, &fa,
 	    "needs either disk or memory");
 
-	selftest_expect_exit("too many groups", child_too_many_groups, NULL,
-	    "allocator groups may be active");
+	fa.fa_limit = cluster;
+	fa.fa_disk = B_TRUE;
+	fa.fa_dir = "/nonexistent/zstream-selftest";
+	selftest_expect_exit("missing spill directory", child_group_init,
+	    &fa, "No such file or directory");
 
 	unsigned n = 1;
 	selftest_expect_exit("memory-only overflow",
@@ -1226,6 +1372,7 @@ const test_case_t selftest_alloc_cases[] = {
 	{ "alloc_lifecycle",		alloc_lifecycle },
 	{ "alloc_rss_bounded",		alloc_rss_bounded },
 	{ "alloc_stress",		alloc_stress },
+	{ "alloc_resource_limits",	alloc_resource_limits },
 	{ "alloc_fatal",		alloc_fatal },
 	{ NULL,				NULL },
 };
