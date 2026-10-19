@@ -52,6 +52,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/param.h>
 #include <sys/resource.h>
 #include <sys/sysmacros.h>
 
@@ -185,7 +186,7 @@ group_audit(shadow_group_t *sg)
 
 	VERIFY3U(g->ag_cluster_size, ==, cluster);
 	VERIFY3U(g->ag_num_allocators, ==, sg->sg_n);
-	VERIFY3U(g->ag_mem_limit, ==, ROUND_UP(sg->sg_limit, cluster));
+	VERIFY3U(g->ag_mem_limit, ==, roundup(sg->sg_limit, cluster));
 	VERIFY3S(sg->sg_disk, ==, g->ag_dir != NULL);
 	if (sg->sg_disk)
 		VERIFY0(strcmp(g->ag_dir, selftest_scratch_dir()));
