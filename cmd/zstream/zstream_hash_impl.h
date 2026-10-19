@@ -84,7 +84,7 @@ typedef struct {
 	uint64_t	top_buckets;
 	uint64_t	top_entries;
 	uint64_t	max_top_entries;
-} lh_stats_t;
+} lh_occupancy_t;
 
 /*
  * On average, bucket splits relocate half the chain's entries, potentially
@@ -112,7 +112,7 @@ struct linear_hash {
 	lh_allocators_t	lh_alloc;
 	unsigned int	lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
-	lh_stats_t	lh_stats;		  /* Occupancy */
+	lh_occupancy_t	lh_occupancy;		  /* Occupancy */
 	lh_freestack_t	lh_freestack;		  /* Available overflow bkts */
 };
 
