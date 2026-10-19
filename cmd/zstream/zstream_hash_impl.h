@@ -23,10 +23,12 @@
 #ifndef _ZSTREAM_HASH_IMPL_H
 #define	_ZSTREAM_HASH_IMPL_H
 
-#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stddef.h>
+#include <stdint.h>
 
 #include "zstream_alloc.h"
 #include "zstream_hash.h"
@@ -94,9 +96,19 @@ typedef struct {
 	record_ix_t	*buckets;
 } lh_freestack_t;
 
+/*
+ * Reduces a key, zero-padded to MAX_KEY_SIZE bytes, to the 64-bit hash
+ * that selects its bucket. lh_init() installs CityHash. Selftests replace
+ * it to control hash values, which is safe only before the first record
+ * operation on the table.
+ */
+typedef uint64_t lh_hash_func_f(const uint64_t
+    key[MAX_KEY_SIZE / sizeof (uint64_t)]);
+
 struct linear_hash {
 	size_t		lh_record_size;		  /* Param */
 	size_t		lh_key_size;		  /* Record prefix <= 32 */
+	lh_hash_func_f	*lh_hash_func;		  /* Key -> 64-bit hash */
 	lh_allocators_t	lh_alloc;
 	unsigned int	lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
