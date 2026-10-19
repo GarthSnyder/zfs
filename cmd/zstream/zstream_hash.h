@@ -58,6 +58,11 @@ typedef enum {
 	LH_NOT_FOUND, LH_FOUND, LH_INSERTED, LH_UPDATED
 } lh_result_t;
 
+typedef struct {
+	uint64_t	ls_total_records;
+	size_t		ls_memory_use;
+} lh_stats_t;
+
 /*
  * Create a hash table.
  *
@@ -121,6 +126,9 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
  */
 lh_result_t
 lh_record(linear_hash_t *lh, lh_op_t op, void *buff);
+
+lh_stats_t
+lh_get_stats(linear_hash_t *lh);
 
 /*
  * Destroy the table and release all resources.

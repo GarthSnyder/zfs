@@ -499,7 +499,7 @@ ht_validate(htest_t *ht)
 	uint64_t total_top = 0;
 	uint64_t problems = 0;
 
-	for (uint64_t b = 0; b < lh->lh_stats.top_buckets; b++) {
+	for (uint64_t b = 0; b < lh->lh_occupancy.top_buckets; b++) {
 		bucket_t bucket;
 		boolean_t top_level = B_TRUE;
 		boolean_t seen_empty = B_FALSE;
@@ -617,9 +617,9 @@ ht_validate(htest_t *ht)
 		    (u_longlong_t)ndata - 1, (u_longlong_t)ht->ht_present);
 		problems++;
 	}
-	if (total_top != lh->lh_stats.top_entries) {
+	if (total_top != lh->lh_occupancy.top_entries) {
 		warnx("table claims %llu top-level entries, but has %llu",
-		    (u_longlong_t)lh->lh_stats.top_entries,
+		    (u_longlong_t)lh->lh_occupancy.top_entries,
 		    (u_longlong_t)total_top);
 		problems++;
 	}
@@ -630,9 +630,9 @@ ht_validate(htest_t *ht)
 	 */
 	uint64_t want_buckets = (1ULL << lh->lh_hash_suffix_length) +
 	    lh->lh_split_pointer;
-	if (lh->lh_stats.top_buckets != want_buckets) {
+	if (lh->lh_occupancy.top_buckets != want_buckets) {
 		warnx("table has %llu top-level buckets, but its split state "
-		    "implies %llu", (u_longlong_t)lh->lh_stats.top_buckets,
+		    "implies %llu", (u_longlong_t)lh->lh_occupancy.top_buckets,
 		    (u_longlong_t)want_buckets);
 		problems++;
 	}
@@ -947,7 +947,7 @@ hash_splits(void)
 	 */
 	linear_hash_t *lh = ht->ht_lh;
 	VERIFY3U(lh->lh_hash_suffix_length, >=, 13);
-	VERIFY3U(lh->lh_stats.top_buckets, >, 1ULL << 13);
+	VERIFY3U(lh->lh_occupancy.top_buckets, >, 1ULL << 13);
 	ht_fini(ht);
 }
 
