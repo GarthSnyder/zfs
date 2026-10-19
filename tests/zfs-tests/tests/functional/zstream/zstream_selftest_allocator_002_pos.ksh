@@ -16,20 +16,30 @@
 # Copyright (c) 2026 by Garth Snyder. All rights reserved.
 #
 
-. $STF_SUITE/include/libtest.shlib
+. $STF_SUITE/tests/functional/zstream/zstream.kshlib
 
 #
 # Description:
 # Run zstream's built-in unit tests ("zstream selftest").
 #
 # Strategy:
-# 1. Run all selftests for the allocator module.
+# 1. Create a dataset to hold the selftests' spill files, so that the tests
+#    write only within the test pool, and on ZFS.
+# 2. Run all selftests for the allocator module.
 #
 
 verify_runnable "both"
 
+function cleanup
+{
+	destroy_dataset $POOL/selftest "-r"
+}
+log_onexit cleanup
+
 log_assert "zstream self-tests for zstream_alloc all pass"
 
+log_must zfs create $POOL/selftest
+export ZSTREAM_SELFTEST_DIR=$(get_prop mountpoint $POOL/selftest)
 log_must zstream selftest allocator
 
 log_pass "zstream self-tests for zstream_alloc all pass"
