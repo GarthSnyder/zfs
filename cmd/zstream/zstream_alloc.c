@@ -16,6 +16,7 @@
 
 #include <assert.h>
 #include <err.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -91,14 +92,15 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		errx(1, "allocator group needs either disk or memory backing");
 	if (num_allocators == 0)
 		errx(1, "invalid number of allocators: %u", num_allocators);
-	for (int i = 0; i < n; i++) {
+	for (int i = 0; i < num_allocators; i++) {
 		if (record_sizes[i] == 0 || record_sizes[i] > MAX_RECORD_SIZE)
 			errx(1, "requested allocator_t record size is invalid "
 			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
 	}
 
-	if ((long pagesize = sysconf(_SC_PAGESIZE)) < 0)
-		err(1, "unable to get system page size");
+	long pagesize = sysconf(_SC_PAGESIZE);
+	if (pagesize <= 0)
+		errx(1, "unable to get system page size");
 	size_t cluster_size = MAX(PAGE_CLUSTER_SIZE, (size_t)pagesize);
 
 	allocator_group_t *group = safe_malloc(sizeof (allocator_group_t));
@@ -106,6 +108,10 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		.ag_mem_limit = ROUND_UP(mem_limit, cluster_size),
 		.ag_mem_current = 0,
 		.ag_cluster_size = cluster_size,
+		/*
+		 * strdup() can fail, but ag_dir is only used as error
+		 * message text; the error value (NULL) is already OK.
+		 */
 		.ag_dir = (dir_path != NULL) ? strdup(dir_path) : NULL,
 		.ag_num_allocators = num_allocators,
 		.ag_allocators =
@@ -316,16 +322,17 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	    needed, PROT_READ | PROT_WRITE) != 0) {
 		if (errno == ENOMEM) {
 			/*
-			 * Some oddball situations might
-			 * result in memory allocation failing despite the
-			 * budget being carefully chosen. This is
-			 * essentially the same situation as being unable to
-			 * free sufficient memory. It's likely that other
-			 * allocators will also fail at this point, but the
-			 * small expected N makes it unnecessary to address
-			 * the issue at the allocator group level.
+			 * Some uncommon situations (e.g., RLIMIT_DATA or
+			 * strict overcommit) can result in memory
+			 * allocation failing despite the budget being
+			 * carefully chosen. This is essentially the same
+			 * situation as being unable to free sufficient
+			 * memory. It's likely that other allocators will
+			 * also fail allocations at this point, but the
+			 * expected N is small.
 			 */
-			warn("memory allocation failed, clamping budget...");
+			warn("memory allocation failed%s",
+			    (alloc->a_fd >= 0) ? ", spilling to disk" : "");
 			alloc->a_first_on_disk = alloc->a_writable_frontier;
 			return (B_FALSE);
 		} else {
