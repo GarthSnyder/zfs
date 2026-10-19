@@ -86,8 +86,8 @@
  * to keep in memory, the tail can spill over to disk storage without
  * abandoning or reshuffling the existing in-memory entries.
  *
- * This implementation uses open hashing (overflow buckets) and is
- * insert-only.
+ * This implementation uses open hashing (overflow buckets). Records can
+ * be updated (overwritten) but not deleted.
  *
  * Each hash table has three allocator_t's underneath it: one for the data
  * being stored, one for top-level buckets, and one for overflow buckets.
@@ -458,11 +458,13 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
 	while ((entry = entry_iterator_next(&iter, insert))) {
 		if (entry->be_record == 0) {
+			/* End of chain, empty slot */
 			if (!insert)
 				return (LH_NOT_FOUND);
 			insert_record(&iter, hash, buff);
 			return (LH_INSERTED);
 		} else if (entry->be_hash == hash) {
+			/* Hashes match, but full key may not */
 			allocator_retrieve(lh->lh_alloc.data, entry->be_record,
 			    scratch);
 			if (memcmp(scratch, key, key_size) == 0) {
