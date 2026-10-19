@@ -106,9 +106,20 @@ monotonic_msec(void)
 	return ((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-void
-selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
-    const char *expect)
+/*
+ * Exit status for a child that can't redirect its output. It's distinct from
+ * both 0 and err()'s 1 so that neither kind of test can mistake it for the
+ * outcome it expects.
+ */
+#define	CHILD_SETUP_FAILED	125
+
+/*
+ * Common implementation of selftest_expect_exit() and
+ * selftest_expect_success()
+ */
+static void
+run_child(const char *what, selftest_child_f *fn, void *arg,
+    const char *expect, boolean_t want_success)
 {
 	char output[4096];
 	size_t len = 0;
@@ -132,10 +143,9 @@ selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
 		(void) prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
 #endif
 		(void) close(fds[0]);
-		/* On failure, _exit(0) makes the parent report an error */
 		if (dup2(fds[1], STDOUT_FILENO) < 0 ||
 		    dup2(fds[1], STDERR_FILENO) < 0)
-			_exit(0);
+			_exit(CHILD_SETUP_FAILED);
 		(void) close(fds[1]);
 		fn(arg);
 		(void) fflush(NULL);
@@ -180,7 +190,12 @@ selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
 	}
 
 	const char *problem = NULL;
-	if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+	boolean_t clean = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+	if (WIFEXITED(status) && WEXITSTATUS(status) == CHILD_SETUP_FAILED)
+		problem = "could not redirect its output";
+	else if (want_success && !clean)
+		problem = "failed instead of returning normally";
+	else if (!want_success && clean)
 		problem = "returned normally instead of exiting";
 	else if (WIFSIGNALED(status) && WTERMSIG(status) != SIGABRT)
 		problem = "was killed by an unexpected signal";
@@ -191,8 +206,23 @@ selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
 		if (expect != NULL)
 			(void) fprintf(stderr, "Expected: %s\n", expect);
 		(void) fprintf(stderr, "Output:\n%s\n", output);
-		errx(1, "expected exit did not occur");
+		errx(1, "%s", want_success ? "child test failed" :
+		    "expected exit did not occur");
 	}
+}
+
+void
+selftest_expect_exit(const char *what, selftest_child_f *fn, void *arg,
+    const char *expect)
+{
+	run_child(what, fn, arg, expect, B_FALSE);
+}
+
+void
+selftest_expect_success(const char *what, selftest_child_f *fn, void *arg,
+    const char *expect)
+{
+	run_child(what, fn, arg, expect, B_TRUE);
 }
 
 static void
