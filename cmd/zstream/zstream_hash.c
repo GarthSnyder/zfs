@@ -157,7 +157,7 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 		    .bucket = allocators[2],
 		},
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
-		.lh_stats = {
+		.lh_occupancy = {
 		    .top_buckets = top_buckets,
 		    .max_top_entries = MAX_TOP_ENTRIES(top_buckets),
 		},
@@ -354,13 +354,13 @@ split_bucket(linear_hash_t *lh)
 		*dest_be = *source_be;
 
 		/* Occupancy bookkeeping */
-		if (!source.ei_in_overflow) lh->lh_stats.top_entries--;
-		if (!dest->ei_in_overflow)  lh->lh_stats.top_entries++;
+		if (!source.ei_in_overflow) lh->lh_occupancy.top_entries--;
+		if (!dest->ei_in_overflow)  lh->lh_occupancy.top_entries++;
 	}
 
-	lh->lh_stats.top_buckets++;
-	lh->lh_stats.max_top_entries =
-	    MAX_TOP_ENTRIES(lh->lh_stats.top_buckets);
+	lh->lh_occupancy.top_buckets++;
+	lh->lh_occupancy.max_top_entries =
+	    MAX_TOP_ENTRIES(lh->lh_occupancy.top_buckets);
 
 	/*
 	 * Have we completed the full hashing cycle at this suffix length?
@@ -428,8 +428,9 @@ insert_record(entry_iterator_t *iter, uint64_t hash, const uint8_t *buff)
 	};
 	save_bucket(iter, B_TRUE);
 	if (!iter->ei_in_overflow) {
-		lh->lh_stats.top_entries++;
-		while (lh->lh_stats.top_entries > lh->lh_stats.max_top_entries)
+		lh_occupancy_t *occ = &lh->lh_occupancy;
+		occ->top_entries++;
+		while (occ->top_entries > occ->max_top_entries)
 			split_bucket(lh);
 	}
 }
@@ -477,6 +478,20 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 	/* Only a non-extending walk can run off the end of the chain */
 	VERIFY(!insert);
 	return (LH_NOT_FOUND);
+}
+
+lh_stats_t
+lh_get_stats(linear_hash_t *lh)
+{
+	allocator_stats_t data = allocator_get_stats(lh->lh_alloc.data);
+	allocator_stats_t overflow = allocator_get_stats(lh->lh_alloc.overflow);
+	allocator_stats_t top = allocator_get_stats(lh->lh_alloc.bucket);
+	lh_stats_t stats = {
+		.ls_memory_use = data.as_memory_used + overflow.as_memory_used +
+		    top.as_memory_used,
+		.ls_total_records = data.as_num_records
+	};
+	return (stats);
 }
 
 void
