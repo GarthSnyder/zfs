@@ -60,6 +60,12 @@ typedef uint64_t record_ix_t;
 
 typedef struct allocator allocator_t;
 
+typedef struct {
+	size_t		as_memory_used;
+	size_t		as_record_size;
+	uint64_t	as_num_records;
+} allocator_stats_t;
+
 /*
  * Create a set of num_allocators allocator_t's. One allocator_t is created
  * for each value in the record_sizes array.
@@ -108,6 +114,9 @@ allocator_append(allocator_t *alloc, const void *data);
  */
 record_ix_t
 allocator_skip(allocator_t *alloc);
+
+allocator_stats_t
+allocator_get_stats(allocator_t *alloc);
 
 /*
  * Destroy an allocator group. You can name any allocator in the group.

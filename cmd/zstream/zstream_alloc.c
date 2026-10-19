@@ -344,6 +344,18 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	return (B_TRUE);
 }
 
+allocator_stats_t
+allocator_get_stats(allocator_t *alloc)
+{
+	VERIFY(alloc != NULL);
+	allocator_stats_t stats = {
+		.as_memory_used = alloc->a_writable_frontier,
+		.as_num_records = alloc->a_count,
+		.as_record_size = alloc->a_record_size
+	};
+	return (stats);
+}
+
 /*
  * May be called with any allocator in the group. Frees the entire group.
  */
