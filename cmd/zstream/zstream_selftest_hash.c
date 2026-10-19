@@ -59,6 +59,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/param.h>
 #include <sys/sysmacros.h>
 
 #include "zstream_alloc_impl.h"
@@ -758,7 +759,7 @@ hash_basic(void)
 	VERIFY3U(lh->lh_alloc.data->a_count, ==, 3);
 
 	allocator_group_t *g = hash_group(lh);
-	VERIFY3U(g->ag_mem_limit, ==, ROUND_UP(64 << 20, g->ag_cluster_size));
+	VERIFY3U(g->ag_mem_limit, ==, roundup(64 << 20, g->ag_cluster_size));
 	lh_fini(lh);
 
 	/* The same sequence through the model, which ht_op() checks */
@@ -1069,7 +1070,7 @@ hash_memory_pressure(void)
 	const uint64_t count = 100000;
 	htest_t *ht = ht_init(&cfg, count);
 	allocator_group_t *g = hash_group(ht->ht_lh);
-	VERIFY3U(g->ag_mem_limit, ==, ROUND_UP(2 << 20, g->ag_cluster_size));
+	VERIFY3U(g->ag_mem_limit, ==, roundup(2 << 20, g->ag_cluster_size));
 
 	for (uint64_t first = 0; first < count; first += 1024) {
 		ht_insert_range(ht, first, MIN(1024, count - first), 256);
