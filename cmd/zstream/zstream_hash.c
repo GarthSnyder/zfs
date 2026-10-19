@@ -119,6 +119,12 @@
  */
 #define	BUCKET_ENTRY(iter) (&(iter)->ei_bucket.b_entries[(iter)->ei_entry_ix])
 
+static uint64_t
+lh_hash_function(const uint64_t key[MAX_KEY_SIZE / 8])
+{
+	return (cityhash4(key[0], key[1], key[2], key[3]));
+}
+
 linear_hash_t *
 lh_init(size_t record_size, size_t key_size, size_t max_memory,
     const char *spill_dir)
@@ -144,6 +150,7 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
 		.lh_key_size = key_size,
+		.lh_hash_func = lh_hash_function,
 		.lh_alloc = {
 		    .data = allocators[0],
 		    .overflow = allocators[1],
@@ -435,13 +442,13 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 {
 	VERIFY(lh != NULL && buff_in != NULL && op < LH_NUM_OPS);
 
-	/* Zero-pad the key to 32 bytes and calculate hash */
+	/* Zero-pad the key to MAX_KEY_SIZE and calculate hash */
 	uint8_t *buff = buff_in;
-	uint64_t key[4] = {0};
+	uint64_t key[MAX_KEY_SIZE / sizeof (uint64_t)] = {0};
 	uint8_t scratch[lh->lh_record_size];
 	size_t key_size = lh->lh_key_size;
 	memcpy((uint8_t *)key, buff, key_size);
-	uint64_t hash = cityhash4(key[0], key[1], key[2], key[3]);
+	uint64_t hash = lh->lh_hash_func(key);
 
 	boolean_t insert = op == LH_INSERT || op == LH_UPSERT;
 	boolean_t update = op == LH_UPDATE || op == LH_UPSERT;
@@ -467,7 +474,8 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 			}
 		}
 	}
-	VERIFY(op == LH_FIND);
+	/* Only a non-extending walk can run off the end of the chain */
+	VERIFY(!insert);
 	return (LH_NOT_FOUND);
 }
 

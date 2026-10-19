@@ -29,7 +29,7 @@ extern "C" {
 
 #define	lh_find(lh, buff)	lh_record((lh), LH_FIND, (buff))
 #define	lh_insert(lh, buff)	lh_record((lh), LH_INSERT, (buff))
-#define lh_update(lh, buff)	lh_record((lh), LH_UPDATE, (buff))
+#define	lh_update(lh, buff)	lh_record((lh), LH_UPDATE, (buff))
 #define	lh_upsert(lh, buff)	lh_record((lh), LH_UPSERT, (buff))
 
 /*
@@ -69,8 +69,7 @@ typedef enum {
  * The record_size must be no more than 8K, and the key prefix can be no
  * longer than MAX_KEY_SIZE (32) bytes.
  *
- * At least one of max_memory and spill_dir should have nonzero/non-NULL
- * values.
+ * At least one of max_memory and spill_dir must be nonzero/non-NULL.
  *
  * lh_init() may round up max_memory to a more convenient value. If
  * max_memory is zero, the hash table is disk-only.
@@ -116,7 +115,7 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
  *    the buffer. Returns either LH_NOT_FOUND or LH_UPDATED.
  *
  * LH_UPSERT
- *    Saves the inbuff record in the table, overwriting any existing
+ *    Saves the buffer's record in the table, overwriting any existing
  *    record. Returns LH_INSERTED or LH_UPDATED. If the return value is
  *    LH_UPDATED, puts a copy of the previous record in the buffer.
  */
