@@ -189,6 +189,24 @@ default_hash_memory(void)
 #endif
 }
 
+static void
+print_redup_summary(chain_attrs_t *attrs, linear_hash_t *lh)
+{
+	record_stats_t *acsi = attrs->ca_stats_in;
+	nicebuff_t b = nicenums(3,
+	    attrs->ca_totals_in.rs_num_records,
+	    acsi[DRR_WRITE].rs_num_records,
+	    acsi[DRR_WRITE_BYREF].rs_num_records);
+	fprintf(stderr, "Converted stream with %s total records, "
+	    "including %s WRITE records and %s WRITE_BYREF "
+	    "records\n", b.nice[0], b.nice[1], b.nice[2]);
+
+	lh_stats_t stats = lh_get_stats(lh);
+	b = nicenums(2, stats.ls_total_records, stats.ls_memory_use);
+	fprintf(stderr, "Stored %s hash table entries using %s of memory\n",
+	    b.nice[0], b.nice[1]);
+}
+
 int
 zstream_do_redup(int argc, char *argv[])
 {
@@ -238,13 +256,7 @@ zstream_do_redup(int argc, char *argv[])
 	zstream_chain_exec(redup_chain, &attrs);
 
 	if (attrs.ca_command_opts & CA_VERBOSE) {
-		record_stats_t *acsi = attrs.ca_stats_in;
-		fprintf(stderr, "Converted stream with %llu total records, "
-		    "including %llu WRITE records and %llu WRITE_BYREF "
-		    "records\n",
-		    (u_longlong_t)attrs.ca_totals_in.rs_num_records,
-		    (u_longlong_t)acsi[DRR_WRITE].rs_num_records,
-		    (u_longlong_t)acsi[DRR_WRITE_BYREF].rs_num_records);
+		print_redup_summary(&attrs, context.rc_hash);
 	}
 
 	fclose(context.rc_fp);

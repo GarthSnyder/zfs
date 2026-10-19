@@ -25,11 +25,12 @@
  */
 
 #include <assert.h>
-#include <cityhash.h>
 #include <err.h>
 #include <errno.h>
 #include <libzfs.h>
+#include <libzutil.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -477,6 +478,21 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 	abd_free(&dabd);
 
 	return (outbuff);
+}
+
+nicebuff_t
+nicenums(int count, ...)
+{
+	VERIFY(count <= MAX_NICENUMS);
+	nicebuff_t buff;
+	va_list ap;
+	va_start(ap, count);
+	for (int i = 0; i < count; i++) {
+		uint64_t num = va_arg(ap, uint64_t);
+		zfs_nicenum(num, buff.nice[i], NICENUM_BUFF_SIZE);
+	}
+	va_end(ap);
+	return buff;
 }
 
 int
