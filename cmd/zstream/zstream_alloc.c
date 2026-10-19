@@ -102,6 +102,9 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 	if (pagesize <= 0)
 		errx(1, "unable to get system page size");
 	size_t cluster_size = MAX(PAGE_CLUSTER_SIZE, (size_t)pagesize);
+	if (mem_limit > SIZE_MAX / 2 - cluster_size)
+		errx(1, "requested allocator size %llu is too large",
+		    (u_longlong_t)mem_limit);
 
 	allocator_group_t *group = safe_malloc(sizeof (allocator_group_t));
 	*group = (allocator_group_t) {
@@ -244,9 +247,6 @@ free_memory_from(allocator_t *alloc, size_t delta_bytes)
 	off_t eject_end = alloc->a_writable_frontier;
 	if (eject_end <= eject_start)
 		return (0);
-	if (alloc->a_fd < 0)
-		errx(1, "allocator out of memory, %s would lose data",
-		    __func__);
 	size_t bytes_to_free = eject_end - eject_start;
 	void *eject_start_addr = OFFSET_TO_ADDR(alloc, eject_start);
 	safe_pwrite(alloc->a_fd, eject_start_addr, bytes_to_free, eject_start,
@@ -320,24 +320,20 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	VERIFY3U(group->ag_mem_limit - group->ag_mem_current, >=, needed);
 	if (mprotect(OFFSET_TO_ADDR(alloc, alloc->a_writable_frontier),
 	    needed, PROT_READ | PROT_WRITE) != 0) {
-		if (errno == ENOMEM) {
-			/*
-			 * Some uncommon situations (e.g., RLIMIT_DATA or
-			 * strict overcommit) can result in memory
-			 * allocation failing despite the budget being
-			 * carefully chosen. This is essentially the same
-			 * situation as being unable to free sufficient
-			 * memory. It's likely that other allocators will
-			 * also fail allocations at this point, but the
-			 * expected N is small.
-			 */
-			warn("memory allocation failed%s",
-			    (alloc->a_fd >= 0) ? ", spilling to disk" : "");
-			alloc->a_first_on_disk = alloc->a_writable_frontier;
-			return (B_FALSE);
-		} else {
+		if (errno != ENOMEM)
 			err(1, "mprotect failed");
-		}
+		/*
+		 * Some uncommon situations (e.g., RLIMIT_DATA or strict
+		 * overcommit) can result in memory allocation failing
+		 * despite the budget being carefully chosen. This is
+		 * essentially the same situation as being unable to free
+		 * sufficient memory. It's likely that other allocators will
+		 * also fail allocations going forward.
+		 */
+		warn("memory allocation failed%s", (alloc->a_fd >= 0) ?
+		    ", spilling to disk" : "");
+		alloc->a_first_on_disk = alloc->a_writable_frontier;
+		return (B_FALSE);
 	}
 	alloc->a_writable_frontier += needed;
 	group->ag_mem_current += needed;

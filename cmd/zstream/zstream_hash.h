@@ -89,10 +89,10 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
     const char *spill_dir);
 
 /*
- * There are four possible operations on records (LH_FIND, LH_INSERT,
- * LH_UPDATE, and LH_UPSERT), and lh_record() implements all of them. It's
- * a single function because the implementations are essentially similar.
- * You may find the #defines above to be a nicer API.
+ * There are four possible operations on records: LH_FIND, LH_INSERT,
+ * LH_UPDATE, and LH_UPSERT. lh_record() implements all of them; the
+ * implementations are essentially the same. You may find the #defines
+ * above to be a friendlier API.
  *
  * lh_record() accepts an opcode and a pointer to a record buffer. All
  * operations require the key fields of the buffer to be filled out, and

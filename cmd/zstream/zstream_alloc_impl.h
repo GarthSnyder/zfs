@@ -74,7 +74,7 @@ typedef struct {
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
 	size_t		   a_record_size;	  /* Client-specified */
-	uint64_t	   a_records_per_cluster; /* Constant (avoid divs) */
+	uint64_t	   a_records_per_cluster; /* Constant (minimize divs) */
 	off_t		   a_first_on_disk;	  /* Memory/disk split point */
 	off_t		   a_writable_frontier;   /* 1st non-r/w byte */
 	allocator_group_t  *a_group;		  /* Back-pointer to group */
