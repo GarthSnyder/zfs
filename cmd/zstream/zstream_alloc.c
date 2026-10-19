@@ -105,7 +105,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 
 	allocator_group_t *group = safe_malloc(sizeof (allocator_group_t));
 	*group = (allocator_group_t) {
-		.ag_mem_limit = ROUND_UP(mem_limit, cluster_size),
+		.ag_mem_limit = P2ROUNDUP(mem_limit, cluster_size),
 		.ag_mem_current = 0,
 		.ag_cluster_size = cluster_size,
 		/*
@@ -238,7 +238,7 @@ free_memory_from(allocator_t *alloc, size_t delta_bytes)
 	ASSERT(alloc != NULL && delta_bytes > 0);
 	if (alloc->a_base_addr == NULL || alloc->a_first_on_disk == 0)
 		return (0);
-	size_t delta = ROUND_UP(delta_bytes, alloc->a_group->ag_cluster_size);
+	size_t delta = P2ROUNDUP(delta_bytes, alloc->a_group->ag_cluster_size);
 	delta = MIN(delta, alloc->a_writable_frontier);
 	off_t eject_start = alloc->a_writable_frontier - delta;
 	off_t eject_end = alloc->a_writable_frontier;
@@ -306,7 +306,7 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	if (end_offset <= alloc->a_writable_frontier)
 		return (B_TRUE);
 	allocator_group_t *group = alloc->a_group;
-	size_t needed = ROUND_UP(end_offset - alloc->a_writable_frontier,
+	size_t needed = P2ROUNDUP(end_offset - alloc->a_writable_frontier,
 	    group->ag_cluster_size);
 	size_t avail = group->ag_mem_limit - group->ag_mem_current;
 	if (needed > avail) {
