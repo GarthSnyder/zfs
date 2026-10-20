@@ -491,7 +491,8 @@ lh_get_stats(linear_hash_t *lh)
 	lh_stats_t stats = {
 		.ls_memory_use = data.as_memory_used + overflow.as_memory_used +
 		    top.as_memory_used,
-		.ls_total_records = data.as_num_records
+		/* Don't count the index-0 sentinel */
+		.ls_total_records = data.as_num_records - 1
 	};
 	return (stats);
 }
