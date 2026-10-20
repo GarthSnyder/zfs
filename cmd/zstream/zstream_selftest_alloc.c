@@ -29,10 +29,11 @@
  * shadowed operation checks how that operation was allowed to change the
  * group:
  *
- * - Only the member allocator being written may gain memory.
+ * - Only the member allocator being written may gain memory, and only up
+ *   to the end of the cluster that holds the record.
  * - Memory clawback victims give up memory in strict priority order.
  * - Victims yield only as much memory as was requested.
- * - Reads change nothing.
+ * - Reads and skips change nothing.
  * - No allocator's memory/disk split point ever moves in the more-memory
  *   direction.
  *
@@ -45,8 +46,10 @@
  * selftest_expect_success()).
  */
 
+#include <dirent.h>
 #include <err.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,21 +110,6 @@ typedef struct {
 #define	FRONTIER(sg, m)	((size_t)MEMBER(sg, m)->a_writable_frontier)
 #define	FOD(sg, m)	((size_t)MEMBER(sg, m)->a_first_on_disk)
 
-/*
- * Deterministic record content: a function of the tag alone, so the model
- * only needs to remember one uint64_t per record.
- */
-static void
-fill_record(uint8_t *buf, size_t len, uint64_t tag)
-{
-	uint64_t x = selftest_mix64(selftest_seed ^ tag);
-	for (size_t i = 0; i < len; i++) {
-		if ((i & 7) == 0)
-			x = selftest_mix64(x + i);
-		buf[i] = (uint8_t)(x >> ((i & 7) << 3));
-	}
-}
-
 static boolean_t
 all_zero(const uint8_t *buf, size_t len)
 {
@@ -175,46 +163,76 @@ take_snapshot(shadow_group_t *sg, group_snapshot_t *ss)
 }
 
 /*
- * Invariants that hold across any two operations.
+ * Invariants that hold for any group across any two operations. This sees
+ * only the group's own state, so the hash suite uses it too; group_audit()
+ * adds the shadow model's view.
  */
-static void
-group_audit(shadow_group_t *sg)
+void
+selftest_audit_group(allocator_t *member)
 {
-	allocator_group_t *g = sg->sg_group;
+	allocator_group_t *g = member->a_group;
 	size_t cluster = cluster_size();
 	size_t total = 0;
+	boolean_t found = B_FALSE;
 
 	VERIFY3U(g->ag_cluster_size, ==, cluster);
-	VERIFY3U(g->ag_num_allocators, ==, sg->sg_n);
-	VERIFY3U(g->ag_mem_limit, ==, roundup(sg->sg_limit, cluster));
-	VERIFY3S(sg->sg_disk, ==, g->ag_dir != NULL);
-	if (sg->sg_disk)
-		VERIFY0(strcmp(g->ag_dir, selftest_scratch_dir()));
-	for (unsigned m = 0; m < sg->sg_n; m++) {
-		allocator_t *a = MEMBER(sg, m);
-		shadow_member_t *sh = &sg->sg_members[m];
+	VERIFY3U(g->ag_num_allocators, >, 0);
+	VERIFY0(g->ag_mem_limit % cluster);
+	for (unsigned m = 0; m < g->ag_num_allocators; m++) {
+		allocator_t *a = g->ag_allocators[m];
+		allocator_stats_t st = allocator_get_stats(a);
 
+		if (a == member)
+			found = B_TRUE;
 		VERIFY3P(a->a_group, ==, g);
-		VERIFY3U(a->a_record_size, ==, sh->sh_record_size);
 		VERIFY3U(a->a_records_per_cluster, ==,
-		    recs_per_cluster(sh->sh_record_size));
-		VERIFY3U(a->a_count, ==, sh->sh_count);
-		VERIFY3S(sg->sg_disk, ==, a->a_fd >= 0);
+		    recs_per_cluster(a->a_record_size));
+		VERIFY3S(g->ag_dir != NULL, ==, a->a_fd >= 0);
 		VERIFY3S(g->ag_mem_limit > 0, ==, a->a_base_addr != NULL);
 		VERIFY3S(a->a_writable_frontier, >=, 0);
 		VERIFY3S(a->a_writable_frontier, <=, a->a_first_on_disk);
 		VERIFY3U(a->a_first_on_disk, <=, g->ag_mem_limit);
 		VERIFY0(a->a_writable_frontier % cluster);
 		VERIFY0(a->a_first_on_disk % cluster);
+		VERIFY3U(st.as_memory_used, ==, a->a_writable_frontier);
+		VERIFY3U(st.as_num_records, ==, a->a_count);
+		VERIFY3U(st.as_record_size, ==, a->a_record_size);
 		total += a->a_writable_frontier;
 	}
+	VERIFY(found);
 	VERIFY3U(g->ag_mem_current, ==, total);
 	VERIFY3U(g->ag_mem_current, <=, g->ag_mem_limit);
 }
 
 /*
+ * selftest_audit_group(), plus agreement with the shadow model
+ */
+static void
+group_audit(shadow_group_t *sg)
+{
+	allocator_group_t *g = sg->sg_group;
+
+	selftest_audit_group(MEMBER(sg, 0));
+	VERIFY3U(g->ag_num_allocators, ==, sg->sg_n);
+	VERIFY3U(g->ag_mem_limit, ==, roundup(sg->sg_limit, cluster_size()));
+	VERIFY3S(sg->sg_disk, ==, g->ag_dir != NULL);
+	if (sg->sg_disk) {
+		/* The group keeps its own copy of the directory name */
+		VERIFY3P(g->ag_dir, !=, selftest_scratch_dir());
+		VERIFY0(strcmp(g->ag_dir, selftest_scratch_dir()));
+	}
+	for (unsigned m = 0; m < sg->sg_n; m++) {
+		VERIFY3U(MEMBER(sg, m)->a_record_size, ==,
+		    sg->sg_members[m].sh_record_size);
+		VERIFY3U(MEMBER(sg, m)->a_count, ==,
+		    sg->sg_members[m].sh_count);
+	}
+}
+
+/*
  * Check how one operation changed the group. The writer is the member that
- * was stored to, or -1 for an operation that must change nothing (a read).
+ * was stored to, or -1 for an operation that must change nothing (a read or
+ * a skip).
  */
 static void
 check_transition(shadow_group_t *sg, const group_snapshot_t *before,
@@ -358,7 +376,7 @@ store_and_check(shadow_group_t *sg, unsigned m, uint64_t ix,
 	VERIFY3U(ix, <, sh->sh_capacity);
 	take_snapshot(sg, &before);
 	uint64_t tag = sg->sg_next_tag++;
-	fill_record(sg->sg_expect, sh->sh_record_size, tag);
+	selftest_fill(sg->sg_expect, sh->sh_record_size, tag);
 	if (append) {
 		VERIFY3U(allocator_append(MEMBER(sg, m), sg->sg_expect), ==,
 		    ix);
@@ -369,6 +387,13 @@ store_and_check(shadow_group_t *sg, unsigned m, uint64_t ix,
 	sh->sh_state[ix] = REC_KNOWN;
 	sh->sh_count = MAX(sh->sh_count, ix + 1);
 	check_transition(sg, &before, m);
+
+	/* Memory grows only to the end of the cluster holding the record */
+	if (FRONTIER(sg, m) != (size_t)before.ss_frontier[m]) {
+		size_t rsize = sh->sh_record_size;
+		VERIFY3U(FRONTIER(sg, m), ==, roundup(test_record_offset(rsize,
+		    ix) + rsize, cluster_size()));
+	}
 	check_placement(sg, m, ix, sg->sg_expect);
 }
 
@@ -406,7 +431,8 @@ shadow_skip(shadow_group_t *sg, unsigned m)
 	take_snapshot(sg, &before);
 	VERIFY3U(allocator_skip(MEMBER(sg, m)), ==, sh->sh_count);
 	sh->sh_state[sh->sh_count++] = REC_EMPTY;
-	check_transition(sg, &before, m);
+	/* A skip writes nothing, so nothing but the count may change */
+	check_transition(sg, &before, -1);
 }
 
 static void
@@ -422,7 +448,7 @@ shadow_verify(shadow_group_t *sg, unsigned m, uint64_t ix)
 	allocator_retrieve(MEMBER(sg, m), ix, sg->sg_buf);
 	check_transition(sg, &before, -1);
 	if (sh->sh_state[ix] == REC_KNOWN) {
-		fill_record(sg->sg_expect, rsize, sh->sh_tags[ix]);
+		selftest_fill(sg->sg_expect, rsize, sh->sh_tags[ix]);
 		if (memcmp(sg->sg_buf, sg->sg_expect, rsize) != 0) {
 			errx(1, "member %u record %llu corrupted", m,
 			    (u_longlong_t)ix);
@@ -962,6 +988,10 @@ process_size(size_t *total_out, size_t *resident_out)
  * Linux) address space. There is no limit on the number of live groups, so
  * many groups are also kept live at once, used in interleaved fashion, and
  * destroyed in scrambled order through arbitrary members.
+ *
+ * Backing files must not leak either. They are unlinked as soon as they are
+ * created, so a group's private spill directory stays empty while the group
+ * is live, even after records have spilled into it.
  */
 #define	MANY_GROUPS	24
 
@@ -1032,6 +1062,29 @@ alloc_lifecycle(void)
 		shadow_group_fini(sgs[i], selftest_rng_below(&rng, 2));
 		sgs[i] = sgs[left - 1];
 	}
+
+	char dir[PATH_MAX];
+	(void) snprintf(dir, sizeof (dir), "%s/zstream-selftest-XXXXXX",
+	    selftest_scratch_dir());
+	VERIFY3P(mkdtemp(dir), !=, NULL);
+	size_t sizes[] = { 64, 4096, 104 };
+	uint8_t buf[4096] = { 0 };
+	allocator_t **a = allocator_group_init(sizes, 3, cluster, dir);
+	for (uint64_t i = 0; i < 2 * recs_per_cluster(4096); i++)
+		(void) allocator_append(a[1], buf);
+	VERIFY3S(a[1]->a_first_on_disk, ==, cluster);
+	DIR *dp = opendir(dir);
+	VERIFY3P(dp, !=, NULL);
+	struct dirent *de;
+	while ((de = readdir(dp)) != NULL) {
+		if (strcmp(de->d_name, ".") != 0 &&
+		    strcmp(de->d_name, "..") != 0)
+			errx(1, "spill file %s/%s was not unlinked", dir,
+			    de->d_name);
+	}
+	(void) closedir(dp);
+	allocator_group_fini(a[2]);
+	VERIFY0(rmdir(dir));
 
 	probe = open("/dev/null", O_RDONLY);
 	VERIFY3S(probe, >=, 0);
@@ -1195,32 +1248,54 @@ child_memory_only_overflow(void *arg)
 	}
 }
 
+typedef struct {
+	boolean_t	wf_evict;	/* Fail in an eviction, not a store */
+	boolean_t	wf_enospc;	/* Fail with ENOSPC, not EFBIG */
+} write_failure_t;
+
 /*
  * A write to a backing file that fails must be fatal, whether it comes
- * from a store on the disk side or from an eviction. Writes fail here
- * because they cross RLIMIT_FSIZE; with SIGXFSZ ignored, they return EFBIG.
- * The eviction writes a whole cluster, so its first pwrite() is partial,
- * and the failure comes on the retry.
+ * from a store on the disk side or from an eviction.
+ *
+ * - With wf_enospc clear, writes fail because they cross RLIMIT_FSIZE;
+ *   with SIGXFSZ ignored, they return EFBIG. The eviction writes a whole
+ *   cluster, so its first pwrite() is partial, and the failure comes on
+ *   the retry.
+ *
+ * - With wf_enospc set, member 0's backing file is replaced with /dev/full
+ *   (Linux only), whose writes fail with ENOSPC. The message must then
+ *   name the spill directory. The group keeps its own copy of the name, so
+ *   the caller's copy is scribbled over first.
  */
 static void
 child_write_failure(void *arg)
 {
-	boolean_t evict = *(boolean_t *)arg;
+	write_failure_t *wf = arg;
 	size_t sizes[] = { 4096, 4096 };
 	uint8_t buf[4096] = { 0 };
 	struct rlimit fsize = { 16 * 4096, 16 * 4096 };
+	char dir[PATH_MAX];
 
-	(void) signal(SIGXFSZ, SIG_IGN);
-	VERIFY0(setrlimit(RLIMIT_FSIZE, &fsize));
+	if (!wf->wf_enospc) {
+		(void) signal(SIGXFSZ, SIG_IGN);
+		VERIFY0(setrlimit(RLIMIT_FSIZE, &fsize));
+	}
+	(void) snprintf(dir, sizeof (dir), "%s", selftest_scratch_dir());
 	allocator_t **a = allocator_group_init(sizes, 2,
-	    evict ? cluster_size() : 0, selftest_scratch_dir());
-	if (evict) {
+	    wf->wf_evict ? cluster_size() : 0, dir);
+	if (wf->wf_enospc) {
+		int full = open("/dev/full", O_RDWR);
+		VERIFY3S(full, >=, 0);
+		VERIFY3S(dup2(full, a[0]->a_fd), ==, a[0]->a_fd);
+		(void) memset(dir, 'X', strlen(dir));
+	}
+	if (wf->wf_evict) {
 		/* Member 0 fills the only cluster; member 1 evicts it */
 		for (uint64_t i = 0; i < recs_per_cluster(4096); i++)
 			(void) allocator_append(a[0], buf);
 		(void) allocator_append(a[1], buf);
 	} else {
-		/* Disk-only appends cross the limit at record 16 */
+		/* Disk-only appends; RLIMIT_FSIZE stops record 16 */
 		for (int i = 0; i < 32; i++)
 			(void) allocator_append(a[0], buf);
 	}
@@ -1270,7 +1345,7 @@ child_data_rlimit(void *arg)
 
 	VERIFY0(setrlimit(RLIMIT_DATA, &data));
 	for (uint64_t i = 0; i < nrecs; i++) {
-		fill_record(buf, size, i + 1);
+		selftest_fill(buf, size, i + 1);
 		VERIFY3U(allocator_append(alloc, buf), ==, i);
 	}
 
@@ -1281,7 +1356,7 @@ child_data_rlimit(void *arg)
 	    alloc->a_writable_frontier);
 	for (uint64_t i = 0; i < nrecs; i++) {
 		allocator_retrieve(alloc, i, buf);
-		fill_record(expect, size, i + 1);
+		selftest_fill(expect, size, i + 1);
 		if (memcmp(buf, expect, size) != 0) {
 			errx(1, "record %llu corrupted after ENOMEM spill",
 			    (u_longlong_t)i);
@@ -1293,19 +1368,31 @@ child_data_rlimit(void *arg)
 
 /*
  * Behavior when the operating system, rather than the group's budget,
- * refuses a request. The RLIMIT_DATA cases are Linux-only, since other
- * systems apply that limit only to the heap.
+ * refuses a request. The ENOSPC cases are Linux-only because they rely on
+ * /dev/full. The RLIMIT_DATA cases are Linux-only, since other systems
+ * apply that limit only to the heap.
  */
 static void
 alloc_resource_limits(void)
 {
-	boolean_t evict = B_FALSE;
+	write_failure_t wf = { .wf_evict = B_FALSE };
 	selftest_expect_exit("disk write failure", child_write_failure,
-	    &evict, "pwrite() failed");
-	evict = B_TRUE;
+	    &wf, "pwrite() failed");
+	wf.wf_evict = B_TRUE;
 	selftest_expect_exit("eviction write failure", child_write_failure,
-	    &evict, "pwrite() failed");
+	    &wf, "pwrite() failed");
 #if defined(__linux__)
+	char expect[PATH_MAX + 32];
+	(void) snprintf(expect, sizeof (expect), "out of space in %s,",
+	    selftest_scratch_dir());
+	wf.wf_enospc = B_TRUE;
+	wf.wf_evict = B_FALSE;
+	selftest_expect_exit("disk write out of space", child_write_failure,
+	    &wf, expect);
+	wf.wf_evict = B_TRUE;
+	selftest_expect_exit("eviction out of space", child_write_failure,
+	    &wf, expect);
+
 	boolean_t disk = B_TRUE;
 	selftest_expect_success("ENOMEM spill", child_data_rlimit, &disk,
 	    "memory allocation failed, spilling to disk");
@@ -1317,7 +1404,8 @@ alloc_resource_limits(void)
 
 /*
  * The fatal paths, each run in a child process that must exit with the
- * expected message.
+ * expected message: invalid parameters, a missing spill directory, and
+ * running out of memory in a memory-only group.
  */
 static void
 alloc_fatal(void)
@@ -1349,8 +1437,23 @@ alloc_fatal(void)
 	selftest_expect_exit("no backing", child_group_init, &fa,
 	    "needs either disk or memory");
 
-	fa.fa_limit = cluster;
+	/*
+	 * A limit one past the largest that can be rounded up to a cluster
+	 * without overflow (or exceeding an off_t) is rejected. The largest
+	 * is accepted and then fails to reserve its address space, except on
+	 * 32-bit systems, where the reservation might succeed.
+	 */
 	fa.fa_disk = B_TRUE;
+	fa.fa_limit = SIZE_MAX / 2 - cluster + 1;
+	selftest_expect_exit("oversized limit", child_group_init, &fa,
+	    "is too large");
+#if !defined(_ILP32)
+	fa.fa_limit = SIZE_MAX / 2 - cluster;
+	selftest_expect_exit("largest limit", child_group_init, &fa,
+	    "mmap failed");
+#endif
+
+	fa.fa_limit = cluster;
 	fa.fa_dir = "/nonexistent/zstream-selftest";
 	selftest_expect_exit("missing spill directory", child_group_init,
 	    &fa, "No such file or directory");

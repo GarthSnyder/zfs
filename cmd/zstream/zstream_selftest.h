@@ -21,7 +21,10 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
 #include <stdint.h>
+
+#include "zstream_alloc.h"
 
 /*
  * Shared harness for "zstream selftest". Each module under test supplies a
@@ -135,6 +138,31 @@ selftest_rng_below(selftest_rng_t *rng, uint64_t bound)
 {
 	return (bound ? selftest_rng_next(rng) % bound : 0);
 }
+
+/*
+ * Fill a buffer with bytes that are a function of selftest_seed and tag
+ * alone, so a model need only remember the tag to regenerate the contents.
+ */
+static inline void
+selftest_fill(uint8_t *buf, size_t len, uint64_t tag)
+{
+	uint64_t x = selftest_mix64(selftest_seed ^ tag);
+	for (size_t i = 0; i < len; i++) {
+		if ((i & 7) == 0)
+			x = selftest_mix64(x + i);
+		buf[i] = (uint8_t)(x >> ((i & 7) << 3));
+	}
+}
+
+/*
+ * Check the invariants of the allocator group that member belongs to,
+ * using only the group's own state: exact memory accounting, cluster
+ * alignment, split points within bounds, backing consistent with the
+ * group's configuration, and allocator_get_stats() consistent with all of
+ * it. Shared by the allocator and hash suites; exits on failure.
+ */
+void
+selftest_audit_group(allocator_t *member);
 
 #ifdef	__cplusplus
 }
