@@ -69,7 +69,6 @@ static const selftest_module_t modules[] = {
 };
 
 uint64_t selftest_seed;
-static const char *current_test = "(startup)";
 
 const char *
 selftest_scratch_dir(void)
@@ -274,7 +273,6 @@ run_case(const test_case_t *tc)
 {
 	(void) printf("Running %-22s ... ", tc->tc_name);
 	(void) fflush(stdout);
-	current_test = tc->tc_name;
 	watchdog_arm();
 	tc->tc_func();
 	watchdog_disarm();

@@ -23,7 +23,8 @@
 # Run zstream's built-in unit tests ("zstream selftest").
 #
 # Strategy:
-# 1. Run all selftests for each module with the default worker thread pool.
+# 1. Run all selftests for the queue module with the default worker thread
+#    pool.
 # 2. Run them again with a single worker thread.
 #
 
