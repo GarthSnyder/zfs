@@ -85,6 +85,7 @@ typedef struct {
 	uint64_t	hc_fixed_mask;	/* HM_WORD0: hash bits forced to... */
 	uint64_t	hc_fixed_bits;	/* ...these values... */
 	uint64_t	hc_fixed_every;	/* ...for every Nth key; 0 = all */
+	unsigned	hc_initial_suffix; /* Start: 2^N buckets; 0 = default */
 	uint64_t	hc_rng_stream;
 } htest_config_t;
 
@@ -150,17 +151,6 @@ expected_bucket(linear_hash_t *lh, uint64_t hash)
 	return (hash & mask);
 }
 
-static void
-fill_pattern(uint8_t *buf, size_t len, uint64_t tag)
-{
-	uint64_t x = selftest_mix64(selftest_seed ^ tag);
-	for (size_t i = 0; i < len; i++) {
-		if ((i & 7) == 0)
-			x = selftest_mix64(x + i);
-		buf[i] = (uint8_t)(x >> ((i & 7) << 3));
-	}
-}
-
 /*
  * Little-endian byte encoding, so that keys mean the same thing on every
  * platform no matter how many of their bytes are used
@@ -223,7 +213,7 @@ make_key(const htest_t *ht, uint64_t n, uint8_t *key)
 	} else {
 		put_le(key, len, n ^ ht->ht_salt);
 	}
-	fill_pattern(key + off + len, ks - off - len, selftest_mix64(n));
+	selftest_fill(key + off + len, ks - off - len, selftest_mix64(n));
 }
 
 /*
@@ -256,8 +246,33 @@ make_record(const htest_t *ht, uint64_t n, uint32_t version, uint8_t *rec)
 	size_t ks = ht->ht_cfg.hc_key_size;
 
 	make_key(ht, n, rec);
-	fill_pattern(rec + ks, ht->ht_cfg.hc_record_size - ks,
+	selftest_fill(rec + ks, ht->ht_cfg.hc_record_size - ks,
 	    selftest_mix64(n) ^ ((uint64_t)version << 32));
+}
+
+/*
+ * A new table has 2^INITIAL_HASH_SUFFIX_LENGTH buckets and doesn't split
+ * until they are 75% full, so a table of a few thousand keys never splits
+ * at all. Like the hash function, the starting size can be changed before
+ * the first record operation, while every bucket is still empty and
+ * unwritten. A table started at 2^suffix buckets splits early and passes
+ * through many split cycles. The split threshold is proportional to the
+ * bucket count, and split_bucket() recomputes it after every split anyway.
+ */
+static void
+shrink_new_table(linear_hash_t *lh, unsigned suffix)
+{
+	lh_occupancy_t *occ = &lh->lh_occupancy;
+	unsigned shift = lh->lh_hash_suffix_length - suffix;
+
+	VERIFY3U(suffix, >, 0);
+	VERIFY3U(suffix, <, lh->lh_hash_suffix_length);
+	VERIFY0(occ->top_entries);
+	VERIFY0(lh->lh_split_pointer);
+	VERIFY0(lh->lh_alloc.bucket->a_count);
+	lh->lh_hash_suffix_length = suffix;
+	occ->top_buckets >>= shift;
+	occ->max_top_entries >>= shift;
 }
 
 /*
@@ -314,6 +329,8 @@ ht_init(const htest_config_t *cfg, uint64_t nkeys)
 	    cfg->hc_no_disk ? NULL : selftest_scratch_dir());
 	if (cfg->hc_hash_mode == HM_WORD0)
 		ht->ht_lh->lh_hash_func = word0_hash;
+	if (cfg->hc_initial_suffix != 0)
+		shrink_new_table(ht->ht_lh, cfg->hc_initial_suffix);
 	return (ht);
 }
 
@@ -476,8 +493,9 @@ ht_verify_all(htest_t *ht)
  * - Every stored record is the current version of a present key, and no
  *   key is stored twice.
  *
- * - The entry total matches the model, and so does the data allocator's
- *   record count (updates rewrite records in place rather than appending).
+ * - The entry total matches the model, and so do the data allocator's
+ *   record count (updates rewrite records in place rather than appending)
+ *   and the record count from lh_get_stats().
  *
  * - lh_occupancy.top_entries and lh_occupancy.top_buckets agree with what
  *   is actually stored. Those drive split decisions, so drift in either one
@@ -618,6 +636,13 @@ ht_validate(htest_t *ht)
 		    (u_longlong_t)ndata - 1, (u_longlong_t)ht->ht_present);
 		problems++;
 	}
+	lh_stats_t stats = lh_get_stats(lh);
+	if (stats.ls_total_records != ht->ht_present) {
+		warnx("table reports %llu records for %llu keys",
+		    (u_longlong_t)stats.ls_total_records,
+		    (u_longlong_t)ht->ht_present);
+		problems++;
+	}
 	if (total_top != lh->lh_occupancy.top_entries) {
 		warnx("table claims %llu top-level entries, but has %llu",
 		    (u_longlong_t)lh->lh_occupancy.top_entries,
@@ -647,23 +672,24 @@ ht_validate(htest_t *ht)
 }
 
 /*
- * The table's allocator group. lh_init() must create the allocators in
- * eviction priority order: data first, then overflow, then main buckets.
+ * The table's allocator group, audited. lh_init() must create the
+ * allocators in eviction priority order: data first, then overflow, then
+ * main buckets. lh_get_stats() must report the group's memory use.
  */
 static allocator_group_t *
 hash_group(linear_hash_t *lh)
 {
 	allocator_group_t *g = lh->lh_alloc.data->a_group;
 
+	selftest_audit_group(lh->lh_alloc.data);
 	VERIFY3U(g->ag_num_allocators, ==, 3);
 	VERIFY3P(g->ag_allocators[0], ==, lh->lh_alloc.data);
 	VERIFY3P(g->ag_allocators[1], ==, lh->lh_alloc.overflow);
 	VERIFY3P(g->ag_allocators[2], ==, lh->lh_alloc.bucket);
-	VERIFY3U(g->ag_mem_current, ==,
-	    g->ag_allocators[0]->a_writable_frontier +
-	    g->ag_allocators[1]->a_writable_frontier +
-	    g->ag_allocators[2]->a_writable_frontier);
-	VERIFY3U(g->ag_mem_current, <=, g->ag_mem_limit);
+	VERIFY3U(lh->lh_alloc.data->a_record_size, ==, lh->lh_record_size);
+	VERIFY3U(lh->lh_alloc.overflow->a_record_size, ==, sizeof (bucket_t));
+	VERIFY3U(lh->lh_alloc.bucket->a_record_size, ==, sizeof (bucket_t));
+	VERIFY3U(lh_get_stats(lh).ls_memory_use, ==, g->ag_mem_current);
 	return (g);
 }
 
@@ -698,7 +724,7 @@ raw_record(uint8_t *rec, size_t rs, size_t ks, uint8_t key_fill,
     uint64_t payload_tag)
 {
 	memset(rec, key_fill, ks);
-	fill_pattern(rec + ks, rs - ks, payload_tag);
+	selftest_fill(rec + ks, rs - ks, payload_tag);
 }
 
 /*
@@ -714,6 +740,11 @@ hash_basic(void)
 	const size_t ks = 32;
 	linear_hash_t *lh = lh_init(rs, ks, 64 << 20, selftest_scratch_dir());
 	uint8_t zero[40], ones[40], buf[40];
+
+	/* A new table holds nothing and has used no memory */
+	lh_stats_t stats = lh_get_stats(lh);
+	VERIFY0(stats.ls_total_records);
+	VERIFY0(stats.ls_memory_use);
 
 	raw_record(zero, rs, ks, 0x00, 1);
 	raw_record(ones, rs, ks, 0xff, 2);
@@ -758,8 +789,12 @@ hash_basic(void)
 	VERIFY0(memcmp(buf, zero, rs));
 	VERIFY3U(lh->lh_alloc.data->a_count, ==, 3);
 
+	/* Two records, in one cluster of data and one of top buckets */
 	allocator_group_t *g = hash_group(lh);
 	VERIFY3U(g->ag_mem_limit, ==, roundup(64 << 20, g->ag_cluster_size));
+	stats = lh_get_stats(lh);
+	VERIFY3U(stats.ls_total_records, ==, 2);
+	VERIFY3U(stats.ls_memory_use, ==, 2 * g->ag_cluster_size);
 	lh_fini(lh);
 
 	/* The same sequence through the model, which ht_op() checks */
@@ -949,6 +984,12 @@ hash_splits(void)
 	linear_hash_t *lh = ht->ht_lh;
 	VERIFY3U(lh->lh_hash_suffix_length, >=, 13);
 	VERIFY3U(lh->lh_occupancy.top_buckets, >, 1ULL << 13);
+
+	/*
+	 * Splits free overflow buckets faster than new chains reuse them, so
+	 * the free stack must have outgrown its initial size.
+	 */
+	VERIFY3U(lh->lh_freestack.size, >, FREESTACK_INITIAL_SIZE);
 	ht_fini(ht);
 }
 
@@ -966,7 +1007,9 @@ hash_splits(void)
  *
  * - Half of the keys like that and half random, so that splits must
  *   repeatedly repartition a monster chain while normal traffic continues
- *   around it.
+ *   around it. The table starts with two buckets, so the chain is split
+ *   once per cycle; whenever the new mask bit of its shared low bits is
+ *   set, the whole chain moves to the buddy bucket at once.
  */
 static void
 hash_collisions(void)
@@ -998,6 +1041,7 @@ hash_collisions(void)
 	ht_fini(ht);
 
 	cfg.hc_fixed_every = 2;
+	cfg.hc_initial_suffix = 1;
 	cfg.hc_rng_stream = 403;
 	ht = ht_init(&cfg, 20000);
 	ht_workload(ht, 5000);
@@ -1006,7 +1050,8 @@ hash_collisions(void)
 
 /*
  * A table constructed with no memory budget at all: every allocator is
- * disk-only from the first insert
+ * disk-only from the first insert. The table starts small, so that bucket
+ * splits run on disk too, through several cycles.
  */
 static void
 hash_no_memory(void)
@@ -1015,10 +1060,12 @@ hash_no_memory(void)
 		.hc_record_size = 64,
 		.hc_key_size = 16,
 		.hc_max_memory = 0,
+		.hc_initial_suffix = 4,
 		.hc_rng_stream = 500,
 	};
 	htest_t *ht = ht_init(&cfg, 5000);
 	ht_workload(ht, 2000);
+	VERIFY3U(ht->ht_lh->lh_hash_suffix_length, >=, 4 + 5);
 	allocator_group_t *g = hash_group(ht->ht_lh);
 	VERIFY0(g->ag_mem_current);
 	ht_fini(ht);
@@ -1053,10 +1100,11 @@ hash_no_disk(void)
 
 /*
  * Heavy memory pressure: the data alone is more than ten times the memory
- * budget. The table must stay correct throughout and its group must never
- * exceed the budget; accounting is exact, so there is no slack. The data
- * allocator, as the first eviction target, must end up fully evicted, and
- * updates must then rewrite records in place on disk.
+ * budget, and even the top-level buckets outgrow it. The table must stay
+ * correct throughout and its group must never exceed the budget; accounting
+ * is exact, so there is no slack. The data allocator, as the first eviction
+ * target, must end up fully evicted, then the overflow buckets, and updates
+ * must then rewrite records in place on disk.
  */
 static void
 hash_memory_pressure(void)
@@ -1067,7 +1115,7 @@ hash_memory_pressure(void)
 		.hc_max_memory = 2 << 20,
 		.hc_rng_stream = 600,
 	};
-	const uint64_t count = 100000;
+	const uint64_t count = 120000;
 	htest_t *ht = ht_init(&cfg, count);
 	allocator_group_t *g = hash_group(ht->ht_lh);
 	VERIFY3U(g->ag_mem_limit, ==, roundup(2 << 20, g->ag_cluster_size));
@@ -1076,8 +1124,20 @@ hash_memory_pressure(void)
 		ht_insert_range(ht, first, MIN(1024, count - first), 256);
 		(void) hash_group(ht->ht_lh);
 	}
-	VERIFY0(alloc_frontier(ht->ht_lh->lh_alloc.data));
+	/*
+	 * The overflow buckets are evicted too, and the main buckets end up
+	 * with the whole budget. They need more than that, so the bucket
+	 * array straddles its own split: later splits read and write buckets
+	 * on both sides of it.
+	 */
+	linear_hash_t *lh = ht->ht_lh;
+	allocator_t *bucket = lh->lh_alloc.bucket;
+	VERIFY0(alloc_frontier(lh->lh_alloc.data));
+	VERIFY0(alloc_frontier(lh->lh_alloc.overflow));
+	VERIFY3U(alloc_frontier(bucket), ==, g->ag_mem_limit);
 	VERIFY3U(g->ag_mem_current, ==, g->ag_mem_limit);
+	VERIFY3U(lh->lh_occupancy.top_buckets, >, alloc_fod(bucket) /
+	    g->ag_cluster_size * bucket->a_records_per_cluster);
 
 	ht_rewrite_random(ht, 20000);
 	ht_verify_all(ht);
@@ -1148,6 +1208,10 @@ random_config(selftest_rng_t *rng, uint64_t stream)
 		cfg.hc_hash_space = selftest_rng_below(rng, 2);
 	}
 
+	/* Most tables start small enough to split many times */
+	if (selftest_rng_below(rng, 4) != 0)
+		cfg.hc_initial_suffix = 1 + selftest_rng_below(rng, 7);
+
 	/*
 	 * A memory-only table can never spill, so it needs a big budget.
 	 * Other tables get budgets that are disk-only, tight, or generous,
@@ -1168,9 +1232,9 @@ random_config(selftest_rng_t *rng, uint64_t stream)
 
 /*
  * Seeded randomization of key sizes, record sizes, hash modes, collision
- * rates, and budgets, under a random mix of all four operations on present
- * and absent keys. Whatever the targeted tests miss, this net should catch
- * over many CI runs; failures replay with -s.
+ * rates, budgets, and starting table sizes, under a random mix of all four
+ * operations on present and absent keys. Whatever the targeted tests miss,
+ * this net should catch over many CI runs; failures replay with -s.
  */
 static void
 hash_stress(void)
@@ -1217,8 +1281,9 @@ hash_stress(void)
 
 /*
  * Many tables live at once, with varied configurations, used in
- * interleaved fashion, and destroyed in a scrambled order. Tables share
- * nothing, so none of this may disturb any of them.
+ * interleaved fashion, and destroyed in a scrambled order. Most start small
+ * enough to split. Tables share nothing, so none of this may disturb any
+ * of them.
  */
 #define	MANY_TABLES	16
 
@@ -1240,6 +1305,8 @@ hash_many_tables(void)
 				.hc_no_disk = (t % 3 == 2),
 				.hc_hash_mode = (t % 2) ? HM_WORD0 : HM_CITY,
 				.hc_hash_space = (t % 4 == 1) ? 50 : 0,
+				.hc_initial_suffix =
+				    (t % 4 == 3) ? 0 : 1 + t % 7,
 				.hc_rng_stream = 960 + 100 * round + t,
 			};
 			tables[t] = ht_init(&cfg, nkeys);
@@ -1290,13 +1357,20 @@ child_bad_op(void *arg)
 	(void) lh_record(lh, LH_NUM_OPS, buf);
 }
 
+/*
+ * A memory-only table that outgrows its budget. With 64-byte records and
+ * 8MB, the data allocator runs out first, and it has no one to take memory
+ * from. With a budget of one cluster, the first insert takes that cluster
+ * for its data record, and storing the top-level bucket then needs memory
+ * that the data allocator can give up only by losing the record.
+ */
 static void
 child_memory_only_overflow(void *arg)
 {
-	linear_hash_t *lh = lh_init(64, 8, 8 << 20, NULL);
+	boolean_t one_cluster = *(boolean_t *)arg;
+	linear_hash_t *lh = lh_init(64, 8, one_cluster ? 1 : 8 << 20, NULL);
 	uint8_t buf[64] = { 0 };
 
-	(void) arg;
 	for (uint64_t i = 1; i < (1ULL << 24); i++) {
 		uint64_t key = selftest_mix64(i);
 		memcpy(buf, &key, sizeof (key));
@@ -1308,7 +1382,7 @@ child_memory_only_overflow(void *arg)
  * The fatal paths, each run in a child process that must exit with the
  * expected message. A memory-only table can run out while either the data
  * allocator (which has no one to take from) or a bucket allocator (whose
- * victim has nowhere to put its data) is growing.
+ * victim has nowhere to put its data) is growing; both are tested.
  */
 static void
 hash_fatal(void)
@@ -1344,9 +1418,12 @@ hash_fatal(void)
 
 	selftest_expect_exit("invalid opcode", child_bad_op, NULL,
 	    "LH_NUM_OPS");
+	boolean_t one_cluster = B_FALSE;
 	selftest_expect_exit("memory-only overflow",
-	    child_memory_only_overflow, NULL,
-	    "memory limit exceeded|would lose data");
+	    child_memory_only_overflow, &one_cluster, "memory limit exceeded");
+	one_cluster = B_TRUE;
+	selftest_expect_exit("memory-only eviction",
+	    child_memory_only_overflow, &one_cluster, "would lose data");
 }
 
 const test_case_t selftest_hash_cases[] = {
