@@ -42,9 +42,9 @@
 #    memory limit.
 #
 # 5. Verify that the spill files really are in the -d directory and that
-#    -m controls whether they are used: on a dataset with a small quota,
-#    a disk-only run must fail for lack of space, and a run with a generous
-#    limit must succeed.
+#    -m controls whether they are used: the -d dataset's nwritten kstat
+#    must show a disk-only run writing at least a byte per WRITE record,
+#    and a run with a generous limit writing nothing.
 #
 # 6. Verify that no temporary files are left behind.
 #
@@ -56,7 +56,6 @@ function cleanup
 	destroy_dataset $POOL/recv "-r"
 	destroy_dataset $POOL/small "-r"
 	destroy_dataset $POOL/spill "-r"
-	destroy_dataset $POOL/tiny "-r"
 	rm -rf $BACKDIR/*
 }
 log_onexit cleanup
@@ -96,26 +95,31 @@ typeset -i nwrites=$(zstream dump $small | \
     awk '/Total DRR_WRITE records/ { print $5 }')
 (( nwrites > 60000 )) || log_fail "stream has only $nwrites WRITE records"
 
+#
+# Step 5 rides along: the spill dataset's nwritten kstat counts the bytes
+# each run writes to its spill files. A small quota would show the same
+# thing, but worst-case accounting of in-flight writes then makes ZFS
+# sync a txg for nearly every record, which takes minutes.
+#
+typeset -i before written
 for m in "${limits[@]}"; do
+	before=$(kstat_dataset $POOL/spill nwritten)
 	log_must eval "zstream redup -m $m -d $spill $small > $BACKDIR/small.out"
+	written=$(( $(kstat_dataset $POOL/spill nwritten) - before ))
 	log_must cmp $small $BACKDIR/small.out
+	case $m in
+	0)
+		(( written >= nwrites )) || \
+		    log_fail "-m 0 wrote only $written bytes to $spill"
+		;;
+	64M)
+		(( written == 0 )) || \
+		    log_fail "-m 64M wrote $written bytes to $spill"
+		;;
+	esac
 done
-
-#
-# Step 5: About 58 bytes of spill data per WRITE record when disk-only,
-# so several times the quota
-#
-log_must zfs create -o compression=off -o quota=1M $POOL/tiny
-typeset tiny=$(get_prop mountpoint $POOL/tiny)
-log_mustnot eval "zstream redup -m 0 -d $tiny $small > $BACKDIR/small.out \
-    2> $BACKDIR/small.err"
-log_must grep -q "out of space in $tiny" $BACKDIR/small.err
-log_must eval "zstream redup -m 64M -d $tiny $small > $BACKDIR/small.out"
-log_must cmp $small $BACKDIR/small.out
 
 # Step 6
-for dir in $spill $tiny; do
-	[[ -z $(ls -A $dir) ]] || log_fail "temporary files left in $dir"
-done
+[[ -z $(ls -A $spill) ]] || log_fail "temporary files left in $spill"
 
 log_pass "zstream redup -m and -d spill reduplication data correctly."
