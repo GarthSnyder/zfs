@@ -123,6 +123,21 @@ word0_hash(const uint64_t key[MAX_KEY_SIZE / 8])
 }
 
 /*
+ * The cluster size lh_init() should choose, restated: budgets up to 1MB get
+ * the smallest clusters that hold a data record or a bucket, and bigger
+ * ones get the default, 1MB or one page if pages are bigger.
+ */
+static size_t
+expected_lh_cluster(size_t record_size, size_t max_memory)
+{
+	size_t page = (size_t)sysconf(_SC_PAGESIZE);
+
+	if (max_memory > (1 << 20))
+		return (MAX(1 << 20, page));
+	return (roundup(MAX(record_size, sizeof (bucket_t)), page));
+}
+
+/*
  * The hash a key should have, restated independently of the table
  */
 static uint64_t
@@ -327,6 +342,8 @@ ht_init(const htest_config_t *cfg, uint64_t nkeys)
 
 	ht->ht_lh = lh_init(rs, cfg->hc_key_size, cfg->hc_max_memory,
 	    cfg->hc_no_disk ? NULL : selftest_scratch_dir());
+	VERIFY3U(ht->ht_lh->lh_alloc.data->a_group->ag_cluster_size, ==,
+	    expected_lh_cluster(rs, cfg->hc_max_memory));
 	if (cfg->hc_hash_mode == HM_WORD0)
 		ht->ht_lh->lh_hash_func = word0_hash;
 	if (cfg->hc_initial_suffix != 0)
@@ -939,23 +956,74 @@ hash_key_sizes(void)
 }
 
 /*
- * Different record sizes, from 8 bytes up to the allocator's maximum
+ * Different record sizes, from 8 bytes up to the allocator's maximum, with
+ * default clusters and with the page-sized clusters of a 1MB budget
  */
 static void
 hash_record_sizes(void)
 {
-	static const size_t sizes[] = { 8, 24, 40, 72, 512, 4096,
+	static const size_t sizes[] = { 8, 24, 40, 72, 512, 4096, 4097,
 	    MAX_RECORD_SIZE };
+	static const size_t budgets[] = { 256 << 20, 1 << 20 };
 
-	for (size_t s = 0; s < ARRAY_SIZE(sizes); s++) {
+	for (size_t b = 0; b < ARRAY_SIZE(budgets); b++) {
+		for (size_t s = 0; s < ARRAY_SIZE(sizes); s++) {
+			htest_config_t cfg = {
+				.hc_record_size = sizes[s],
+				.hc_key_size = 8,
+				.hc_max_memory = budgets[b],
+				.hc_rng_stream = 200 + 10 * b + s,
+			};
+			htest_t *ht = ht_init(&cfg, 5000);
+			ht_workload(ht, 1000);
+			ht_fini(ht);
+		}
+	}
+}
+
+/*
+ * lh_init() gives budgets of up to 1MB the smallest clusters it can, and
+ * bigger budgets the default. Either way, the allocator raises a nonzero
+ * budget to a cluster per allocator, and a zero budget stays disk-only.
+ * The values here are worked out by hand, not by expected_lh_cluster().
+ * Each table then splits through a few cycles.
+ */
+static void
+hash_cluster_size(void)
+{
+	const size_t page = (size_t)sysconf(_SC_PAGESIZE);
+	const size_t def = MAX(1 << 20, page);
+	const size_t big = MAX(page, MAX_RECORD_SIZE);
+	const struct {
+		size_t	rs;
+		size_t	mem;
+		size_t	cluster;
+		size_t	limit;
+	} cases[] = {
+		{ 64, 0, page, 0 },
+		{ 64, 1, page, 3 * page },
+		{ 64, (1 << 20) - 1, page, 1 << 20 },
+		{ 64, 1 << 20, page, 1 << 20 },
+		{ 64, (1 << 20) + 1, def, 3 * def },
+		{ 64, 3 * def + 1, def, 4 * def },
+		{ MAX_RECORD_SIZE, 1, big, 3 * big },
+		{ MAX_RECORD_SIZE, 1 << 20, big, roundup(1 << 20, big) },
+	};
+
+	for (int i = 0; i < ARRAY_SIZE(cases); i++) {
 		htest_config_t cfg = {
-			.hc_record_size = sizes[s],
+			.hc_record_size = cases[i].rs,
 			.hc_key_size = 8,
-			.hc_max_memory = 256 << 20,
-			.hc_rng_stream = 200 + s,
+			.hc_max_memory = cases[i].mem,
+			.hc_initial_suffix = 4,
+			.hc_rng_stream = 280 + i,
 		};
-		htest_t *ht = ht_init(&cfg, 5000);
-		ht_workload(ht, 1000);
+		htest_t *ht = ht_init(&cfg, 2000);
+		allocator_group_t *g = hash_group(ht->ht_lh);
+		VERIFY3U(g->ag_cluster_size, ==, cases[i].cluster);
+		VERIFY3U(g->ag_mem_limit, ==, cases[i].limit);
+		ht_workload(ht, 500);
+		VERIFY3U(ht->ht_lh->lh_hash_suffix_length, >=, 4 + 2);
 		ht_fini(ht);
 	}
 }
@@ -1100,7 +1168,8 @@ hash_no_disk(void)
 
 /*
  * Heavy memory pressure: the data alone is more than ten times the memory
- * budget, and even the top-level buckets outgrow it. The table must stay
+ * budget, and even the top-level buckets outgrow it. The 1MB budget gets
+ * page-sized clusters. The table must stay
  * correct throughout and its group must never exceed the budget; accounting
  * is exact, so there is no slack. The data allocator, as the first eviction
  * target, must end up fully evicted, then the overflow buckets, and updates
@@ -1112,13 +1181,14 @@ hash_memory_pressure(void)
 	htest_config_t cfg = {
 		.hc_record_size = 256,
 		.hc_key_size = 16,
-		.hc_max_memory = 2 << 20,
+		.hc_max_memory = 1 << 20,
 		.hc_rng_stream = 600,
 	};
 	const uint64_t count = 120000;
 	htest_t *ht = ht_init(&cfg, count);
 	allocator_group_t *g = hash_group(ht->ht_lh);
-	VERIFY3U(g->ag_mem_limit, ==, roundup(2 << 20, g->ag_cluster_size));
+	VERIFY3U(g->ag_cluster_size, ==, (size_t)sysconf(_SC_PAGESIZE));
+	VERIFY3U(g->ag_mem_limit, ==, 1 << 20);
 
 	for (uint64_t first = 0; first < count; first += 1024) {
 		ht_insert_range(ht, first, MIN(1024, count - first), 256);
@@ -1360,17 +1430,37 @@ child_bad_op(void *arg)
 /*
  * A memory-only table that outgrows its budget. With 64-byte records and
  * 8MB, the data allocator runs out first, and it has no one to take memory
- * from. With a budget of one cluster, the first insert takes that cluster
- * for its data record, and storing the top-level bucket then needs memory
- * that the data allocator can give up only by losing the record.
+ * from. The smallest budget is three page-sized clusters, one per
+ * allocator. Keys whose top-level buckets are all in the first bucket
+ * cluster, at most two to a bucket, fill the budget with data and that
+ * one bucket cluster, leaving room in the last data cluster. A key in the
+ * first bucket of the second cluster then stores its data record, but its
+ * bucket needs another cluster (within the limit, so not on the disk
+ * side), which the data allocator can give up only by losing data.
  */
 static void
 child_memory_only_overflow(void *arg)
 {
-	boolean_t one_cluster = *(boolean_t *)arg;
-	linear_hash_t *lh = lh_init(64, 8, one_cluster ? 1 : 8 << 20, NULL);
+	boolean_t minimal = *(boolean_t *)arg;
+	linear_hash_t *lh = lh_init(64, 8, minimal ? 1 : 8 << 20, NULL);
 	uint8_t buf[64] = { 0 };
 
+	if (minimal) {
+		allocator_group_t *g = lh->lh_alloc.data->a_group;
+		uint64_t nb = g->ag_cluster_size / sizeof (bucket_t);
+
+		VERIFY3U(nb, <, lh->lh_occupancy.top_buckets);
+		lh->lh_hash_func = word0_hash;
+		for (uint64_t i = 0; g->ag_mem_current < g->ag_mem_limit;
+		    i++) {
+			uint64_t key = (i << 32) | (i % nb);
+			memcpy(buf, &key, sizeof (key));
+			VERIFY3S(lh_insert(lh, buf), ==, LH_INSERTED);
+		}
+		memcpy(buf, &nb, sizeof (nb));
+		(void) lh_insert(lh, buf);
+		return;
+	}
 	for (uint64_t i = 1; i < (1ULL << 24); i++) {
 		uint64_t key = selftest_mix64(i);
 		memcpy(buf, &key, sizeof (key));
@@ -1418,12 +1508,12 @@ hash_fatal(void)
 
 	selftest_expect_exit("invalid opcode", child_bad_op, NULL,
 	    "LH_NUM_OPS");
-	boolean_t one_cluster = B_FALSE;
+	boolean_t minimal = B_FALSE;
 	selftest_expect_exit("memory-only overflow",
-	    child_memory_only_overflow, &one_cluster, "memory limit exceeded");
-	one_cluster = B_TRUE;
+	    child_memory_only_overflow, &minimal, "memory limit exceeded");
+	minimal = B_TRUE;
 	selftest_expect_exit("memory-only eviction",
-	    child_memory_only_overflow, &one_cluster, "would lose data");
+	    child_memory_only_overflow, &minimal, "would lose data");
 }
 
 const test_case_t selftest_hash_cases[] = {
@@ -1431,6 +1521,7 @@ const test_case_t selftest_hash_cases[] = {
 	{ "hash_ops",			hash_ops },
 	{ "hash_key_sizes",		hash_key_sizes },
 	{ "hash_record_sizes",		hash_record_sizes },
+	{ "hash_cluster_size",		hash_cluster_size },
 	{ "hash_splits",		hash_splits },
 	{ "hash_collisions",		hash_collisions },
 	{ "hash_no_memory",		hash_no_memory },
