@@ -1513,7 +1513,7 @@ hash_fatal(void)
 	    child_memory_only_overflow, &minimal, "memory limit exceeded");
 	minimal = B_TRUE;
 	selftest_expect_exit("memory-only eviction",
-	    child_memory_only_overflow, &minimal, "would lose data");
+	    child_memory_only_overflow, &minimal, "memory limit exceeded");
 }
 
 const test_case_t selftest_hash_cases[] = {
