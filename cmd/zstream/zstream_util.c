@@ -359,13 +359,13 @@ parse_record_specifiers(int argc, char *argv[], boolean_t accept_compression)
 	int num_parsed = 0;
 	ASSERT(record_specifiers == NULL);
 	/*
-	 * Each of the table's three allocators needs at least a cluster, even
-	 * for a few specifiers, so start from the 8MB minimum recommended in
-	 * zstream_alloc.h. Then allow 128 bytes per specifier, about 2.5 times
-	 * the measured cost of an entry.
+	 * A budget of 1MB or less gets page-sized clusters, so a 512KB base
+	 * leaves each of the table's three allocators many clusters, however
+	 * few specifiers there are. Then allow 128 bytes per specifier, about
+	 * 2.5 times the measured cost of an entry.
 	 */
 	record_specifiers = lh_init(sizeof (record_compression_t),
-	    sizeof (record_specifier_t), (8 << 20) + (size_t)argc * 128, NULL);
+	    sizeof (record_specifier_t), (1 << 19) + (size_t)argc * 128, NULL);
 	for (int i = 0; i < argc; i++) {
 		record_compression_t comp;
 		if (parse_record_specifier(argv[i], &comp, accept_compression))

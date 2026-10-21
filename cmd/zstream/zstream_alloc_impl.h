@@ -35,15 +35,13 @@ extern "C" {
 
 #include "zstream_alloc.h"
 
-#define	PAGE_CLUSTER_SIZE		(1 << 20)	/* 1MB */
-
 /*
- * All allocators are members of an allocator group, which can be a group of
- * 1. Group members share memory accounting.
+ * All allocators are members of an allocator group, which can be a group of 1.
+ * Group members share memory accounting.
  *
  * The group's page cluster size is the granularity of memory management for
- * all the group's allocators. This will generally be a static value of 1MB
- * if the system page size is not larger.
+ * all the group's allocators. It is a whole number of pages: by default,
+ * 1MB if the system page size is not larger.
  *
  * An allocator's memory-to-disk transition always falls at a page cluster
  * boundary, and the group's ag_mem_limit and ag_mem_current values are also
