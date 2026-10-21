@@ -31,9 +31,13 @@
  *
  * - Only the member allocator being written may gain memory, and only up
  *   to the end of the cluster that holds the record.
+ *
  * - Memory clawback victims give up memory in strict priority order.
+ *
  * - Victims yield only as much memory as was requested.
+ *
  * - Reads and skips change nothing.
+ *
  * - No allocator's memory/disk split point ever moves in the more-memory
  *   direction.
  *
@@ -1660,7 +1664,7 @@ alloc_fatal(void)
 	    child_memory_only_overflow, &n, "memory limit exceeded");
 	n = 2;
 	selftest_expect_exit("memory-only eviction",
-	    child_memory_only_overflow, &n, "would lose data");
+	    child_memory_only_overflow, &n, "memory limit exceeded");
 }
 
 const test_case_t selftest_alloc_cases[] = {

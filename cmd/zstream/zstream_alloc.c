@@ -247,7 +247,8 @@ static size_t
 free_memory_from(allocator_t *alloc, size_t delta_bytes)
 {
 	ASSERT(alloc != NULL && delta_bytes > 0);
-	if (alloc->a_base_addr == NULL || alloc->a_first_on_disk == 0)
+	if (alloc->a_base_addr == NULL || alloc->a_first_on_disk == 0 ||
+	    alloc->a_fd < 0)
 		return (0);
 	size_t delta = roundup(delta_bytes, alloc->a_group->ag_cluster_size);
 	delta = MIN(delta, alloc->a_writable_frontier);
