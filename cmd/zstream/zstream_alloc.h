@@ -55,6 +55,7 @@ extern "C" {
  */
 
 #define	MAX_RECORD_SIZE		(8 << 10)	/* 8KB */
+#define	DEFAULT_CLUSTER_SIZE	(1 << 20)	/* Default cluster size, 1MB */
 
 typedef uint64_t record_ix_t;
 
@@ -82,20 +83,27 @@ typedef struct {
  * allocators having functionally become disk-only. If this is not the
  * behavior you want, create multiple groups.
  *
- * - Memory is managed in page clusters of 1MB (or one page, on systems with
- *   larger pages), so 8MB is a good working minimum for mem_limit.
+ * - Memory is managed in page clusters. You can set cluster_size to 0 to
+ *   use the default cluster size, which is 1MB or one page, whichever
+ *   is larger.
  *
- * - The requested mem_limit will be rounded up to the nearest multiple of
- *   the cluster size.
+ * - If a nonzero cluster_size value is specified, it will be raised to
+ *   hold the largest record and rounded up to a multiple of the system
+ *   page size. So, you can use a size of 1 to mean "as small as possible."
+ *
+ * - A mem_limit of zero means the group is disk-only. A nonzero mem_limit
+ *   should be at least num_allocators * cluster_size; this floor is
+ *   silently enforced. The memory limit will be rounded up to the nearest
+ *   multiple of the cluster size.
  *
  * - No record size can be larger than MAX_RECORD_SIZE (8KB).
  *
- * - The returned array of allocator_t's is stable and valid until
- *   the allocator group is finalized.
+ * - The returned array of allocator_t's is stable and valid until the
+ *   allocator group is finalized.
  */
 allocator_t **
 allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
-    size_t mem_limit, const char *dir_path);
+    size_t cluster_size, size_t mem_limit, const char *dir_path);
 
 void
 allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff);

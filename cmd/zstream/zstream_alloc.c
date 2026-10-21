@@ -86,29 +86,37 @@ record_offset(allocator_t *alloc, record_ix_t rec)
 
 allocator_t **
 allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
-    size_t mem_limit, const char *dir_path)
+    size_t cluster_size, size_t mem_limit, const char *dir_path)
 {
 	if (mem_limit == 0 && dir_path == NULL)
 		errx(1, "allocator group needs either disk or memory backing");
 	if (num_allocators == 0)
 		errx(1, "invalid number of allocators: %u", num_allocators);
+	size_t max_record_size = 0;
 	for (int i = 0; i < num_allocators; i++) {
 		if (record_sizes[i] == 0 || record_sizes[i] > MAX_RECORD_SIZE)
 			errx(1, "requested allocator_t record size is invalid "
 			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
+		max_record_size = MAX(max_record_size, record_sizes[i]);
 	}
 
 	long pagesize = sysconf(_SC_PAGESIZE);
 	if (pagesize <= 0)
 		errx(1, "unable to get system page size");
-	size_t cluster_size = MAX(PAGE_CLUSTER_SIZE, (size_t)pagesize);
-	if (mem_limit > SIZE_MAX / 2 - cluster_size)
+	if (cluster_size == 0)
+		cluster_size = MAX(DEFAULT_CLUSTER_SIZE, pagesize);
+	else
+		cluster_size = roundup(MAX(MAX(cluster_size, max_record_size),
+		    pagesize), pagesize);
+	if (mem_limit != 0)
+		mem_limit = MAX(mem_limit, num_allocators * cluster_size);
+	if (mem_limit > SIZE_MAX / 2 - num_allocators * cluster_size)
 		errx(1, "requested allocator size %llu is too large",
 		    (u_longlong_t)mem_limit);
 
 	allocator_group_t *group = safe_malloc(sizeof (allocator_group_t));
 	*group = (allocator_group_t) {
-		.ag_mem_limit = P2ROUNDUP(mem_limit, cluster_size),
+		.ag_mem_limit = roundup(mem_limit, cluster_size),
 		.ag_mem_current = 0,
 		.ag_cluster_size = cluster_size,
 		/*
@@ -241,7 +249,7 @@ free_memory_from(allocator_t *alloc, size_t delta_bytes)
 	ASSERT(alloc != NULL && delta_bytes > 0);
 	if (alloc->a_base_addr == NULL || alloc->a_first_on_disk == 0)
 		return (0);
-	size_t delta = P2ROUNDUP(delta_bytes, alloc->a_group->ag_cluster_size);
+	size_t delta = roundup(delta_bytes, alloc->a_group->ag_cluster_size);
 	delta = MIN(delta, alloc->a_writable_frontier);
 	off_t eject_start = alloc->a_writable_frontier - delta;
 	off_t eject_end = alloc->a_writable_frontier;
@@ -306,7 +314,7 @@ try_make_readwrite(allocator_t *alloc, off_t end_offset)
 	if (end_offset <= alloc->a_writable_frontier)
 		return (B_TRUE);
 	allocator_group_t *group = alloc->a_group;
-	size_t needed = P2ROUNDUP(end_offset - alloc->a_writable_frontier,
+	size_t needed = roundup(end_offset - alloc->a_writable_frontier,
 	    group->ag_cluster_size);
 	size_t avail = group->ag_mem_limit - group->ag_mem_current;
 	if (needed > avail) {
