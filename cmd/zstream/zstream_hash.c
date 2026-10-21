@@ -144,8 +144,9 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 	size_t record_sizes[] = {
 		record_size, sizeof (bucket_t), sizeof (bucket_t)
 	};
+	size_t cluster_size = (max_memory <= DEFAULT_CLUSTER_SIZE) ? 1 : 0;
 	allocator_t **allocators = allocator_group_init(record_sizes, 3,
-	    max_memory, spill_dir);
+	    cluster_size, max_memory, spill_dir);
 	linear_hash_t *lh = safe_malloc(sizeof (linear_hash_t));
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
