@@ -202,7 +202,7 @@ print_redup_summary(chain_attrs_t *attrs, linear_hash_t *lh)
 	    "records\n", b.nice[0], b.nice[1], b.nice[2]);
 
 	lh_stats_t stats = lh_get_stats(lh);
-	b = nicenums(2, stats.ls_total_records, stats.ls_memory_use);
+	b = nicenums(2, stats.ls_total_records, (uint64_t)stats.ls_memory_use);
 	fprintf(stderr, "Stored %s hash table entries using %s of memory\n",
 	    b.nice[0], b.nice[1]);
 }
@@ -255,9 +255,8 @@ zstream_do_redup(int argc, char *argv[])
 	};
 	zstream_chain_exec(redup_chain, &attrs);
 
-	if (attrs.ca_command_opts & CA_VERBOSE) {
+	if (attrs.ca_command_opts & CA_VERBOSE)
 		print_redup_summary(&attrs, context.rc_hash);
-	}
 
 	fclose(context.rc_fp);
 	lh_fini(context.rc_hash);

@@ -71,7 +71,7 @@ typeset spill=$(get_prop mountpoint $POOL/spill)
 # Steps 1 and 2: a real dedup stream
 typeset dedup=$BACKDIR/dedup.zsend
 log_must eval "bzcat < $rsend/dedup.zsend.bz2 > $dedup"
-log_must eval "zstream redup $dedup > $BACKDIR/dedup.ref"
+log_must eval "zstream redup -d $spill $dedup > $BACKDIR/dedup.ref"
 for m in "${limits[@]}"; do
 	log_must eval "zstream redup -m $m -d $spill $dedup > $BACKDIR/dedup.out"
 	log_must cmp $BACKDIR/dedup.ref $BACKDIR/dedup.out

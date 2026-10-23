@@ -17,7 +17,6 @@
 #ifndef	_ZSTREAM_UTIL_H
 #define	_ZSTREAM_UTIL_H
 
-#include <limits.h>
 #ifdef	__cplusplus
 extern "C" {
 #endif

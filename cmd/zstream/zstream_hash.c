@@ -254,14 +254,15 @@ entry_iterator_next(entry_iterator_t *iter, boolean_t extend)
 		read_bucket(iter);
 	} else if (iter->ei_entry_ix == ENTRIES_PER_BUCKET - 1) {
 		/* Moving past the last entry in the current bucket... */
-		save_bucket(iter, B_FALSE);
 		if (iter->ei_bucket.b_overflow != 0) {
 			/* ...but there are more buckets in the chain */
+			save_bucket(iter, B_FALSE);
 			iter->ei_in_overflow = B_TRUE;
 			iter->ei_bucket_ix = iter->ei_bucket.b_overflow;
 			read_bucket(iter);
 		} else if (!extend) {
 			/* ...or not */
+			save_bucket(iter, B_FALSE);
 			return (NULL);
 		} else {
 			/* ...or not, but extend by adding an overflow bucket */
