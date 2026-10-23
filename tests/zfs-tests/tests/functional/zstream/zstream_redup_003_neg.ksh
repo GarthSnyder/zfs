@@ -29,8 +29,8 @@
 #    large to represent, must be rejected with an error.
 #
 # 2. A -d directory that does not exist, is not a directory, or is not
-#    writable must be rejected at startup, even for a stream that is far
-#    too small to spill.
+#    writable must be rejected at startup with an error naming it, even
+#    for a stream that is too small to spill.
 #
 # 3. Valid arguments must still work.
 #
@@ -60,7 +60,8 @@ log_must touch $BACKDIR/file
 log_must zfs create -o readonly=on $POOL/rofs
 typeset rofs=$(get_prop mountpoint $POOL/rofs)
 for dir in $BACKDIR/nonexistent $BACKDIR/file $rofs; do
-	log_mustnot eval "zstream redup -d $dir $stream > $out"
+	log_mustnot eval "zstream redup -d $dir $stream > $out 2> $errs"
+	log_must grep -q "unable to create temp file in $dir" $errs
 done
 
 log_must eval "zstream redup -m 32M -d $BACKDIR $stream > $out"

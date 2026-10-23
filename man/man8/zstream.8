@@ -320,7 +320,10 @@ as in
 or
 .Sy 1.5G .
 A value of 0 places all reduplication information on disk.
-The limit is rounded up to a whole number of megabytes.
+A nonzero limit of 1 MiB or less is rounded up to a whole number of pages,
+with a minimum of three pages.
+A larger limit is rounded up to a whole number of mebibytes,
+with a minimum of 3 MiB.
 By default,
 .Nm zstream Cm redup
 uses up to 30% of physical memory, but no less than 128 MiB.
