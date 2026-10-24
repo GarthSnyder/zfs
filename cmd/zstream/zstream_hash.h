@@ -25,13 +25,6 @@ extern "C" {
 #include <stddef.h>
 #include <sys/stdtypes.h>
 
-#define	MAX_KEY_SIZE 32
-
-#define	lh_find(lh, buff)	lh_record((lh), LH_FIND, (buff))
-#define	lh_insert(lh, buff)	lh_record((lh), LH_INSERT, (buff))
-#define	lh_update(lh, buff)	lh_record((lh), LH_UPDATE, (buff))
-#define	lh_upsert(lh, buff)	lh_record((lh), LH_UPSERT, (buff))
-
 /*
  * This module implements a linear hash table [Litwin 1980]. It runs on top
  * of allocator_t, which allows portions of the hash table to spill from
@@ -47,6 +40,13 @@ extern "C" {
  *
  * A linear_hash_t must not be used by more than one thread at a time.
  */
+
+#define	MAX_KEY_SIZE 32
+
+#define	lh_find(lh, buff)	lh_record((lh), LH_FIND, (buff))
+#define	lh_insert(lh, buff)	lh_record((lh), LH_INSERT, (buff))
+#define	lh_update(lh, buff)	lh_record((lh), LH_UPDATE, (buff))
+#define	lh_upsert(lh, buff)	lh_record((lh), LH_UPSERT, (buff))
 
 typedef struct linear_hash linear_hash_t;
 
