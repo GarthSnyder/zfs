@@ -427,16 +427,18 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 	/* Zero-pad the key to MAX_KEY_SIZE and calculate hash */
 	uint8_t *buff = buff_in;
 	uint64_t key[MAX_KEY_SIZE / sizeof (uint64_t)] = {0};
-	uint8_t scratch[lh->lh_record_size];
 	size_t key_size = lh->lh_key_size;
 	memcpy((uint8_t *)key, buff, key_size);
 	uint64_t hash = lh->lh_hash_func(key);
 
+	/* Set up to walk the bucket chain */
+	bucket_entry_t *entry;
+	uint8_t scratch[lh->lh_record_size];
 	boolean_t insert = op == LH_INSERT || op == LH_UPSERT;
 	boolean_t update = op == LH_UPDATE || op == LH_UPSERT;
-
-	bucket_entry_t *entry;
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
+
+	/* Walk */
 	while ((entry = entry_iterator_next(&iter, insert))) {
 		if (entry->be_record == 0) {
 			/* End of chain, empty slot */
@@ -458,6 +460,7 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 			}
 		}
 	}
+
 	/* Only a non-extending walk can run off the end of the chain */
 	VERIFY(!insert);
 	return (LH_NOT_FOUND);
