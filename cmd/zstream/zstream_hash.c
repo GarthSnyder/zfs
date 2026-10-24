@@ -162,11 +162,7 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 		    .top_buckets = top_buckets,
 		    .max_top_entries = MAX_TOP_ENTRIES(top_buckets),
 		},
-		.lh_freestack = {
-			.size = FREESTACK_INITIAL_SIZE,
-			.buckets = safe_malloc(FREESTACK_INITIAL_SIZE *
-			    sizeof (record_ix_t))
-		}
+		.lh_freeheap = minheap_init(FREEHEAP_INITIAL_SIZE)
 	};
 	/* The index 0 is a sentinel value for these allocators */
 	allocator_skip(lh->lh_alloc.data);
@@ -175,45 +171,28 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 }
 
 /*
- * Add an overflow bucket to the free stack for recycling. This function and
- * the two below it are the internal API for managing the free stack.
- */
-static inline void
-freestack_push_bucket(linear_hash_t *lh, record_ix_t bucket)
-{
-	lh_freestack_t *stack = &lh->lh_freestack;
-	if (stack->head >= stack->size) {
-		stack->size *= 2;
-		stack->buckets = safe_realloc(stack->buckets,
-		    stack->size * sizeof (record_ix_t));
-	}
-	stack->buckets[stack->head++] = bucket;
-}
-
-/*
- * Recycle or create an overflow bucket. No guarantees are made about the
- * contents of the bucket.
+ * Recycle or create an overflow bucket. A recycled bucket from the free
+ * heap is always the lowest-numbered one available. No guarantees are made
+ * about the contents of the bucket.
  */
 static inline record_ix_t
 find_overflow_bucket(linear_hash_t *lh)
 {
-	lh_freestack_t *stack = &lh->lh_freestack;
-	if (stack->head > 0) {
-		stack->head--;
-		return (stack->buckets[stack->head]);
-	}
+	record_ix_t ix = minheap_pop(&lh->lh_freeheap);
+	if (ix != 0)
+		return (ix);
 	return (allocator_skip(lh->lh_alloc.overflow));
 }
 
 /*
- * Put the named overflow bucket and all its descendants on the free stack.
+ * Put the named overflow bucket and all its descendants on the free heap.
  */
 static inline void
 free_overflow_chain(linear_hash_t *lh, record_ix_t ix)
 {
 	bucket_t buff;
 	while (ix != 0) {
-		freestack_push_bucket(lh, ix);
+		minheap_push(&lh->lh_freeheap, ix);
 		allocator_retrieve(lh->lh_alloc.overflow, ix, &buff);
 		ix = buff.b_overflow;
 	}
@@ -319,7 +298,7 @@ bucket_for_hash(linear_hash_t *lh, uint64_t hash)
  * all inactive entries are zeroed out. The first entry with a record number
  * of 0 marks the end of entries. After partitioning a bucket, we have to
  * zero out any tail. We also remove from the source chain any now-unused
- * overflow buckets and add those buckets to the free stack for reuse.
+ * overflow buckets and add those buckets to the free heap for reuse.
  */
 static void
 split_bucket(linear_hash_t *lh)
@@ -386,7 +365,7 @@ split_bucket(linear_hash_t *lh)
 	 * iteration if no records stayed in the source bucket.
 	 *
 	 * If there's a following overflow bucket, that bucket and its
-	 * descendants get moved to the free stack.
+	 * descendants get moved to the free heap.
 	 */
 	if (stay.ei_entry_ix == -1) {
 		bucket_entry_t *bent = entry_iterator_next(&stay, B_FALSE);
@@ -505,7 +484,6 @@ lh_fini(linear_hash_t *lh)
 	VERIFY(lh != NULL);
 	if (lh->lh_alloc.data != NULL)
 		allocator_group_fini(lh->lh_alloc.data);
-	if (lh->lh_freestack.buckets != NULL)
-		free(lh->lh_freestack.buckets);
+	minheap_fini(&lh->lh_freeheap);
 	free(lh);
 }
