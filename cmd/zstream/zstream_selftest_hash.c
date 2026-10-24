@@ -48,9 +48,12 @@
  * buckets, then main buckets) while the table remains fully correct.
  * Group state is read through zstream_alloc_impl.h.
  *
- * The fatal paths (bad parameters, a bad opcode, and a memory-only table
- * that outgrows its budget) run in child processes that must exit with the
- * expected message.
+ * The fatal paths (bad parameters, a bad opcode, a free heap given bucket
+ * 0, and a memory-only table that outgrows its budget) run in child
+ * processes that must exit with the expected message.
+ *
+ * The free heap of overflow buckets is also tested on its own, through
+ * minheap_push() and minheap_pop().
  */
 
 #include <cityhash.h>
@@ -495,6 +498,38 @@ ht_verify_all(htest_t *ht)
 }
 
 /*
+ * Count (and describe) violations of the free heap's shape: more elements
+ * than slots, a zero index, or an element larger than one of its children.
+ * Pops take the root, so any of these can hand out the wrong bucket.
+ */
+static uint64_t
+heap_problems(const minheap_t *heap)
+{
+	uint64_t problems = 0;
+
+	if (heap->count > heap->size) {
+		warnx("free heap holds %llu buckets in %llu slots",
+		    (u_longlong_t)heap->count, (u_longlong_t)heap->size);
+		return (1);
+	}
+	for (uint64_t i = 0; i < heap->count; i++) {
+		if (heap->buckets[i] == 0) {
+			warnx("free heap slot %llu holds bucket 0",
+			    (u_longlong_t)i);
+			problems++;
+		}
+		if (i > 0 && heap->buckets[(i - 1) / 2] > heap->buckets[i]) {
+			warnx("free heap slot %llu (bucket %llu) is smaller "
+			    "than its parent (bucket %llu)", (u_longlong_t)i,
+			    (u_longlong_t)heap->buckets[i],
+			    (u_longlong_t)heap->buckets[(i - 1) / 2]);
+			problems++;
+		}
+	}
+	return (problems);
+}
+
+/*
  * Structural audit of an entire table. Walks every top-level bucket and its
  * overflow chain directly through the allocators, and checks that:
  *
@@ -519,7 +554,9 @@ ht_verify_all(htest_t *ht)
  *   silently stops the table from growing.
  *
  * - Every overflow bucket ever allocated is either in exactly one chain or
- *   on the free stack, exactly once.
+ *   on the free heap, exactly once.
+ *
+ * - The free heap has the min-heap shape (see heap_problems()).
  */
 static void
 ht_validate(htest_t *ht)
@@ -627,8 +664,9 @@ ht_validate(htest_t *ht)
 		}
 	}
 
-	for (uint64_t i = 0; i < lh->lh_freestack.head; i++) {
-		record_ix_t ix = lh->lh_freestack.buckets[i];
+	problems += heap_problems(&lh->lh_freeheap);
+	for (uint64_t i = 0; i < lh->lh_freeheap.count; i++) {
+		record_ix_t ix = lh->lh_freeheap.buckets[i];
 		if (ix == 0 || ix >= novf || ovf_seen[ix]++ != 0) {
 			warnx("free overflow bucket %llu is invalid, linked, "
 			    "or free twice", (u_longlong_t)ix);
@@ -1055,10 +1093,311 @@ hash_splits(void)
 
 	/*
 	 * Splits free overflow buckets faster than new chains reuse them, so
-	 * the free stack must have outgrown its initial size.
+	 * the free heap must have outgrown its initial size.
 	 */
-	VERIFY3U(lh->lh_freestack.size, >, FREESTACK_INITIAL_SIZE);
+	VERIFY3U(lh->lh_freeheap.size, >, FREEHEAP_INITIAL_SIZE);
 	ht_fini(ht);
+}
+
+/*
+ * A free heap and a model of its contents: which buckets in [1, hm_range)
+ * it holds
+ */
+typedef struct {
+	minheap_t	hm_heap;
+	uint8_t		*hm_present;	/* Indexed by bucket */
+	uint64_t	hm_range;
+	uint64_t	hm_count;
+} heap_model_t;
+
+static void
+hm_init(heap_model_t *hm, uint64_t initial_size, uint64_t range)
+{
+	*hm = (heap_model_t) {
+		.hm_heap = {
+			.size = initial_size,
+			.buckets = safe_malloc(initial_size *
+			    sizeof (record_ix_t)),
+		},
+		.hm_present = safe_calloc(range),
+		.hm_range = range,
+	};
+}
+
+static void
+hm_fini(heap_model_t *hm)
+{
+	VERIFY0(hm->hm_count);
+	free(hm->hm_heap.buckets);
+	free(hm->hm_present);
+}
+
+/*
+ * Push a bucket the heap doesn't hold. The heap must double its allocation
+ * exactly when it is already full, and keep its shape.
+ */
+static void
+hm_push(heap_model_t *hm, record_ix_t ix)
+{
+	minheap_t *heap = &hm->hm_heap;
+	uint64_t size = heap->size;
+
+	VERIFY(ix > 0 && ix < hm->hm_range && !hm->hm_present[ix]);
+	minheap_push(heap, ix);
+	hm->hm_present[ix] = 1;
+	hm->hm_count++;
+	VERIFY3U(heap->count, ==, hm->hm_count);
+	VERIFY3U(heap->size, ==, (hm->hm_count > size) ? 2 * size : size);
+	VERIFY0(heap_problems(heap));
+}
+
+/*
+ * Pop, which must return the smallest bucket the heap holds, or 0 if it is
+ * empty. The allocation never shrinks.
+ */
+static record_ix_t
+hm_pop(heap_model_t *hm)
+{
+	minheap_t *heap = &hm->hm_heap;
+	uint64_t size = heap->size;
+	record_ix_t want = 0;
+
+	for (record_ix_t ix = 1; hm->hm_count > 0 && want == 0; ix++) {
+		if (hm->hm_present[ix])
+			want = ix;
+	}
+	record_ix_t got = minheap_pop(heap);
+	if (got != want) {
+		errx(1, "free heap popped bucket %llu, expected %llu",
+		    (u_longlong_t)got, (u_longlong_t)want);
+	}
+	if (want != 0) {
+		hm->hm_present[want] = 0;
+		hm->hm_count--;
+	}
+	VERIFY3U(heap->count, ==, hm->hm_count);
+	VERIFY3U(heap->size, ==, size);
+	VERIFY0(heap_problems(heap));
+	return (got);
+}
+
+/*
+ * Pop everything (necessarily in ascending order), then pop the empty heap
+ */
+static void
+hm_drain(heap_model_t *hm)
+{
+	while (hm->hm_count > 0)
+		(void) hm_pop(hm);
+	VERIFY0(hm_pop(hm));
+}
+
+/*
+ * The free heap on its own, against the model: pushes in ascending,
+ * descending and shuffled order, each drained, then random interleavings
+ * of pushes and pops that grow and shrink the heap. Every step checks the
+ * popped bucket, the count, the allocation and the heap's shape.
+ */
+static void
+heap_alone(uint64_t initial_size, uint64_t stream)
+{
+	const uint64_t range = 3000;
+	record_ix_t *order = safe_malloc((range - 1) * sizeof (record_ix_t));
+	heap_model_t hm;
+	selftest_rng_t rng;
+
+	selftest_rng_init(&rng, stream);
+	hm_init(&hm, initial_size, range);
+	VERIFY0(hm_pop(&hm));
+
+	for (int pass = 0; pass < 3; pass++) {
+		for (uint64_t i = 0; i < range - 1; i++)
+			order[i] = (pass == 1) ? range - 1 - i : i + 1;
+		for (uint64_t i = range - 2; pass == 2 && i > 0; i--) {
+			uint64_t j = selftest_rng_below(&rng, i + 1);
+			record_ix_t t = order[i];
+			order[i] = order[j];
+			order[j] = t;
+		}
+		for (uint64_t i = 0; i < range - 1; i++)
+			hm_push(&hm, order[i]);
+		hm_drain(&hm);
+	}
+
+	for (int phase = 0; phase < 4; phase++) {
+		uint64_t push_percent = (phase % 2 == 0) ? 70 : 30;
+		for (int op = 0; op < 5000; op++) {
+			record_ix_t ix = 1 +
+			    selftest_rng_below(&rng, range - 1);
+			if (selftest_rng_below(&rng, 100) < push_percent &&
+			    !hm.hm_present[ix])
+				hm_push(&hm, ix);
+			else
+				(void) hm_pop(&hm);
+		}
+	}
+	hm_drain(&hm);
+	hm_fini(&hm);
+	free(order);
+}
+
+/*
+ * The last overflow bucket in top-level bucket b's chain, or 0 if it has
+ * no overflow buckets
+ */
+static record_ix_t
+chain_tail(linear_hash_t *lh, uint64_t b)
+{
+	bucket_t bucket;
+	record_ix_t tail = 0;
+
+	allocator_retrieve(lh->lh_alloc.bucket, b, &bucket);
+	while (bucket.b_overflow != 0) {
+		tail = bucket.b_overflow;
+		allocator_retrieve(lh->lh_alloc.overflow, tail, &bucket);
+	}
+	return (tail);
+}
+
+/*
+ * Insert key number n, which must land in an overflow bucket of top-level
+ * bucket b's chain, so that the insert can't split anything. If it links
+ * a new overflow bucket to the chain, that must be the smallest free one
+ * (found by scanning the heap, not by trusting its root), or a fresh one
+ * if none was free.
+ */
+static void
+insert_checking_reuse(htest_t *ht, uint64_t n, uint64_t b)
+{
+	linear_hash_t *lh = ht->ht_lh;
+	minheap_t *heap = &lh->lh_freeheap;
+	uint64_t count = heap->count;
+	uint64_t top_entries = lh->lh_occupancy.top_entries;
+	record_ix_t fresh = lh->lh_alloc.overflow->a_count;
+	record_ix_t tail = chain_tail(lh, b);
+	record_ix_t min = 0;
+
+	for (uint64_t i = 0; i < count; i++) {
+		if (min == 0 || heap->buckets[i] < min)
+			min = heap->buckets[i];
+	}
+	VERIFY3S(ht_op(ht, LH_INSERT, n), ==, LH_INSERTED);
+	VERIFY3U(lh->lh_occupancy.top_entries, ==, top_entries);
+
+	record_ix_t new_tail = chain_tail(lh, b);
+	if (new_tail == tail) {
+		VERIFY3U(heap->count, ==, count);
+		VERIFY3U(lh->lh_alloc.overflow->a_count, ==, fresh);
+	} else if (count > 0) {
+		if (new_tail != min) {
+			errx(1, "chain %llu reused overflow bucket %llu, but "
+			    "%llu was free", (u_longlong_t)b,
+			    (u_longlong_t)new_tail, (u_longlong_t)min);
+		}
+		VERIFY3U(heap->count, ==, count - 1);
+		VERIFY3U(lh->lh_alloc.overflow->a_count, ==, fresh);
+		for (uint64_t i = 0; i < heap->count; i++)
+			VERIFY3U(heap->buckets[i], !=, new_tail);
+	} else {
+		VERIFY3U(new_tail, ==, fresh);
+		VERIFY3U(lh->lh_alloc.overflow->a_count, ==, fresh + 1);
+	}
+	VERIFY0(heap_problems(heap));
+}
+
+/*
+ * The free heap through the table, with keys placed by word0_hash(). Keys
+ * that all hash to 6 build a chain of nfree full overflow buckets in
+ * bucket 0 of a two-bucket table. Keys hashing to 1 then fill bucket 1
+ * until bucket 0 splits, and the whole chain moves to bucket 2, freeing
+ * buckets 1 to nfree. Extending the moved chain must reuse them smallest
+ * first; a stack would hand out nfree first.
+ *
+ * Filler keys then drive the table on until bucket 2 splits too. Its keys
+ * all move to bucket 6, freeing a chain whose buckets are out of order
+ * (nfree + 1 to 2 * nfree, then 1 to nfree / 2). Extending the new chain
+ * must again reuse buckets smallest first, and then, once none are free,
+ * allocate fresh ones. Fillers never hash to 2 mod 4, so that they stay
+ * out of the chain that moves.
+ */
+static void
+heap_in_table(void)
+{
+	htest_config_t cfg = {
+		.hc_record_size = 32,
+		.hc_key_size = 16,
+		.hc_max_memory = 16 << 20,
+		.hc_hash_mode = HM_WORD0,
+		.hc_initial_suffix = 1,
+		.hc_rng_stream = 320,
+	};
+	const uint64_t nfree = 40;
+	htest_t *ht = ht_init(&cfg, 2000);
+	linear_hash_t *lh = ht->ht_lh;
+	minheap_t *heap = &lh->lh_freeheap;
+	uint64_t n = 0;
+
+	VERIFY3U(heap->size, ==, FREEHEAP_INITIAL_SIZE);
+	VERIFY0(heap->count);
+
+	for (; n < (nfree + 1) * ENTRIES_PER_BUCKET; n++) {
+		ht->ht_hashes[n] = 6;
+		VERIFY3S(ht_op(ht, LH_INSERT, n), ==, LH_INSERTED);
+	}
+	VERIFY0(lh->lh_split_pointer);
+	VERIFY3U(chain_tail(lh, 0), ==, nfree);
+
+	while (lh->lh_split_pointer == 0) {
+		ht->ht_hashes[n] = 1;
+		VERIFY3S(ht_op(ht, LH_INSERT, n++), ==, LH_INSERTED);
+	}
+	VERIFY3U(lh->lh_hash_suffix_length, ==, 1);
+	VERIFY0(chain_tail(lh, 0));
+	VERIFY3U(chain_tail(lh, 2), ==, 2 * nfree);
+	VERIFY3U(heap->count, ==, nfree);
+	ht_validate(ht);
+
+	for (uint64_t i = 0; i < nfree / 2 * ENTRIES_PER_BUCKET; i++) {
+		ht->ht_hashes[n] = 6;
+		insert_checking_reuse(ht, n++, 2);
+	}
+	VERIFY3U(chain_tail(lh, 2), ==, nfree / 2);
+	VERIFY3U(heap->count, ==, nfree / 2);
+
+	while (lh->lh_hash_suffix_length < 2 ||
+	    (lh->lh_hash_suffix_length == 2 && lh->lh_split_pointer <= 2)) {
+		uint64_t h = selftest_rng_next(&ht->ht_rng);
+		ht->ht_hashes[n] = ((h & 3) == 2) ? h ^ 1 : h;
+		VERIFY3S(ht_op(ht, LH_INSERT, n++), ==, LH_INSERTED);
+	}
+	VERIFY3U(lh->lh_hash_suffix_length, ==, 2);
+	VERIFY0(chain_tail(lh, 2));
+	VERIFY3U(chain_tail(lh, 6), !=, 0);
+	VERIFY3U(heap->count, >=, nfree + nfree / 2);
+	ht_validate(ht);
+
+	for (uint64_t i = (heap->count + 5) * ENTRIES_PER_BUCKET; i > 0; i--) {
+		ht->ht_hashes[n] = 6;
+		insert_checking_reuse(ht, n++, 6);
+	}
+	VERIFY0(heap->count);
+
+	ht_verify_all(ht);
+	ht_validate(ht);
+	ht_fini(ht);
+}
+
+/*
+ * The free heap of overflow buckets, on its own (from initial sizes of 1,
+ * which doubles through every power of two, and of FREEHEAP_INITIAL_SIZE)
+ * and through the table
+ */
+static void
+hash_free_heap(void)
+{
+	heap_alone(1, 310);
+	heap_alone(FREEHEAP_INITIAL_SIZE, 311);
+	heap_in_table();
 }
 
 /*
@@ -1427,6 +1766,14 @@ child_bad_op(void *arg)
 	(void) lh_record(lh, LH_NUM_OPS, buf);
 }
 
+static void
+child_heap_push_zero(void *arg)
+{
+	(void) arg;
+	minheap_t heap = minheap_init(1);
+	minheap_push(&heap, 0);
+}
+
 /*
  * A memory-only table that outgrows its budget. With 64-byte records and
  * 8MB, the data allocator runs out first, and it has no one to take memory
@@ -1508,6 +1855,8 @@ hash_fatal(void)
 
 	selftest_expect_exit("invalid opcode", child_bad_op, NULL,
 	    "LH_NUM_OPS");
+	selftest_expect_exit("free bucket 0", child_heap_push_zero, NULL,
+	    "VERIFY3U(bucket, !=, 0)");
 	boolean_t minimal = B_FALSE;
 	selftest_expect_exit("memory-only overflow",
 	    child_memory_only_overflow, &minimal, "memory limit exceeded");
@@ -1523,6 +1872,7 @@ const test_case_t selftest_hash_cases[] = {
 	{ "hash_record_sizes",		hash_record_sizes },
 	{ "hash_cluster_size",		hash_cluster_size },
 	{ "hash_splits",		hash_splits },
+	{ "hash_free_heap",		hash_free_heap },
 	{ "hash_collisions",		hash_collisions },
 	{ "hash_no_memory",		hash_no_memory },
 	{ "hash_no_disk",		hash_no_disk },
