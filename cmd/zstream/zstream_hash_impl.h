@@ -32,9 +32,10 @@ extern "C" {
 
 #include "zstream_alloc.h"
 #include "zstream_hash.h"
+#include "zstream_minheap.h"
 
 #define	ENTRIES_PER_BUCKET		6
-#define	FREESTACK_INITIAL_SIZE		64  /* Small -> better test coverage */
+#define	FREEHEAP_INITIAL_SIZE		64  /* Small -> better test coverage */
 
 /*
  * Entry in a bucket: hash value + locator to data
@@ -87,16 +88,6 @@ typedef struct {
 } lh_occupancy_t;
 
 /*
- * Overflow free list. On average, bucket splits relocate half the chain's
- * entries, potentially freeing up one or more overflow buckets for reuse.
- */
-typedef struct {
-	uint64_t	size;
-	uint64_t	head;
-	record_ix_t	*buckets;
-} lh_freestack_t;
-
-/*
  * Reduce a 32-byte key (zero-padded if necessary) to a 64-bit hash value.
  * lh_init() uses CityHash by default. Selftests replace the hash function
  * to control hash values, which is safe only before the first record
@@ -113,7 +104,7 @@ struct linear_hash {
 	unsigned int	lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
 	lh_occupancy_t	lh_occupancy;		  /* Occupancy */
-	lh_freestack_t	lh_freestack;		  /* Available overflow bkts */
+	minheap_t	lh_freeheap;		  /* Available overflow bkts */
 };
 
 /*
