@@ -15,7 +15,7 @@
  */
 
 /*
- * Self-tests for linear_hash_t.
+ * Self-tests for linear_hash_t and minheap_t.
  *
  * A linear_hash_t is a map from fixed-size keys, which are prefixes of the
  * records themselves, to records. The tests run tables against a shadow
@@ -1114,11 +1114,7 @@ static void
 hm_init(heap_model_t *hm, uint64_t initial_size, uint64_t range)
 {
 	*hm = (heap_model_t) {
-		.hm_heap = {
-			.size = initial_size,
-			.buckets = safe_malloc(initial_size *
-			    sizeof (record_ix_t)),
-		},
+		.hm_heap = minheap_init(initial_size),
 		.hm_present = safe_calloc(range),
 		.hm_range = range,
 	};
@@ -1128,7 +1124,7 @@ static void
 hm_fini(heap_model_t *hm)
 {
 	VERIFY0(hm->hm_count);
-	free(hm->hm_heap.buckets);
+	minheap_fini(&hm->hm_heap);
 	free(hm->hm_present);
 }
 

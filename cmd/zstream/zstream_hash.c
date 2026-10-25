@@ -120,7 +120,7 @@
 #define	BUCKET_ENTRY(iter) (&(iter)->ei_bucket.b_entries[(iter)->ei_entry_ix])
 
 static uint64_t
-lh_hash_function(const uint64_t key[MAX_KEY_SIZE / 8])
+hash_function(const uint64_t key[MAX_KEY_SIZE / sizeof (uint64_t)])
 {
 	return (cityhash4(key[0], key[1], key[2], key[3]));
 }
@@ -151,7 +151,7 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 	*lh = (linear_hash_t) {
 		.lh_record_size = record_size,
 		.lh_key_size = key_size,
-		.lh_hash_func = lh_hash_function,
+		.lh_hash_func = hash_function,
 		.lh_alloc = {
 		    .data = allocators[0],
 		    .overflow = allocators[1],
@@ -424,6 +424,9 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 {
 	VERIFY(lh != NULL && buff_in != NULL && op < LH_NUM_OPS);
 
+	boolean_t insert = op == LH_INSERT || op == LH_UPSERT;
+	boolean_t update = op == LH_UPDATE || op == LH_UPSERT;
+
 	/* Zero-pad the key to MAX_KEY_SIZE and calculate hash */
 	uint8_t *buff = buff_in;
 	uint64_t key[MAX_KEY_SIZE / sizeof (uint64_t)] = {0};
@@ -434,8 +437,6 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 	/* Set up to walk the bucket chain */
 	bucket_entry_t *entry;
 	uint8_t scratch[lh->lh_record_size];
-	boolean_t insert = op == LH_INSERT || op == LH_UPSERT;
-	boolean_t update = op == LH_UPDATE || op == LH_UPSERT;
 	entry_iterator_t iter = ITER_BUCKET(lh, bucket_for_hash(lh, hash));
 
 	/* Walk */
@@ -460,7 +461,6 @@ lh_record(linear_hash_t *lh, lh_op_t op, void *buff_in)
 			}
 		}
 	}
-
 	/* Only a non-extending walk can run off the end of the chain */
 	VERIFY(!insert);
 	return (LH_NOT_FOUND);
