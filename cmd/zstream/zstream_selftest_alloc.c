@@ -325,7 +325,7 @@ check_transition(shadow_group_t *sg, const group_snapshot_t *before,
 		highest_victim = m;
 	}
 
-	/* Victims are drained strictly in priority order */
+	/* Victims are drained in priority order */
 	for (int m = 0; m < highest_victim; m++)
 		VERIFY0(FRONTIER(sg, m));
 

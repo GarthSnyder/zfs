@@ -27,9 +27,11 @@ zstream_SOURCES = \
 	%D%/zstream_hash_impl.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
-	%D%/zstream_minheap.h \
 	%D%/zstream_minheap.c \
+	%D%/zstream_minheap.h \
 	%D%/zstream_modules.h \
+	%D%/zstream_queue.c \
+	%D%/zstream_queue.h \
 	%D%/zstream_raw.c \
 	%D%/zstream_recompress.c \
 	%D%/zstream_recompress.h \
@@ -40,8 +42,6 @@ zstream_SOURCES = \
 	%D%/zstream_selftest_hash.c \
 	%D%/zstream_selftest_queue.c \
 	%D%/zstream_token.c \
-	%D%/zstream_queue.c \
-	%D%/zstream_queue.h \
 	%D%/zstream_util.c \
 	%D%/zstream_util.h \
 	%D%/zstream_validate.c \
