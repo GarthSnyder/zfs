@@ -489,13 +489,13 @@ compress_buffer(uint8_t *inbuff, size_t inbuff_size,
 nicebuff_t
 nicenums(int count, ...)
 {
-	VERIFY(count <= MAX_NICENUMS);
-	nicebuff_t buff;
+	VERIFY(count > 0 && count <= MAX_NICENUMS);
+	nicebuff_t buff = {0};
 	va_list ap;
 	va_start(ap, count);
 	for (int i = 0; i < count; i++) {
 		uint64_t num = va_arg(ap, uint64_t);
-		zfs_nicenum(num, buff.nice[i], NICENUM_BUFF_SIZE);
+		zfs_nicenum(num, &buff.nice[i][0], NICENUM_BUFF_SIZE);
 	}
 	va_end(ap);
 	return (buff);

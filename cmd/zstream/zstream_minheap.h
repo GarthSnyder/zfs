@@ -26,14 +26,14 @@ extern "C" {
 /*
  * This API implements a simple binary min-heap for record_ix_t's. It's used
  * to track linear_hash_t overflow buckets for reuse. (These are the only
- * records that are ever recycled).
+ * records that are ever recycled.)
  *
  * On average, bucket splits relocate half the chain's entries, potentially
  * moving one or more overflow buckets to the free list.
  *
  * It's a heap rather than some other structure because lower-numbered
  * buckets are more likely to be stored in memory rather than on disk. When
- * recycling, we always want the lowest available bucket.
+ * recycling, we always want to use the lowest available bucket.
  */
 
 typedef struct {

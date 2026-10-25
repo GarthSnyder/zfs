@@ -23,6 +23,7 @@
 minheap_t
 minheap_init(uint64_t initial_size)
 {
+	VERIFY3U(initial_size, >, 0);
 	minheap_t heap = {
 		.size = initial_size,
 		.buckets = safe_malloc(initial_size * sizeof (record_ix_t))
@@ -66,7 +67,7 @@ minheap_pop(minheap_t *heap)
 {
 	switch (heap->count) {
 		case 0:	return (0);
-		case 1: return (heap->buckets[--heap->count]);
+		case 1:	return (heap->buckets[--heap->count]);
 	}
 	record_ix_t min = heap->buckets[0];
 	record_ix_t last = heap->buckets[--heap->count];
@@ -87,7 +88,6 @@ minheap_pop(minheap_t *heap)
 void
 minheap_fini(minheap_t *heap)
 {
-	VERIFY3P(heap, !=, NULL);
-	if (heap->buckets != NULL)
-		free(heap->buckets);
+	VERIFY(heap != NULL && heap->buckets != NULL);
+	free(heap->buckets);
 }
