@@ -744,7 +744,8 @@ hash_group(linear_hash_t *lh)
 	VERIFY3U(lh->lh_alloc.data->a_record_size, ==, lh->lh_record_size);
 	VERIFY3U(lh->lh_alloc.overflow->a_record_size, ==, sizeof (bucket_t));
 	VERIFY3U(lh->lh_alloc.bucket->a_record_size, ==, sizeof (bucket_t));
-	VERIFY3U(lh_get_stats(lh).ls_memory_use, ==, g->ag_mem_current);
+	VERIFY3U(lh_get_stats(lh).ls_memory_use, ==, g->ag_mem_current +
+	    lh->lh_freeheap.size * sizeof (record_ix_t));
 	return (g);
 }
 
@@ -796,10 +797,11 @@ hash_basic(void)
 	linear_hash_t *lh = lh_init(rs, ks, 64 << 20, selftest_scratch_dir());
 	uint8_t zero[40], ones[40], buf[40];
 
-	/* A new table holds nothing and has used no memory */
+	/* A new table holds nothing and uses memory only for the free heap */
 	lh_stats_t stats = lh_get_stats(lh);
+	size_t freeheap_size = lh->lh_freeheap.size * sizeof (record_ix_t);
 	VERIFY0(stats.ls_total_records);
-	VERIFY0(stats.ls_memory_use);
+	VERIFY3U(stats.ls_memory_use, ==, freeheap_size);
 
 	raw_record(zero, rs, ks, 0x00, 1);
 	raw_record(ones, rs, ks, 0xff, 2);
@@ -848,8 +850,9 @@ hash_basic(void)
 	allocator_group_t *g = hash_group(lh);
 	VERIFY3U(g->ag_mem_limit, ==, roundup(64 << 20, g->ag_cluster_size));
 	stats = lh_get_stats(lh);
+	size_t heap_size = lh->lh_freeheap.size * sizeof (record_ix_t);
 	VERIFY3U(stats.ls_total_records, ==, 2);
-	VERIFY3U(stats.ls_memory_use, ==, 2 * g->ag_cluster_size);
+	VERIFY3U(stats.ls_memory_use, ==, 2 * g->ag_cluster_size + heap_size);
 	lh_fini(lh);
 
 	/* The same sequence through the model, which ht_op() checks */

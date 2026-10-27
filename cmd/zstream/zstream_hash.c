@@ -473,8 +473,10 @@ lh_get_stats(linear_hash_t *lh)
 	allocator_stats_t overflow = allocator_get_stats(lh->lh_alloc.overflow);
 	allocator_stats_t top = allocator_get_stats(lh->lh_alloc.bucket);
 	lh_stats_t stats = {
-		.ls_memory_use = data.as_memory_used + overflow.as_memory_used +
-		    top.as_memory_used,
+		.ls_memory_use = data.as_memory_used +
+		    overflow.as_memory_used +
+		    top.as_memory_used +
+		    lh->lh_freeheap.size * sizeof (record_ix_t),
 		/* Don't count the index-0 sentinel */
 		.ls_total_records = data.as_num_records - 1
 	};
