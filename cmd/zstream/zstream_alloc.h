@@ -26,7 +26,7 @@ extern "C" {
 
 /*
  * An allocator_t defines a thin record storage API that can be backed by
- * memory, a disk file, or both; the API is identical.
+ * memory, a disk file, or both; the API is the same.
  *
  * Dual-backed allocators keep the first N records in memory and later
  * records on disk. For data that grows linearly but is accessed randomly
@@ -50,12 +50,13 @@ extern "C" {
  * All allocators are members of an allocator group, which may be a group
  * of 1. Allocators in a group share a collective memory limit. Regardless
  * of the data stored in the individual allocators, the group will never use
- * more memory than the limit specified at the time the group was created
- * (modulo rounding; see below).
+ * more memory for record storage than the limit specified at the time the
+ * group was created (modulo rounding and a small amount of fixed overhead;
+ * see below).
  */
 
 #define	MAX_RECORD_SIZE		(8 << 10)	/* 8KB */
-#define	DEFAULT_CLUSTER_SIZE	(1 << 20)	/* Default cluster size, 1MB */
+#define	DEFAULT_CLUSTER_SIZE	(1 << 20)	/* 1MB */
 
 typedef uint64_t record_ix_t;
 
@@ -95,6 +96,10 @@ typedef struct {
  *   should be at least num_allocators * cluster_size; this floor is
  *   silently enforced. The memory limit will be rounded up to the nearest
  *   multiple of the cluster size.
+ *
+ * - dir_path specifies where to put scratch files on disk. If it's NULL,
+ *   the allocators will have no disk backup. Avoid using "/tmp" for spill
+ *   files since it's often a ramdisk.
  *
  * - No record size can be larger than MAX_RECORD_SIZE (8KB).
  *

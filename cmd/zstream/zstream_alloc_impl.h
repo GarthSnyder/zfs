@@ -41,15 +41,12 @@ extern "C" {
  *
  * The group's page cluster size is the granularity of memory management for
  * all the group's allocators. It is a whole number of pages: by default,
- * 1MB if the system page size is not larger.
- *
- * An allocator's memory-to-disk transition always falls at a page cluster
- * boundary, and the group's ag_mem_limit and ag_mem_current values are also
- * multiples of the cluster size.
+ * 1MB if the system page size is not larger. An allocator's memory-to-disk
+ * transition always falls at a page cluster boundary.
  */
 typedef struct {
-	size_t		ag_mem_limit;		/* Total allowed for group */
-	size_t		ag_mem_current;		/* Currently used by group */
+	uint64_t	ag_clusters_max;	/* Total allowed for group */
+	uint64_t	ag_clusters_current;	/* Currently used by group */
 	size_t		ag_cluster_size;	/* Allocation unit */
 	char		*ag_dir;		/* Spill dir, for error msgs */
 	unsigned int	ag_num_allocators;
@@ -58,26 +55,43 @@ typedef struct {
 
 /*
  * Invariants:
- *   a_writable_frontier <= a_first_on_disk <= a_group->ag_mem_limit
- *   a_group->ag_mem_current <= a_group->ag_mem_limit
- *   a_group->ag_mem_current = sum_over_group(a_writable_frontier)
- *   a_first_on_disk decreases monotonically (if at all)
  *
- * Given that you can read and write anywhere in the index space, the record
- * count (a_count) is a bit vaguely defined. It's maintained to give
+ *   a_cluster_count <= a_first_disk_cluster <= a_group->ag_clusters_max
+ *   a_group->ag_clusters_current <= a_group->ag_clusters_max
+ *   a_group->ag_clusters_current = sum_over_group(a_cluster_count)
+ *   a_first_disk_cluster decreases monotonically (if at all)
+ *
+ * Given that you can read and write anywhere in the index space,
+ * a_record_count is a bit vaguely defined. It's maintained to give
  * allocator_append() and allocator_skip() some reasonable definition of
  * "the next index." Functionally, it's 1 plus the highest index that was
  * ever written to or returned to the client. Reads don't affect it.
+ *
+ * a_clusters is an array of pointers to page-cluster-sized blocks of memory.
+ * The maximum memory budget is fixed at init time, so we know exactly how
+ * large to make that array.
+ *
+ * In concept, an allocator_t splits storage between a memory portion and
+ * a disk portion. However, there's a liminal third region between allocated
+ * memory and disk that is nominally part of the memory region but for which
+ * no memory has yet been allocated and where no records are stored. This
+ * region is delineated by a_cluster_count on the low end (which marks the
+ * upper end of memory allocations) and a_first_disk_cluster on the high end
+ * (which marks the start of the disk region).
+ *
+ * Writes into the liminal region cause additional allocations of memory.
+ * Those must be zero-filled on allocation because never-written records
+ * must read as zeros.
  */
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
 	size_t		   a_record_size;	  /* Client-specified */
 	uint64_t	   a_records_per_cluster; /* Constant (minimize divs) */
-	off_t		   a_first_on_disk;	  /* Memory/disk split point */
-	off_t		   a_writable_frontier;   /* 1st non-r/w byte */
+	uint64_t	   a_first_disk_cluster;  /* Memory/disk split point */
+	uint64_t	   a_record_count;	  /* See comments above */
+	uint64_t	   a_cluster_count;	  /* Page clusters in use */
+	uint8_t		   **a_clusters;	  /* Array of cluster ptrs */
 	allocator_group_t  *a_group;		  /* Back-pointer to group */
-	uint64_t	   a_count;		  /* See above */
-	void		   *a_base_addr;	  /* Start of VM allotment */
 };
 
 #ifdef __cplusplus

@@ -28,9 +28,10 @@ extern "C" {
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <sys/types.h>
 #include <sys/stdtypes.h>
 #include <sys/spa_checksum.h>
+#include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
@@ -81,13 +82,18 @@ void *
 safe_realloc(void *buff, size_t new_size);
 
 /*
- * In addition to quitting on error, safe_pwrite() and safe_pread_zero()
- * handle partial reads and writes correctly and do not return until the
- * full buffer has been transferred. If where is not NULL, safe_pwrite()
- * names it in the message when a write fails for lack of space or quota.
+ * In addition to quitting on error, safe_pwrite(), safe_pwritev(), and
+ * safe_pread_zero() handle partial reads and writes correctly and do not
+ * return until the full buffer has been transferred. If where is not NULL,
+ * safe_pwrite() names it in the message when a write fails for lack of
+ * space or quota.
  */
 void
 safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
+    const char *where);
+
+void
+safe_pwritev(int fd, struct iovec *iov, uint64_t iovcnt, off_t off,
     const char *where);
 
 /*
