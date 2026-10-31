@@ -16,6 +16,7 @@
 
 #include <assert.h>
 #include <err.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -49,8 +50,6 @@
  * possible), the code is still correct. However, actual disk space
  * consumption will be higher.
  */
-
-#define	IOVEC_BUFFSIZE	256
 
 /*
  * In concept, an allocator_t splits storage between a memory portion and
@@ -280,7 +279,7 @@ free_clusters(allocator_t *alloc, uint64_t num_clusters)
 	off_t offset = first * group->ag_cluster_size;
 
 	while (first < alloc->a_cluster_count) {
-		int this_batch = MIN(alloc->a_cluster_count - first,
+		uint64_t this_batch = MIN(alloc->a_cluster_count - first,
 		    IOVEC_BUFFSIZE);
 		for (uint64_t i = 0; i < this_batch; i++) {
 			clusters[i] = (struct iovec) {
@@ -386,7 +385,8 @@ try_make_writable(allocator_t *alloc, uint64_t cluster)
 		if (alloc->a_clusters[i] == MAP_FAILED) {
 			if (errno == ENOMEM && alloc->a_fd >= 0) {
 				warnx("mmap() failed, out of memory: spilling"
-				    " to %s...", group->ag_dir);
+				    " to %s...", (group->ag_dir != NULL) ?
+				    group->ag_dir : "disk");
 				alloc->a_first_disk_cluster =
 				    alloc->a_cluster_count;
 				return (B_FALSE);

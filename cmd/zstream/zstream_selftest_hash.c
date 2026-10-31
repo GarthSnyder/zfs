@@ -287,7 +287,7 @@ shrink_new_table(linear_hash_t *lh, unsigned suffix)
 	VERIFY3U(suffix, <, lh->lh_hash_suffix_length);
 	VERIFY0(occ->top_entries);
 	VERIFY0(lh->lh_split_pointer);
-	VERIFY0(lh->lh_alloc.bucket->a_count);
+	VERIFY0(lh->lh_alloc.bucket->a_record_count);
 	lh->lh_hash_suffix_length = suffix;
 	occ->top_buckets >>= shift;
 	occ->max_top_entries >>= shift;
@@ -563,8 +563,8 @@ ht_validate(htest_t *ht)
 {
 	linear_hash_t *lh = ht->ht_lh;
 	size_t rs = ht->ht_cfg.hc_record_size;
-	uint64_t novf = lh->lh_alloc.overflow->a_count;
-	uint64_t ndata = lh->lh_alloc.data->a_count;
+	uint64_t novf = lh->lh_alloc.overflow->a_record_count;
+	uint64_t ndata = lh->lh_alloc.data->a_record_count;
 	uint8_t *ovf_seen = safe_calloc(novf);
 	uint8_t *key_seen = safe_calloc(ht->ht_nkeys + 1);
 	uint8_t *rec = safe_malloc(rs);
@@ -744,21 +744,10 @@ hash_group(linear_hash_t *lh)
 	VERIFY3U(lh->lh_alloc.data->a_record_size, ==, lh->lh_record_size);
 	VERIFY3U(lh->lh_alloc.overflow->a_record_size, ==, sizeof (bucket_t));
 	VERIFY3U(lh->lh_alloc.bucket->a_record_size, ==, sizeof (bucket_t));
-	VERIFY3U(lh_get_stats(lh).ls_memory_use, ==, g->ag_mem_current +
+	VERIFY3U(lh_get_stats(lh).ls_memory_use, ==,
+	    g->ag_clusters_current * g->ag_cluster_size +
 	    lh->lh_freeheap.size * sizeof (record_ix_t));
 	return (g);
-}
-
-static size_t
-alloc_frontier(allocator_t *a)
-{
-	return ((size_t)a->a_writable_frontier);
-}
-
-static size_t
-alloc_fod(allocator_t *a)
-{
-	return ((size_t)a->a_first_on_disk);
 }
 
 /*
@@ -844,11 +833,12 @@ hash_basic(void)
 	memset(buf, 0, rs);
 	VERIFY3S(lh_find(lh, buf), ==, LH_FOUND);
 	VERIFY0(memcmp(buf, zero, rs));
-	VERIFY3U(lh->lh_alloc.data->a_count, ==, 3);
+	VERIFY3U(lh->lh_alloc.data->a_record_count, ==, 3);
 
 	/* Two records, in one cluster of data and one of top buckets */
 	allocator_group_t *g = hash_group(lh);
-	VERIFY3U(g->ag_mem_limit, ==, roundup(64 << 20, g->ag_cluster_size));
+	VERIFY3U(g->ag_clusters_max * g->ag_cluster_size, ==,
+	    roundup(64 << 20, g->ag_cluster_size));
 	stats = lh_get_stats(lh);
 	size_t heap_size = lh->lh_freeheap.size * sizeof (record_ix_t);
 	VERIFY3U(stats.ls_total_records, ==, 2);
@@ -933,7 +923,7 @@ hash_ops(void)
 			    LH_NOT_FOUND);
 		ht_validate(ht);
 		VERIFY3U(ht->ht_present, ==, nkeys);
-		VERIFY3U(ht->ht_lh->lh_alloc.overflow->a_count, >, 5);
+		VERIFY3U(ht->ht_lh->lh_alloc.overflow->a_record_count, >, 5);
 		ht_fini(ht);
 	}
 }
@@ -1062,7 +1052,8 @@ hash_cluster_size(void)
 		htest_t *ht = ht_init(&cfg, 2000);
 		allocator_group_t *g = hash_group(ht->ht_lh);
 		VERIFY3U(g->ag_cluster_size, ==, cases[i].cluster);
-		VERIFY3U(g->ag_mem_limit, ==, cases[i].limit);
+		VERIFY3U(g->ag_clusters_max * g->ag_cluster_size, ==,
+		    cases[i].limit);
 		ht_workload(ht, 500);
 		VERIFY3U(ht->ht_lh->lh_hash_suffix_length, >=, 4 + 2);
 		ht_fini(ht);
@@ -1272,7 +1263,7 @@ insert_checking_reuse(htest_t *ht, uint64_t n, uint64_t b)
 	minheap_t *heap = &lh->lh_freeheap;
 	uint64_t count = heap->count;
 	uint64_t top_entries = lh->lh_occupancy.top_entries;
-	record_ix_t fresh = lh->lh_alloc.overflow->a_count;
+	record_ix_t fresh = lh->lh_alloc.overflow->a_record_count;
 	record_ix_t tail = chain_tail(lh, b);
 	record_ix_t min = 0;
 
@@ -1286,7 +1277,7 @@ insert_checking_reuse(htest_t *ht, uint64_t n, uint64_t b)
 	record_ix_t new_tail = chain_tail(lh, b);
 	if (new_tail == tail) {
 		VERIFY3U(heap->count, ==, count);
-		VERIFY3U(lh->lh_alloc.overflow->a_count, ==, fresh);
+		VERIFY3U(lh->lh_alloc.overflow->a_record_count, ==, fresh);
 	} else if (count > 0) {
 		if (new_tail != min) {
 			errx(1, "chain %llu reused overflow bucket %llu, but "
@@ -1294,12 +1285,12 @@ insert_checking_reuse(htest_t *ht, uint64_t n, uint64_t b)
 			    (u_longlong_t)new_tail, (u_longlong_t)min);
 		}
 		VERIFY3U(heap->count, ==, count - 1);
-		VERIFY3U(lh->lh_alloc.overflow->a_count, ==, fresh);
+		VERIFY3U(lh->lh_alloc.overflow->a_record_count, ==, fresh);
 		for (uint64_t i = 0; i < heap->count; i++)
 			VERIFY3U(heap->buckets[i], !=, new_tail);
 	} else {
 		VERIFY3U(new_tail, ==, fresh);
-		VERIFY3U(lh->lh_alloc.overflow->a_count, ==, fresh + 1);
+		VERIFY3U(lh->lh_alloc.overflow->a_record_count, ==, fresh + 1);
 	}
 	VERIFY0(heap_problems(heap));
 }
@@ -1473,7 +1464,7 @@ hash_no_memory(void)
 	ht_workload(ht, 2000);
 	VERIFY3U(ht->ht_lh->lh_hash_suffix_length, >=, 4 + 5);
 	allocator_group_t *g = hash_group(ht->ht_lh);
-	VERIFY0(g->ag_mem_current);
+	VERIFY0(g->ag_clusters_current);
 	ht_fini(ht);
 }
 
@@ -1497,10 +1488,12 @@ hash_no_disk(void)
 
 	/* Nothing was ever pushed toward disk */
 	allocator_group_t *g = hash_group(ht->ht_lh);
-	VERIFY3U(g->ag_mem_current, >, 0);
+	VERIFY3U(g->ag_clusters_current, >, 0);
 	VERIFY3P(g->ag_dir, ==, NULL);
-	for (int i = 0; i < 3; i++)
-		VERIFY3U(alloc_fod(g->ag_allocators[i]), ==, g->ag_mem_limit);
+	for (int i = 0; i < 3; i++) {
+		VERIFY3U(g->ag_allocators[i]->a_first_disk_cluster, ==,
+		    g->ag_clusters_max);
+	}
 	ht_fini(ht);
 }
 
@@ -1526,7 +1519,7 @@ hash_memory_pressure(void)
 	htest_t *ht = ht_init(&cfg, count);
 	allocator_group_t *g = hash_group(ht->ht_lh);
 	VERIFY3U(g->ag_cluster_size, ==, (size_t)sysconf(_SC_PAGESIZE));
-	VERIFY3U(g->ag_mem_limit, ==, 1 << 20);
+	VERIFY3U(g->ag_clusters_max * g->ag_cluster_size, ==, 1 << 20);
 
 	for (uint64_t first = 0; first < count; first += 1024) {
 		ht_insert_range(ht, first, MIN(1024, count - first), 256);
@@ -1540,12 +1533,12 @@ hash_memory_pressure(void)
 	 */
 	linear_hash_t *lh = ht->ht_lh;
 	allocator_t *bucket = lh->lh_alloc.bucket;
-	VERIFY0(alloc_frontier(lh->lh_alloc.data));
-	VERIFY0(alloc_frontier(lh->lh_alloc.overflow));
-	VERIFY3U(alloc_frontier(bucket), ==, g->ag_mem_limit);
-	VERIFY3U(g->ag_mem_current, ==, g->ag_mem_limit);
-	VERIFY3U(lh->lh_occupancy.top_buckets, >, alloc_fod(bucket) /
-	    g->ag_cluster_size * bucket->a_records_per_cluster);
+	VERIFY0(lh->lh_alloc.data->a_cluster_count);
+	VERIFY0(lh->lh_alloc.overflow->a_cluster_count);
+	VERIFY3U(bucket->a_cluster_count, ==, g->ag_clusters_max);
+	VERIFY3U(g->ag_clusters_current, ==, g->ag_clusters_max);
+	VERIFY3U(lh->lh_occupancy.top_buckets, >,
+	    bucket->a_first_disk_cluster * bucket->a_records_per_cluster);
 
 	ht_rewrite_random(ht, 20000);
 	ht_verify_all(ht);
@@ -1574,12 +1567,15 @@ hash_pressure_priority(void)
 
 	linear_hash_t *lh = ht->ht_lh;
 	allocator_group_t *g = hash_group(lh);
-	VERIFY3U(g->ag_mem_current, ==, g->ag_mem_limit);
-	VERIFY3U(alloc_fod(lh->lh_alloc.data), <, g->ag_mem_limit);
-	VERIFY3U(alloc_frontier(lh->lh_alloc.data), >, 0);
-	VERIFY3U(alloc_fod(lh->lh_alloc.overflow), ==, g->ag_mem_limit);
-	VERIFY3U(alloc_fod(lh->lh_alloc.bucket), ==, g->ag_mem_limit);
-	VERIFY3U(alloc_frontier(lh->lh_alloc.bucket), >, 0);
+	VERIFY3U(g->ag_clusters_current, ==, g->ag_clusters_max);
+	VERIFY3U(lh->lh_alloc.data->a_first_disk_cluster, <,
+	    g->ag_clusters_max);
+	VERIFY3U(lh->lh_alloc.data->a_cluster_count, >, 0);
+	VERIFY3U(lh->lh_alloc.overflow->a_first_disk_cluster, ==,
+	    g->ag_clusters_max);
+	VERIFY3U(lh->lh_alloc.bucket->a_first_disk_cluster, ==,
+	    g->ag_clusters_max);
+	VERIFY3U(lh->lh_alloc.bucket->a_cluster_count, >, 0);
 
 	ht_rewrite_random(ht, 10000);
 	ht_verify_all(ht);
@@ -1797,8 +1793,8 @@ child_memory_only_overflow(void *arg)
 
 		VERIFY3U(nb, <, lh->lh_occupancy.top_buckets);
 		lh->lh_hash_func = word0_hash;
-		for (uint64_t i = 0; g->ag_mem_current < g->ag_mem_limit;
-		    i++) {
+		for (uint64_t i = 0;
+		    g->ag_clusters_current < g->ag_clusters_max; i++) {
 			uint64_t key = (i << 32) | (i % nb);
 			memcpy(buf, &key, sizeof (key));
 			VERIFY3S(lh_insert(lh, buf), ==, LH_INSERTED);

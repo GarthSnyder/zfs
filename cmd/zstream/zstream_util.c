@@ -107,6 +107,8 @@ safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
 	}
 }
 
+ssize_t (*safe_pwritev_call)(int, const struct iovec *, int, off_t) = pwritev;
+
 /*
  * Handle possible short writes for pwritev(). Also allows for iovec arrays
  * larger than IOV_MAX. May overwrite the iovec array. Aborts on error.
@@ -123,7 +125,7 @@ safe_pwritev(int fd, struct iovec *iov, uint64_t iovcnt, off_t off,
 		if (iovcnt == 0)
 			return;
 		int batch_count = (iovcnt > IOV_MAX) ? IOV_MAX : iovcnt;
-		ssize_t n = pwritev(fd, iov, batch_count, off);
+		ssize_t n = safe_pwritev_call(fd, iov, batch_count, off);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;

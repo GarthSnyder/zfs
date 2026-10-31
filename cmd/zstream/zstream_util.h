@@ -97,6 +97,12 @@ safe_pwritev(int fd, struct iovec *iov, uint64_t iovcnt, off_t off,
     const char *where);
 
 /*
+ * safe_pwritev() makes its system calls through this pointer, which is
+ * pwritev() except while a selftest substitutes short or failed writes.
+ */
+extern ssize_t (*safe_pwritev_call)(int, const struct iovec *, int, off_t);
+
+/*
  * Like a safe version of pread(), except that reading past end-of-file is
  * not an error: any portion of the buffer that lies beyond EOF is filled
  * with zeros.

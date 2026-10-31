@@ -51,8 +51,9 @@ extern "C" {
  * of 1. Allocators in a group share a collective memory limit. Regardless
  * of the data stored in the individual allocators, the group will never use
  * more memory for record storage than the limit specified at the time the
- * group was created. There is, however, a small amount of fixed-sized
- * overhead that is not considered by the memory limit.
+ * group was created. There is, however, a small overhead that is not counted
+ * against the limit: each allocator keeps a table with one pointer for each
+ * page cluster the limit allows.
  */
 
 #define	MAX_RECORD_SIZE		(8 << 10)	/* 8KB */
