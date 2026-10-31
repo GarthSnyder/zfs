@@ -84,9 +84,9 @@ safe_realloc(void *buff, size_t new_size);
 /*
  * In addition to quitting on error, safe_pwrite(), safe_pwritev(), and
  * safe_pread_zero() handle partial reads and writes correctly and do not
- * return until the full buffer has been transferred. If where is not NULL,
- * safe_pwrite() names it in the message when a write fails for lack of
- * space or quota.
+ * return until the full buffer has been transferred. If "where" is not
+ * NULL, safe_pwrite() and safe_pwritev() name it in the error message when
+ * a write fails for lack of space or quota.
  */
 void
 safe_pwrite(int fd, const void *buf, size_t count, off_t offset,

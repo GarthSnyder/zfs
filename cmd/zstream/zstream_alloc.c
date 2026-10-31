@@ -50,6 +50,21 @@
  * consumption will be higher.
  */
 
+#define	IOVEC_BUFFSIZE	256
+
+/*
+ * In concept, an allocator_t splits storage between a memory portion and
+ * a disk portion. However, there's a liminal third region between allocated
+ * memory and disk that is nominally part of the memory region but for which
+ * no memory has yet been allocated and where no records are stored. This
+ * region is delineated by a_cluster_count on the low end (which marks the
+ * upper end of memory allocations) and a_first_disk_cluster on the high end
+ * (which marks the start of the disk region).
+ *
+ * Writes into the liminal region cause additional allocations of memory.
+ * Those must be zero-filled on allocation because never-written records
+ * are defined to read as zeros.
+ */
 typedef enum {
 	ZA_ON_DISK, ZA_IN_WRITABLE_MEMORY, ZA_IN_UNALLOCATED_MEMORY
 } region_t;
@@ -169,17 +184,17 @@ allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 	VERIFY(alloc != NULL && buff != NULL);
 	record_location_t loc = locate_record(alloc, record);
 
-retry:	switch (loc.region) {
+	switch (loc.region) {
 	case ZA_ON_DISK:
-		if (alloc->a_fd < 0)
+retry:		if (alloc->a_fd < 0)
 			errx(1, "allocator memory limit exceeded, record %llu "
 			    "(write)", (u_longlong_t)record);
-		safe_pwrite(alloc->a_fd, buff, alloc->a_record_size,
-		    loc.offset, alloc->a_group->ag_dir);
+		else
+			safe_pwrite(alloc->a_fd, buff, alloc->a_record_size,
+			    loc.offset, alloc->a_group->ag_dir);
 		break;
 	case ZA_IN_UNALLOCATED_MEMORY:
 		if (try_make_writable(alloc, loc.cluster) == B_FALSE) {
-			loc.region = ZA_ON_DISK;
 			goto retry;
 		}
 		zfs_fallthrough;
@@ -242,14 +257,15 @@ allocator_skip(allocator_t *alloc)
 /*
  * Convert an allocator's last N memory clusters to disk storage.
  *
- * Since memory and disk segments share offset addresses, we only need to
- * perform one vectored write from memory to disk to transfer the existing
- * contents of those page clusters. We lower both a_cluster_count and
- * a_first_disk_cluster, the former to reflect that we are freeing memory
- * and the latter to move the memory/disk split point.
+ * Since memory and disk segments share offset addresses, the process of
+ * writing out memory contents to disk is relatively straightforward.
+ * Ultimately, we lower both a_cluster_count and a_first_disk_cluster, the
+ * former to reflect that we are freeing memory and the latter to move the
+ * memory/disk split point so that the allocator does not attempt to
+ * reallocate memory on subsequent writes.
  *
- * We allocate the iovec array on the heap because num_clusters may be large
- * enough to create problems on the stack.
+ * safe_pwritev() subdivides pwritev() calls as needed, so it's fine if
+ * IOVEC_BUFFSIZE > IOV_MAX.
  */
 static inline void
 free_clusters(allocator_t *alloc, uint64_t num_clusters)
@@ -257,27 +273,35 @@ free_clusters(allocator_t *alloc, uint64_t num_clusters)
 	VERIFY(alloc != NULL && num_clusters > 0);
 	VERIFY3U(num_clusters, <=, alloc->a_cluster_count);
 	VERIFY(alloc->a_fd >= 0);
+
 	allocator_group_t *group = alloc->a_group;
-	struct iovec *clusters = malloc(num_clusters * sizeof (struct iovec));
-	if (clusters == NULL)
-		err(1, "malloc() failed in %s", __func__);
-	uint64_t first_cluster = alloc->a_cluster_count - num_clusters;
-	for (uint64_t i = 0; i < num_clusters; i++) {
-		clusters[i] = (struct iovec) {
-			.iov_base = alloc->a_clusters[first_cluster + i],
-			.iov_len = group->ag_cluster_size
-		};
+	struct iovec clusters[IOVEC_BUFFSIZE];
+	uint64_t first = alloc->a_cluster_count - num_clusters;
+	off_t offset = first * group->ag_cluster_size;
+
+	while (first < alloc->a_cluster_count) {
+		int this_batch = MIN(alloc->a_cluster_count - first,
+		    IOVEC_BUFFSIZE);
+		for (uint64_t i = 0; i < this_batch; i++) {
+			clusters[i] = (struct iovec) {
+				.iov_base = alloc->a_clusters[first + i],
+				.iov_len = group->ag_cluster_size
+			};
+		}
+		safe_pwritev(alloc->a_fd, clusters, this_batch, offset,
+		    group->ag_dir);
+		for (uint64_t i = 0; i < this_batch; i++) {
+			int rc = munmap(alloc->a_clusters[first + i],
+			    group->ag_cluster_size);
+			if (rc != 0)
+				err(1, "munmap failed");
+		}
+		first += this_batch;
+		offset += this_batch * group->ag_cluster_size;
 	}
-	safe_pwritev(alloc->a_fd, clusters, num_clusters,
-	    first_cluster * group->ag_cluster_size, group->ag_dir);
-	for (uint64_t i = 0; i < num_clusters; i++)
-		if (munmap(alloc->a_clusters[first_cluster + i],
-		    group->ag_cluster_size) != 0)
-			err(1, "munmap failed");
 	alloc->a_cluster_count -= num_clusters;
-	alloc->a_first_disk_cluster = first_cluster;
+	alloc->a_first_disk_cluster = alloc->a_cluster_count;
 	group->ag_clusters_current -= num_clusters;
-	free(clusters);
 }
 
 /*
@@ -314,16 +338,16 @@ free_clusters_for(allocator_t *alloc, uint64_t num_clusters)
 		uint64_t to_free = MIN(num_clusters, victim->a_cluster_count);
 		free_clusters(victim, to_free);
 		if ((num_clusters -= to_free) == 0)
-			break;
+			return (B_TRUE);
 	}
-	return (B_TRUE);
+	errx(1, "corrupt memory accounting found in %s", __func__);
 }
 
 /*
- * Attempt to expand the allocator's writable region to include a given page
- * cluster. If the allocator group has sufficient unused memory, this can be
- * done directly. If not, we call free_clusters_for() to try and recover
- * memory from lower priority allocators.
+ * Attempt to expand the allocator's writable memory region to include a
+ * given page cluster. If the allocator group has sufficient unused memory,
+ * this can be done directly. If not, we call free_clusters_for() to try and
+ * recover memory from lower priority allocators.
  *
  * If the attempt to obtain memory from another allocator fails, we lower
  * the allocator's a_first_disk_cluster and return B_FALSE. Retrying the
@@ -332,7 +356,7 @@ free_clusters_for(allocator_t *alloc, uint64_t num_clusters)
  * An mmap() failure can result in fewer page clusters being imported than
  * were freed by other allocators. The bookkeeping remains correct, but all
  * allocators involved in the transaction end up with a lowered
- * a_first_disk_cluster, which hampers their ability to reuse those clusters
+ * a_first_disk_cluster, which limits their ability to reuse those clusters
  * in the future.
  */
 static inline boolean_t
@@ -340,25 +364,35 @@ try_make_writable(allocator_t *alloc, uint64_t cluster)
 {
 	VERIFY(cluster < alloc->a_first_disk_cluster);
 	VERIFY(cluster >= alloc->a_cluster_count);
+
 	allocator_group_t *group = alloc->a_group;
 	uint64_t clusters_needed = cluster + 1 - alloc->a_cluster_count;
 	uint64_t clusters_avail =
 	    group->ag_clusters_max - group->ag_clusters_current;
+
 	if (clusters_needed > clusters_avail) {
 		uint64_t deficit = clusters_needed - clusters_avail;
 		if (!free_clusters_for(alloc, deficit)) {
 			alloc->a_first_disk_cluster = alloc->a_cluster_count;
 			return (B_FALSE);
 		}
+		VERIFY3U(clusters_needed, <=, group->ag_clusters_max -
+		    group->ag_clusters_current);
 	}
+
 	for (uint64_t i = alloc->a_cluster_count; i <= cluster; i++) {
 		alloc->a_clusters[i] = mmap(NULL, group->ag_cluster_size,
 		    PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (alloc->a_clusters[i] == MAP_FAILED) {
-			warn("mmap() failed for page cluster allocation%s",
-			    group->ag_dir ? ", spilling to disk..." : "");
-			alloc->a_first_disk_cluster = alloc->a_cluster_count;
-			return (B_FALSE);
+			if (errno == ENOMEM && alloc->a_fd >= 0) {
+				warnx("mmap() failed, out of memory: spilling"
+				    " to %s...", group->ag_dir);
+				alloc->a_first_disk_cluster =
+				    alloc->a_cluster_count;
+				return (B_FALSE);
+			} else {
+				err(1, "mmap() failed");
+			}
 		}
 		group->ag_clusters_current++;
 		alloc->a_cluster_count++;
