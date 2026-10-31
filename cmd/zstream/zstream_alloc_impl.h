@@ -36,6 +36,12 @@ extern "C" {
 #include "zstream_alloc.h"
 
 /*
+ * Evictions write at most this many clusters per pwritev() call. It's here
+ * only so that selftests can evict across batch boundaries.
+ */
+#define	IOVEC_BUFFSIZE	256
+
+/*
  * All allocators are members of an allocator group, which can be a group of 1.
  * Group members share memory accounting.
  *
@@ -69,7 +75,8 @@ typedef struct {
  *
  * a_clusters is an array of pointers to page-cluster-sized blocks of memory.
  * The maximum memory budget is fixed at init time, so we know exactly how
- * large to make that array.
+ * large to make that array: ag_clusters_max entries, or no array at all for
+ * a disk-only group. Only the first a_cluster_count entries are valid.
  */
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
