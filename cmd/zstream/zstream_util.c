@@ -129,8 +129,8 @@ safe_pwritev(int fd, struct iovec *iov, uint64_t iovcnt, off_t off,
 				continue;
 			else if ((errno == ENOSPC || errno == EDQUOT) &&
 			    where != NULL)
-				errx(1, "pwritev() failed, out of space in %s",
-				    where);
+				errx(1, "pwritev() failed, out of space in %s, "
+				    "aborting...", where);
 			goto bail;
 		}
 		/* Shouldn't happen; don't spin */

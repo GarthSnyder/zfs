@@ -70,18 +70,6 @@ typedef struct {
  * a_clusters is an array of pointers to page-cluster-sized blocks of memory.
  * The maximum memory budget is fixed at init time, so we know exactly how
  * large to make that array.
- *
- * In concept, an allocator_t splits storage between a memory portion and
- * a disk portion. However, there's a liminal third region between allocated
- * memory and disk that is nominally part of the memory region but for which
- * no memory has yet been allocated and where no records are stored. This
- * region is delineated by a_cluster_count on the low end (which marks the
- * upper end of memory allocations) and a_first_disk_cluster on the high end
- * (which marks the start of the disk region).
- *
- * Writes into the liminal region cause additional allocations of memory.
- * Those must be zero-filled on allocation because never-written records
- * must read as zeros.
  */
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */

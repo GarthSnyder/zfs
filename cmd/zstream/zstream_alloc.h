@@ -51,8 +51,8 @@ extern "C" {
  * of 1. Allocators in a group share a collective memory limit. Regardless
  * of the data stored in the individual allocators, the group will never use
  * more memory for record storage than the limit specified at the time the
- * group was created (modulo rounding and a small amount of fixed overhead;
- * see below).
+ * group was created. There is, however, a small amount of fixed-sized
+ * overhead that is not considered by the memory limit.
  */
 
 #define	MAX_RECORD_SIZE		(8 << 10)	/* 8KB */
