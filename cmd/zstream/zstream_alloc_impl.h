@@ -42,13 +42,18 @@ extern "C" {
 #define	IOVEC_BUFFSIZE	256
 
 /*
- * All allocators are members of an allocator group, which can be a group of 1.
- * Group members share memory accounting.
+ * All allocators are members of an allocator group, which can be a group of
+ * 1. Group members share memory accounting.
  *
  * The group's page cluster size is the granularity of memory management for
  * all the group's allocators. It is a whole number of pages: by default,
  * 1MB if the system page size is not larger. An allocator's memory-to-disk
  * transition always falls at a page cluster boundary.
+ *
+ * The ag_base_addr is a pointer to an mmapped region of size
+ * (ag_clusters_max * ag_cluster_size). It's initially PROT_NONE and is
+ * converted to usable memory page cluster by page cluster as storage
+ * increases.
  */
 typedef struct {
 	uint64_t	ag_clusters_max;	/* Total allowed for group */
@@ -57,6 +62,7 @@ typedef struct {
 	char		*ag_dir;		/* Spill dir, for error msgs */
 	unsigned int	ag_num_allocators;
 	allocator_t	**ag_allocators;
+	uint8_t		*ag_base_addr;
 } allocator_group_t;
 
 /*
