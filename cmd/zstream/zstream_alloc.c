@@ -44,9 +44,10 @@
  *   whether it's in memory or on disk.
  *
  *   The first part of the disk file hides underneath the memory overlay and
- *   is never written to. Ergo, it occupies no actual storage space. Since
- *   memory and disk have common addressing, they can be rebalanced with a
- *   single write when the memory budget changes.
+ *   is never written to. Ergo, it occupies no storage space on filesystems
+ *   that support holes. Since memory and disk have common addressing,
+ *   clusters can be moved from memory to disk by writing them to their same
+ *   offsets in the file.
  *
  *   If the backing file's filesystem does not support holes (unlikely but
  *   possible), the code is still correct. However, actual disk space
@@ -55,10 +56,14 @@
  * - PROT_NONE virtual pages: These pages do not consume physical memory,
  *   TLB entries, or swap space, so they are essentially free. Because of
  *   that, allocator groups can request a large, contiguous VM allocation
- *   up front.
+ *   up front. (The pages do still count as address space, so the whole
+ *   budget must fit within RLIMIT_AS.)
  *
- *   When an allocator needs more writable pages, it incrementally changes
- *   pages' protection from PROT_NONE to PROT_READ | PROT_WRITE.
+ *   The group makes clusters writable one at a time, in address order, by
+ *   changing their protection from PROT_NONE to PROT_READ | PROT_WRITE.
+ *   Clusters never revert to PROT_NONE. Once the whole region is writable,
+ *   memory moves between allocators only by transfer: an evicted cluster is
+ *   zeroed and handed directly to the allocator that needs it.
  */
 
 /*
@@ -158,7 +163,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		base_address = mmap(NULL, mem_limit, PROT_NONE,
 		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (base_address == MAP_FAILED)
-			err(1, "unable to allocate %llu bytes of memory",
+			err(1, "unable to reserve %llu bytes of address space",
 			    (u_longlong_t)mem_limit);
 	}
 
@@ -200,8 +205,9 @@ void
 allocator_store(allocator_t *alloc, record_ix_t record, const void *buff)
 {
 	VERIFY(alloc != NULL && buff != NULL);
-retry:	record_location_t loc = locate_record(alloc, record);
+	record_location_t loc;
 
+retry:	loc = locate_record(alloc, record);
 	switch (loc.region) {
 	case ZA_ON_DISK:
 		if (alloc->a_fd < 0)
@@ -214,9 +220,9 @@ retry:	record_location_t loc = locate_record(alloc, record);
 	case ZA_IN_UNALLOCATED_MEMORY:
 		if (try_make_writable(alloc, loc.cluster) == B_FALSE) {
 			/*
-			 * Retry as a disk operation. try_make_readwrite()
-			 * already updated the allocator, so
-			 * record_location() will now return ZA_ON_DISK.
+			 * Retry as a disk operation. try_make_writable()
+			 * already moved the split point, so locate_record()
+			 * will now return ZA_ON_DISK.
 			 */
 			goto retry;
 		}
@@ -277,14 +283,16 @@ allocator_skip(allocator_t *alloc)
 
 /*
  * Convert an allocator's last N memory clusters to disk storage and write
- * the starting addresses of those clusters to the caller-provided array.
+ * the starting addresses of those clusters to clist, which must have room
+ * for num_clusters entries. Clusters are zeroed after being written out, so
+ * the recipient can treat them like fresh memory.
  *
  * Since memory and disk segments share offset addresses, the process of
  * writing out memory contents to disk is relatively straightforward.
  * Ultimately, we lower both a_cluster_count and a_first_disk_cluster, the
- * former to reflect that we are releasing (transferring out, really) memory
- * and the latter to move the memory/disk split point so that the allocator
- * does not attempt to reallocate memory on subsequent writes.
+ * former to reflect that we are releasing (transferring out) memory and the
+ * latter to lower the memory/disk split point so that the allocator does not
+ * attempt to reallocate memory on subsequent writes.
  *
  * safe_pwritev() subdivides pwritev() calls as needed, so it's fine if
  * IOVEC_BUFFSIZE > IOV_MAX.
@@ -327,9 +335,10 @@ release_clusters(allocator_t *alloc, uint64_t num_clusters, uint8_t **clist)
 /*
  * Attempt to poach num_clusters clusters from some combination of
  * allocators of lower priority and reassign them to the named allocator.
- * Returns B_TRUE if successful or B_FALSE if not. If the return value is
- * B_FALSE, no changes to memory configuration have been made for any
- * allocator.
+ * The clusters are appended to alloc->a_clusters, raising a_cluster_count
+ * by num_clusters. Returns B_TRUE if successful or B_FALSE if not. If the
+ * return value is B_FALSE, no changes to memory configuration have been
+ * made for any allocator.
  */
 static inline boolean_t
 poach_clusters(allocator_t *alloc, uint64_t num_clusters)
@@ -352,25 +361,25 @@ poach_clusters(allocator_t *alloc, uint64_t num_clusters)
 		allocator_t *poachee = allocators[i];
 		if (poachee == alloc) {
 			/* This should not be possible, given the precheck */
-			errx(1, "freed clusters fewer than expected in %s; "
+			errx(1, "poached clusters fewer than expected in %s; "
 			    "%llu outstanding", __func__,
 			    (u_longlong_t)num_clusters);
 		}
 		if (poachee->a_fd < 0 || poachee->a_cluster_count == 0)
 			continue;
-		uint64_t n_to_free =
+		uint64_t n_to_poach =
 		    MIN(num_clusters, poachee->a_cluster_count);
-		release_clusters(poachee, n_to_free,
+		release_clusters(poachee, n_to_poach,
 		    &alloc->a_clusters[alloc->a_cluster_count]);
-		alloc->a_cluster_count += n_to_free;
-		if ((num_clusters -= n_to_free) == 0)
+		alloc->a_cluster_count += n_to_poach;
+		if ((num_clusters -= n_to_poach) == 0)
 			return (B_TRUE);
 	}
 	errx(1, "inconsistent memory accounting found in %s", __func__);
 }
 
 /*
- * Attempt to expand the allocator's writable memory region to include a
+ * Attempt to expand an allocator's writable memory region to include a
  * given page cluster. If the allocator group has sufficient unused memory,
  * this can be done directly. If not, we call poach_clusters() to try and
  * recover memory from lower priority allocators.
@@ -378,6 +387,11 @@ poach_clusters(allocator_t *alloc, uint64_t num_clusters)
  * If the attempt to obtain memory from another allocator fails, we lower
  * the allocator's a_first_disk_cluster and return B_FALSE. Retrying the
  * transaction should then succeed as a disk operation.
+ *
+ * If mprotect() fails with ENOMEM in a disk-backed group, we handle this
+ * case in essentially the same way. Any clusters already obtained, whether
+ * poached or made writable, stay with the allocator, and the memory/disk
+ * split lands just above them. Evictions already performed are not undone.
  */
 static inline boolean_t
 try_make_writable(allocator_t *alloc, uint64_t cluster)
@@ -391,7 +405,8 @@ try_make_writable(allocator_t *alloc, uint64_t cluster)
 	    group->ag_clusters_max - group->ag_clusters_current;
 
 	/*
-	 * Poaching is more likely to fail than allocating, so do it first.
+	 * Poach before allocating, so that a poaching failure leaves every
+	 * allocator unchanged.
 	 */
 	if (clusters_needed > clusters_avail) {
 		uint64_t deficit = clusters_needed - clusters_avail;

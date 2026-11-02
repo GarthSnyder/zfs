@@ -65,7 +65,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/mman.h>
 #include <sys/param.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -262,6 +261,8 @@ audit_accounting(allocator_group_t *g, allocator_t *member)
 	VERIFY3U(g->ag_num_allocators, >, 0);
 	if (g->ag_clusters_max > 0)
 		VERIFY3U(g->ag_clusters_max, >=, g->ag_num_allocators);
+	/* There is a region exactly when there is a limit */
+	VERIFY3S(g->ag_clusters_max > 0, ==, g->ag_base_addr != NULL);
 	for (unsigned m = 0; m < g->ag_num_allocators; m++) {
 		allocator_t *a = g->ag_allocators[m];
 		allocator_stats_t st = allocator_get_stats(a);
@@ -296,10 +297,11 @@ compare_addresses(const void *x, const void *y)
 }
 
 /*
- * Every cluster that a member holds is a mapped, page-aligned block, and no
- * two clusters in the group overlap, whether they belong to the same member
- * or to different ones. This sorts every cluster in the group, so it runs
- * at sweeps rather than after every operation.
+ * The clusters that members hold are exactly the writable front of the
+ * group's region: each one starts on a cluster boundary below the
+ * frontier, and no two clusters in the group overlap, whether they belong
+ * to the same member or to different ones. This sorts every cluster in the
+ * group, so it runs at sweeps rather than after every operation.
  */
 static void
 audit_cluster_table(allocator_group_t *g)
@@ -309,16 +311,19 @@ audit_cluster_table(allocator_group_t *g)
 
 	if (n == 0)
 		return;
+	uintptr_t base = (uintptr_t)g->ag_base_addr;
+	VERIFY3U(base, !=, 0);
+	VERIFY0(base % page_size());
 	uint8_t **all = safe_malloc(n * sizeof (uint8_t *));
 	for (unsigned m = 0; m < g->ag_num_allocators; m++) {
 		allocator_t *a = g->ag_allocators[m];
 		for (uint64_t c = 0; c < a->a_cluster_count; c++) {
-			uint8_t *p = a->a_clusters[c];
-			VERIFY3P(p, !=, NULL);
-			VERIFY3P(p, !=, MAP_FAILED);
-			VERIFY0((uintptr_t)p % page_size());
+			uintptr_t p = (uintptr_t)a->a_clusters[c];
+			VERIFY3U(p, >=, base);
+			VERIFY0((p - base) % g->ag_cluster_size);
+			VERIFY3U((p - base) / g->ag_cluster_size, <, n);
 			VERIFY3U(k, <, n);
-			all[k++] = p;
+			all[k++] = a->a_clusters[c];
 		}
 	}
 	VERIFY3U(k, ==, n);
@@ -1503,11 +1508,14 @@ alloc_lifecycle(void)
 }
 
 /*
- * Evicted memory must actually be returned to the OS, not just accounted
- * for. A member is filled to the group limit and then pushed out to disk
- * by another member that writes eight times as much. Resident memory must
- * stay near the limit throughout, and every record must survive. The RSS
- * checks are Linux-only; the integrity checks run everywhere.
+ * Evicted memory must be reused, not just accounted for. A member is filled
+ * to the group limit and then pushed out to disk by another member that
+ * writes eight times as much. Resident memory must stay near the limit
+ * throughout, and every record must survive. While all record memory comes
+ * from one region the size of the limit, the RSS bound holds by
+ * construction; it guards against a return to allocating clusters
+ * individually. The RSS checks are Linux-only; the integrity checks run
+ * everywhere.
  */
 static void
 alloc_rss_bounded(void)
@@ -1533,7 +1541,7 @@ alloc_rss_bounded(void)
 #if defined(__linux__)
 		process_size(NULL, &rss);
 		if (rss > rss_base + limit + 4 * cluster) {
-			errx(1, "evicted memory was not released "
+			errx(1, "resident memory exceeds the limit "
 			    "(RSS %zu -> %zu, limit %zu)", rss_base, rss,
 			    limit);
 		}
@@ -2009,7 +2017,7 @@ vm_data_bytes(void)
 }
 
 /*
- * Under RLIMIT_DATA, mmap() fails with ENOMEM long before the group's
+ * Under RLIMIT_DATA, mprotect() fails with ENOMEM long before the group's
  * budget runs out. A disk-backed allocator must pin its split at its last
  * cluster and carry on from disk with every record intact. A memory-only
  * allocator has nowhere to go and must exit.
@@ -2070,9 +2078,9 @@ check_record(allocator_t *alloc, uint64_t ix, uint64_t tag)
 
 /*
  * A sparse store needs six clusters at once, and RLIMIT_DATA lets only
- * some of them be mapped. Those stay mapped and counted, the writer's
- * split drops to them, and the record goes to disk. Once the limit is
- * lifted, the writer stays pinned, but member 0 can still grow into the
+ * some of them be made writable. Those stay writable and counted, the
+ * writer's split drops to them, and the record goes to disk. Once the limit
+ * is lifted, the writer stays pinned, but member 0 can still grow into the
  * clusters that are free.
  */
 static void
@@ -2099,35 +2107,98 @@ child_data_rlimit_sparse(void *arg)
 
 	selftest_fill(buf, sizeof (buf), 1000);
 	allocator_store(a[1], 5 * rpc, buf);
-	uint64_t mapped = a[1]->a_cluster_count;
-	VERIFY3U(mapped, >, 0);
-	VERIFY3U(mapped, <, 6);
-	VERIFY3U(a[1]->a_first_disk_cluster, ==, mapped);
-	VERIFY3U(g->ag_clusters_current, ==, 2 + mapped);
+	uint64_t writable = a[1]->a_cluster_count;
+	VERIFY3U(writable, >, 0);
+	VERIFY3U(writable, <, 6);
+	VERIFY3U(a[1]->a_first_disk_cluster, ==, writable);
+	VERIFY3U(g->ag_clusters_current, ==, 2 + writable);
 	VERIFY3U(a[0]->a_cluster_count, ==, 2);
 	VERIFY3U(a[0]->a_first_disk_cluster, ==, 8);
 	audit_cluster_table(g);
 
 	VERIFY0(setrlimit(RLIMIT_DATA, &saved));
 	selftest_fill(buf, sizeof (buf), 1001);
-	allocator_store(a[1], mapped * rpc, buf);
-	VERIFY3U(a[1]->a_cluster_count, ==, mapped);
+	allocator_store(a[1], writable * rpc, buf);
+	VERIFY3U(a[1]->a_cluster_count, ==, writable);
 	for (uint64_t i = 2 * rpc; i < 3 * rpc; i++) {
 		selftest_fill(buf, sizeof (buf), i + 1);
 		VERIFY3U(allocator_append(a[0], buf), ==, i);
 	}
 	VERIFY3U(a[0]->a_cluster_count, ==, 3);
-	VERIFY3U(g->ag_clusters_current, ==, 3 + mapped);
+	VERIFY3U(g->ag_clusters_current, ==, 3 + writable);
 	selftest_audit_group(a[0]);
 
 	for (uint64_t i = 0; i < 3 * rpc; i++)
 		check_record(a[0], i, i + 1);
 	check_record(a[1], 0, 0);
-	check_record(a[1], mapped * rpc - 1, 0);
-	check_record(a[1], mapped * rpc, 1001);
-	check_record(a[1], mapped * rpc + 1, 0);
+	check_record(a[1], writable * rpc - 1, 0);
+	check_record(a[1], writable * rpc, 1001);
+	check_record(a[1], writable * rpc + 1, 0);
 	check_record(a[1], 5 * rpc, 1000);
 	allocator_group_fini(a[1]);
+}
+
+/*
+ * A sparse store needs four clusters when the group has two free, so it
+ * poaches two from member 0, and then RLIMIT_DATA refuses to make a fresh
+ * one writable. The poached clusters stay with member 1, its split drops
+ * just above them, and the record goes to disk; member 0's eviction is not
+ * undone. (The shadow model's rule that a pinned writer gains nothing
+ * covers only pins caused by the budget.) Once the limit is lifted, member
+ * 2 takes the free clusters and then poaches one more.
+ */
+static void
+child_data_rlimit_poach(void *arg)
+{
+	(void) arg;
+	const size_t cluster = cluster_size();
+	const uint64_t rpc = recs_per_cluster(4096);
+	size_t sizes[] = { 4096, 4096, 4096 };
+	uint8_t buf[4096];
+	allocator_t **a = allocator_group_init(sizes, 3, 0, 8 * cluster,
+	    selftest_scratch_dir());
+	allocator_group_t *g = a[0]->a_group;
+	struct rlimit saved, data;
+
+	for (uint64_t i = 0; i < 6 * rpc; i++) {
+		selftest_fill(buf, sizeof (buf), i + 1);
+		VERIFY3U(allocator_append(a[0], buf), ==, i);
+	}
+	VERIFY0(getrlimit(RLIMIT_DATA, &saved));
+	data = saved;
+	data.rlim_cur = vm_data_bytes() + cluster / 2;
+	VERIFY0(setrlimit(RLIMIT_DATA, &data));
+
+	selftest_fill(buf, sizeof (buf), 1000);
+	allocator_store(a[1], 3 * rpc, buf);
+	VERIFY3U(a[0]->a_cluster_count, ==, 4);
+	VERIFY3U(a[0]->a_first_disk_cluster, ==, 4);
+	VERIFY3U(a[1]->a_cluster_count, ==, 2);
+	VERIFY3U(a[1]->a_first_disk_cluster, ==, 2);
+	VERIFY3U(g->ag_clusters_current, ==, 6);
+	selftest_audit_group(a[0]);
+
+	VERIFY0(setrlimit(RLIMIT_DATA, &saved));
+	for (uint64_t i = 0; i < 3 * rpc; i++) {
+		selftest_fill(buf, sizeof (buf), 2000 + i);
+		VERIFY3U(allocator_append(a[2], buf), ==, i);
+	}
+	VERIFY3U(a[0]->a_cluster_count, ==, 3);
+	VERIFY3U(a[1]->a_cluster_count, ==, 2);
+	VERIFY3U(a[2]->a_cluster_count, ==, 3);
+	VERIFY3U(g->ag_clusters_current, ==, 8);
+	selftest_audit_group(a[0]);
+
+	for (uint64_t i = 0; i < 6 * rpc; i++)
+		check_record(a[0], i, i + 1);
+	/* The poached clusters read as zeros */
+	check_record(a[1], 0, 0);
+	check_record(a[1], 2 * rpc - 1, 0);
+	check_record(a[1], 2 * rpc, 0);
+	check_record(a[1], 3 * rpc, 1000);
+	for (uint64_t i = 0; i < 3 * rpc; i++)
+		check_record(a[2], i, 2000 + i);
+	allocator_group_fini(a[2]);
 }
 #endif
 
@@ -2164,6 +2235,8 @@ alloc_resource_limits(void)
 	selftest_expect_success("ENOMEM sparse spill",
 	    child_data_rlimit_sparse, NULL,
 	    "out of memory: spilling to");
+	selftest_expect_success("ENOMEM after poaching",
+	    child_data_rlimit_poach, NULL, "out of memory: spilling to");
 	disk = B_FALSE;
 	selftest_expect_exit("ENOMEM, memory-only", child_data_rlimit, &disk,
 	    "mprotect() failed: Cannot allocate memory");
@@ -2208,11 +2281,11 @@ alloc_fatal(void)
 	/*
 	 * A limit one past the largest that can be rounded up to a cluster
 	 * without overflow (or exceeding an off_t) is rejected. The largest
-	 * is accepted, and then the member's cluster table, with a pointer
-	 * for each of 2^43 clusters, is too big to allocate. The child caps
-	 * its address space so that the allocation fails however the system
-	 * overcommits. On 32-bit systems the table is only 16KB, so that case
-	 * is skipped.
+	 * is accepted, and then the group can't reserve its region of about
+	 * 2^63 bytes. The child caps its address space at 1TB, so the
+	 * reservation fails however large the address space is. On 32-bit
+	 * systems the region is only about 2GB and might fit, so that case is
+	 * skipped.
 	 */
 	fa.fa_disk = B_TRUE;
 	fa.fa_limit = SIZE_MAX / 2 - cluster + 1;
@@ -2222,7 +2295,7 @@ alloc_fatal(void)
 	fa.fa_limit = SIZE_MAX / 2 - cluster;
 	fa.fa_cap_as = B_TRUE;
 	selftest_expect_exit("largest limit", child_group_init, &fa,
-	    "unable to allocate");
+	    "unable to reserve");
 	fa.fa_cap_as = B_FALSE;
 #endif
 
