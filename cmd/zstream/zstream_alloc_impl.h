@@ -51,18 +51,22 @@ extern "C" {
  * transition always falls at a page cluster boundary.
  *
  * The ag_base_addr is a pointer to an mmapped region of size
- * (ag_clusters_max * ag_cluster_size). It's initially PROT_NONE and is
- * converted to usable memory page cluster by page cluster as storage
- * increases.
+ * (ag_clusters_max * ag_cluster_size), or NULL for a disk-only group. It's
+ * initially PROT_NONE and is converted to usable memory page cluster by
+ * page cluster as storage increases. ag_clusters_current is therefore also
+ * the writable frontier: the region's first ag_clusters_current clusters
+ * are writable, and each is held by exactly one member. The frontier never
+ * retreats; after it reaches ag_clusters_max, clusters only move between
+ * members.
  */
 typedef struct {
 	uint64_t	ag_clusters_max;	/* Total allowed for group */
 	uint64_t	ag_clusters_current;	/* Currently used by group */
 	size_t		ag_cluster_size;	/* Allocation unit */
 	char		*ag_dir;		/* Spill dir, for error msgs */
-	unsigned int	ag_num_allocators;
-	allocator_t	**ag_allocators;
-	uint8_t		*ag_base_addr;
+	unsigned int	ag_num_allocators;	/* # of allocators in group */
+	allocator_t	**ag_allocators;	/* Pointers to allocator_t's */
+	uint8_t		*ag_base_addr;		/* Start of address space */
 } allocator_group_t;
 
 /*
@@ -72,6 +76,7 @@ typedef struct {
  *   a_group->ag_clusters_current <= a_group->ag_clusters_max
  *   a_group->ag_clusters_current = sum_over_group(a_cluster_count)
  *   a_first_disk_cluster decreases monotonically (if at all)
+ *   a_group->ag_clusters_current increases monotonically (if at all)
  *
  * Given that you can read and write anywhere in the index space,
  * a_record_count is a bit vaguely defined. It's maintained to give
@@ -79,10 +84,12 @@ typedef struct {
  * "the next index." Functionally, it's 1 plus the highest index that was
  * ever written to or returned to the client. Reads don't affect it.
  *
- * a_clusters is an array of pointers to page-cluster-sized blocks of memory.
- * The maximum memory budget is fixed at init time, so we know exactly how
- * large to make that array: ag_clusters_max entries, or no array at all for
- * a disk-only group. Only the first a_cluster_count entries are valid.
+ * a_clusters is an array of pointers to page-cluster-sized blocks of memory
+ * within the group's region. Since clusters move between members, they
+ * needn't be contiguous or in address order. The maximum memory budget is
+ * fixed at init time, so we know exactly how large to make that array:
+ * ag_clusters_max entries, or no array at all for a disk-only group. Only
+ * the first a_cluster_count entries are valid.
  */
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
