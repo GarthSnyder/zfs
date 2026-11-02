@@ -53,6 +53,11 @@
 libzfs_handle_t		*libzfs_handle = NULL;
 static linear_hash_t	*record_specifiers = NULL;
 
+/*
+ * Hook for selftests to override pwritev()
+ */
+ssize_t (*safe_pwritev_call)(int, const struct iovec *, int, off_t) = pwritev;
+
 void *
 safe_malloc(size_t size)
 {
@@ -106,8 +111,6 @@ safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
 		done += (size_t)n;
 	}
 }
-
-ssize_t (*safe_pwritev_call)(int, const struct iovec *, int, off_t) = pwritev;
 
 /*
  * Handle possible short writes for pwritev(). Also allows for iovec arrays

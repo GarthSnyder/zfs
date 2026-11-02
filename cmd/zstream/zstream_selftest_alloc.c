@@ -2160,13 +2160,13 @@ alloc_resource_limits(void)
 
 	boolean_t disk = B_TRUE;
 	selftest_expect_success("ENOMEM spill", child_data_rlimit, &disk,
-	    "mmap() failed, out of memory: spilling to");
+	    "out of memory: spilling to");
 	selftest_expect_success("ENOMEM sparse spill",
 	    child_data_rlimit_sparse, NULL,
-	    "mmap() failed, out of memory: spilling to");
+	    "out of memory: spilling to");
 	disk = B_FALSE;
 	selftest_expect_exit("ENOMEM, memory-only", child_data_rlimit, &disk,
-	    "mmap() failed: Cannot allocate memory");
+	    "mprotect() failed: Cannot allocate memory");
 #endif
 }
 
@@ -2222,7 +2222,7 @@ alloc_fatal(void)
 	fa.fa_limit = SIZE_MAX / 2 - cluster;
 	fa.fa_cap_as = B_TRUE;
 	selftest_expect_exit("largest limit", child_group_init, &fa,
-	    "failed to allocate");
+	    "unable to allocate");
 	fa.fa_cap_as = B_FALSE;
 #endif
 
