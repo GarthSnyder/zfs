@@ -15,7 +15,7 @@
  */
 
 /*
- * Self-tests for linear_hash_t and minheap_t.
+ * Self-tests for linear_hash_t and heap_t.
  *
  * A linear_hash_t is a map from fixed-size keys, which are prefixes of the
  * records themselves, to records. The tests run tables against a shadow
@@ -48,12 +48,14 @@
  * buckets, then main buckets) while the table remains fully correct.
  * Group state is read through zstream_alloc_impl.h.
  *
- * The fatal paths (bad parameters, a bad opcode, a free heap given bucket
- * 0, and a memory-only table that outgrows its budget) run in child
- * processes that must exit with the expected message.
+ * The fatal paths (bad parameters to the table or a heap, a bad opcode, a
+ * heap pushed past its size limit, and a memory-only table that outgrows
+ * its budget) run in child processes that must exit with the expected
+ * message.
  *
- * The free heap of overflow buckets is also tested on its own, through
- * minheap_push() and minheap_pop().
+ * The table keeps its free overflow buckets in a heap_t, which is also
+ * tested on its own, as both a min-heap and a max-heap, through
+ * heap_push() and heap_pop().
  */
 
 #include <cityhash.h>
@@ -498,31 +500,31 @@ ht_verify_all(htest_t *ht)
 }
 
 /*
- * Count (and describe) violations of the free heap's shape: more elements
- * than slots, a zero index, or an element larger than one of its children.
- * Pops take the root, so any of these can hand out the wrong bucket.
+ * Count (and describe) violations of a heap's shape: an unknown order,
+ * more elements than slots, more slots than its limit, or an element that
+ * belongs before its parent (smaller in a min-heap, larger in a max-heap).
+ * Pops take the root, so any of these can hand out the wrong value.
  */
 static uint64_t
-heap_problems(const minheap_t *heap)
+heap_problems(const heap_t *heap)
 {
 	uint64_t problems = 0;
 
-	if (heap->count > heap->size) {
-		warnx("free heap holds %llu buckets in %llu slots",
-		    (u_longlong_t)heap->count, (u_longlong_t)heap->size);
+	if ((heap->order != HEAP_MIN && heap->order != HEAP_MAX) ||
+	    heap->count > heap->size ||
+	    (heap->max_size != 0 && heap->size > heap->max_size)) {
+		warnx("heap of order %d holds %llu values in %llu slots "
+		    "(limit %llu)", heap->order, (u_longlong_t)heap->count,
+		    (u_longlong_t)heap->size, (u_longlong_t)heap->max_size);
 		return (1);
 	}
-	for (uint64_t i = 0; i < heap->count; i++) {
-		if (heap->buckets[i] == 0) {
-			warnx("free heap slot %llu holds bucket 0",
-			    (u_longlong_t)i);
-			problems++;
-		}
-		if (i > 0 && heap->buckets[(i - 1) / 2] > heap->buckets[i]) {
-			warnx("free heap slot %llu (bucket %llu) is smaller "
-			    "than its parent (bucket %llu)", (u_longlong_t)i,
-			    (u_longlong_t)heap->buckets[i],
-			    (u_longlong_t)heap->buckets[(i - 1) / 2]);
+	for (uint64_t i = 1; i < heap->count; i++) {
+		uint64_t value = heap->values[i];
+		uint64_t parent = heap->values[(i - 1) / 2];
+		if (heap->order == HEAP_MIN ? value < parent : value > parent) {
+			warnx("heap slot %llu (%llu) belongs before its "
+			    "parent (%llu)", (u_longlong_t)i,
+			    (u_longlong_t)value, (u_longlong_t)parent);
 			problems++;
 		}
 	}
@@ -666,7 +668,7 @@ ht_validate(htest_t *ht)
 
 	problems += heap_problems(&lh->lh_freeheap);
 	for (uint64_t i = 0; i < lh->lh_freeheap.count; i++) {
-		record_ix_t ix = lh->lh_freeheap.buckets[i];
+		record_ix_t ix = lh->lh_freeheap.values[i];
 		if (ix == 0 || ix >= novf || ovf_seen[ix]++ != 0) {
 			warnx("free overflow bucket %llu is invalid, linked, "
 			    "or free twice", (u_longlong_t)ix);
@@ -746,7 +748,7 @@ hash_group(linear_hash_t *lh)
 	VERIFY3U(lh->lh_alloc.bucket->a_record_size, ==, sizeof (bucket_t));
 	VERIFY3U(lh_get_stats(lh).ls_memory_use, ==,
 	    g->ag_clusters_current * g->ag_cluster_size +
-	    lh->lh_freeheap.size * sizeof (record_ix_t));
+	    lh->lh_freeheap.size * sizeof (uint64_t));
 	return (g);
 }
 
@@ -788,7 +790,7 @@ hash_basic(void)
 
 	/* A new table holds nothing and uses memory only for the free heap */
 	lh_stats_t stats = lh_get_stats(lh);
-	size_t freeheap_size = lh->lh_freeheap.size * sizeof (record_ix_t);
+	size_t freeheap_size = lh->lh_freeheap.size * sizeof (uint64_t);
 	VERIFY0(stats.ls_total_records);
 	VERIFY3U(stats.ls_memory_use, ==, freeheap_size);
 
@@ -840,7 +842,7 @@ hash_basic(void)
 	VERIFY3U(g->ag_clusters_max * g->ag_cluster_size, ==,
 	    roundup(64 << 20, g->ag_cluster_size));
 	stats = lh_get_stats(lh);
-	size_t heap_size = lh->lh_freeheap.size * sizeof (record_ix_t);
+	size_t heap_size = lh->lh_freeheap.size * sizeof (uint64_t);
 	VERIFY3U(stats.ls_total_records, ==, 2);
 	VERIFY3U(stats.ls_memory_use, ==, 2 * g->ag_cluster_size + heap_size);
 	lh_fini(lh);
@@ -1094,141 +1096,236 @@ hash_splits(void)
 }
 
 /*
- * A free heap and a model of its contents: which buckets in [1, hm_range)
- * it holds
+ * Values for the heap tests, indexed by i in [0, HEAP_RANGE) in ascending
+ * order: four runs of consecutive values starting at 0, straddling 2^32,
+ * straddling 2^63 and ending at UINT64_MAX. Truncation to 32 bits or a
+ * signed comparison would reorder them.
+ */
+#define	HEAP_RANGE	3000
+#define	HEAP_RUN	(HEAP_RANGE / 4)
+
+static uint64_t
+heap_value(uint64_t i)
+{
+	VERIFY3U(i, <, HEAP_RANGE);
+	switch (MIN(i / HEAP_RUN, 3)) {
+	case 0:
+		return (i);
+	case 1:
+		return ((1ULL << 32) - HEAP_RUN / 2 + (i - HEAP_RUN));
+	case 2:
+		return ((1ULL << 63) - HEAP_RUN / 2 + (i - 2 * HEAP_RUN));
+	default:
+		return (UINT64_MAX - (HEAP_RANGE - 1 - i));
+	}
+}
+
+/*
+ * A heap and a model of its contents: how many copies of each
+ * heap_value() it holds
  */
 typedef struct {
-	minheap_t	hm_heap;
-	uint8_t		*hm_present;	/* Indexed by bucket */
-	uint64_t	hm_range;
+	heap_t		hm_heap;
+	uint32_t	*hm_copies;	/* Indexed by heap_value() index */
 	uint64_t	hm_count;
 } heap_model_t;
 
 static void
-hm_init(heap_model_t *hm, uint64_t initial_size, uint64_t range)
+hm_init(heap_model_t *hm, heap_order_t order, uint64_t initial_size,
+    uint64_t max_size)
 {
 	*hm = (heap_model_t) {
-		.hm_heap = minheap_init(initial_size),
-		.hm_present = safe_calloc(range),
-		.hm_range = range,
+		.hm_heap = heap_init(order, initial_size, max_size),
+		.hm_copies = safe_calloc(HEAP_RANGE * sizeof (uint32_t)),
 	};
+	VERIFY3U(hm->hm_heap.order, ==, order);
+	VERIFY3U(hm->hm_heap.size, ==, initial_size);
+	VERIFY3U(hm->hm_heap.max_size, ==, max_size);
+	VERIFY0(hm->hm_heap.count);
 }
 
 static void
 hm_fini(heap_model_t *hm)
 {
 	VERIFY0(hm->hm_count);
-	minheap_fini(&hm->hm_heap);
-	free(hm->hm_present);
+	heap_fini(&hm->hm_heap);
+	free(hm->hm_copies);
 }
 
 /*
- * Push a bucket the heap doesn't hold. The heap must double its allocation
- * exactly when it is already full, and keep its shape.
+ * Push heap_value(i). A full heap must double its allocation, but not
+ * past its limit, and keep its shape.
  */
 static void
-hm_push(heap_model_t *hm, record_ix_t ix)
+hm_push(heap_model_t *hm, uint64_t i)
 {
-	minheap_t *heap = &hm->hm_heap;
+	heap_t *heap = &hm->hm_heap;
 	uint64_t size = heap->size;
 
-	VERIFY(ix > 0 && ix < hm->hm_range && !hm->hm_present[ix]);
-	minheap_push(heap, ix);
-	hm->hm_present[ix] = 1;
+	if (hm->hm_count == size) {
+		size *= 2;
+		if (heap->max_size != 0)
+			size = MIN(size, heap->max_size);
+	}
+	VERIFY3U(hm->hm_count, <, size);
+	heap_push(heap, heap_value(i));
+	hm->hm_copies[i]++;
 	hm->hm_count++;
 	VERIFY3U(heap->count, ==, hm->hm_count);
-	VERIFY3U(heap->size, ==, (hm->hm_count > size) ? 2 * size : size);
+	VERIFY3U(heap->size, ==, size);
 	VERIFY0(heap_problems(heap));
 }
 
 /*
- * Pop, which must return the smallest bucket the heap holds, or 0 if it is
- * empty. The allocation never shrinks.
+ * Pop, which must return the smallest value the heap holds (the largest,
+ * in a max-heap), or B_FALSE, without touching its output, if the heap
+ * is empty. The allocation never shrinks.
  */
-static record_ix_t
+static boolean_t
 hm_pop(heap_model_t *hm)
 {
-	minheap_t *heap = &hm->hm_heap;
+	const uint64_t poison = 0xa5a5a5a5a5a5a5a5ULL;
+	heap_t *heap = &hm->hm_heap;
 	uint64_t size = heap->size;
-	record_ix_t want = 0;
+	uint64_t got = poison;
+	boolean_t popped = heap_pop(heap, &got);
 
-	for (record_ix_t ix = 1; hm->hm_count > 0 && want == 0; ix++) {
-		if (hm->hm_present[ix])
-			want = ix;
-	}
-	record_ix_t got = minheap_pop(heap);
-	if (got != want) {
-		errx(1, "free heap popped bucket %llu, expected %llu",
-		    (u_longlong_t)got, (u_longlong_t)want);
-	}
-	if (want != 0) {
-		hm->hm_present[want] = 0;
+	if (hm->hm_count == 0) {
+		if (popped || got != poison) {
+			errx(1, "empty heap popped %llu (returned %d)",
+			    (u_longlong_t)got, popped);
+		}
+	} else {
+		uint64_t want = 0;
+		if (heap->order == HEAP_MIN) {
+			while (hm->hm_copies[want] == 0)
+				want++;
+		} else {
+			want = HEAP_RANGE - 1;
+			while (hm->hm_copies[want] == 0)
+				want--;
+		}
+		if (!popped || got != heap_value(want)) {
+			errx(1, "%s-heap popped %llu (returned %d), "
+			    "expected %llu", heap->order == HEAP_MIN ?
+			    "min" : "max", (u_longlong_t)got, popped,
+			    (u_longlong_t)heap_value(want));
+		}
+		hm->hm_copies[want]--;
 		hm->hm_count--;
 	}
 	VERIFY3U(heap->count, ==, hm->hm_count);
 	VERIFY3U(heap->size, ==, size);
 	VERIFY0(heap_problems(heap));
-	return (got);
+	return (popped);
 }
 
 /*
- * Pop everything (necessarily in ascending order), then pop the empty heap
+ * Pop everything (necessarily in order), then pop the empty heap
  */
 static void
 hm_drain(heap_model_t *hm)
 {
 	while (hm->hm_count > 0)
-		(void) hm_pop(hm);
-	VERIFY0(hm_pop(hm));
+		VERIFY(hm_pop(hm));
+	VERIFY(!hm_pop(hm));
 }
 
 /*
- * The free heap on its own, against the model: pushes in ascending,
- * descending and shuffled order, each drained, then random interleavings
- * of pushes and pops that grow and shrink the heap. Every step checks the
- * popped bucket, the count, the allocation and the heap's shape.
+ * A heap on its own, against the model: pushes of every value in
+ * ascending, descending and shuffled order, then of every value twice,
+ * shuffled, each drained, then random interleavings of pushes (including
+ * duplicates) and pops that grow and shrink the heap. Every step checks
+ * the popped value, the count, the allocation and the heap's shape.
  */
 static void
-heap_alone(uint64_t initial_size, uint64_t stream)
+heap_alone(heap_order_t order, uint64_t initial_size, uint64_t max_size,
+    uint64_t stream)
 {
-	const uint64_t range = 3000;
-	record_ix_t *order = safe_malloc((range - 1) * sizeof (record_ix_t));
+	uint64_t *order_ix = safe_malloc(2 * HEAP_RANGE * sizeof (uint64_t));
 	heap_model_t hm;
 	selftest_rng_t rng;
 
 	selftest_rng_init(&rng, stream);
-	hm_init(&hm, initial_size, range);
-	VERIFY0(hm_pop(&hm));
+	hm_init(&hm, order, initial_size, max_size);
+	VERIFY(!hm_pop(&hm));
 
-	for (int pass = 0; pass < 3; pass++) {
-		for (uint64_t i = 0; i < range - 1; i++)
-			order[i] = (pass == 1) ? range - 1 - i : i + 1;
-		for (uint64_t i = range - 2; pass == 2 && i > 0; i--) {
-			uint64_t j = selftest_rng_below(&rng, i + 1);
-			record_ix_t t = order[i];
-			order[i] = order[j];
-			order[j] = t;
+	for (int pass = 0; pass < 4; pass++) {
+		uint64_t n = (pass == 3) ? 2 * HEAP_RANGE : HEAP_RANGE;
+		for (uint64_t i = 0; i < n; i++) {
+			order_ix[i] = (pass == 1) ?
+			    HEAP_RANGE - 1 - i : i % HEAP_RANGE;
 		}
-		for (uint64_t i = 0; i < range - 1; i++)
-			hm_push(&hm, order[i]);
+		for (uint64_t i = n - 1; pass >= 2 && i > 0; i--) {
+			uint64_t j = selftest_rng_below(&rng, i + 1);
+			uint64_t t = order_ix[i];
+			order_ix[i] = order_ix[j];
+			order_ix[j] = t;
+		}
+		for (uint64_t i = 0; i < n; i++)
+			hm_push(&hm, order_ix[i]);
 		hm_drain(&hm);
 	}
 
 	for (int phase = 0; phase < 4; phase++) {
 		uint64_t push_percent = (phase % 2 == 0) ? 70 : 30;
 		for (int op = 0; op < 5000; op++) {
-			record_ix_t ix = 1 +
-			    selftest_rng_below(&rng, range - 1);
-			if (selftest_rng_below(&rng, 100) < push_percent &&
-			    !hm.hm_present[ix])
-				hm_push(&hm, ix);
+			if (selftest_rng_below(&rng, 100) < push_percent)
+				hm_push(&hm, selftest_rng_below(&rng,
+				    HEAP_RANGE));
 			else
 				(void) hm_pop(&hm);
 		}
 	}
 	hm_drain(&hm);
 	hm_fini(&hm);
-	free(order);
+	free(order_ix);
+}
+
+/*
+ * Heaps with a size limit, against the model. Each one's allocation must
+ * grow through the sizes worked out by hand below (so from 3 entries with
+ * a limit of 20, to 20 rather than 24), and is filled exactly to its limit
+ * with random values, drained, and filled again without growing. Pushing
+ * past the limit is fatal; see hash_fatal().
+ */
+static void
+heap_limited(heap_order_t order, uint64_t stream)
+{
+	static const struct {
+		uint64_t	initial;
+		uint64_t	limit;
+		uint64_t	sizes[5];	/* 0-terminated */
+	} cases[] = {
+		{ 3, 20, { 3, 6, 12, 20 } },
+		{ 4, 16, { 4, 8, 16 } },
+		{ 1, 7, { 1, 2, 4, 7 } },
+		{ 5, 5, { 5 } },
+		{ 1, 1, { 1 } },
+	};
+	selftest_rng_t rng;
+
+	selftest_rng_init(&rng, stream);
+	for (int c = 0; c < ARRAY_SIZE(cases); c++) {
+		heap_model_t hm;
+		int s = 0;
+
+		hm_init(&hm, order, cases[c].initial, cases[c].limit);
+		for (int round = 0; round < 2; round++) {
+			for (uint64_t n = 0; n < cases[c].limit; n++) {
+				hm_push(&hm, selftest_rng_below(&rng,
+				    HEAP_RANGE));
+				if (hm.hm_heap.size != cases[c].sizes[s])
+					s++;
+				VERIFY3U(hm.hm_heap.size, ==,
+				    cases[c].sizes[s]);
+			}
+			VERIFY3U(hm.hm_heap.size, ==, cases[c].limit);
+			VERIFY0(cases[c].sizes[s + 1]);
+			hm_drain(&hm);
+		}
+		hm_fini(&hm);
+	}
 }
 
 /*
@@ -1260,7 +1357,7 @@ static void
 insert_checking_reuse(htest_t *ht, uint64_t n, uint64_t b)
 {
 	linear_hash_t *lh = ht->ht_lh;
-	minheap_t *heap = &lh->lh_freeheap;
+	heap_t *heap = &lh->lh_freeheap;
 	uint64_t count = heap->count;
 	uint64_t top_entries = lh->lh_occupancy.top_entries;
 	record_ix_t fresh = lh->lh_alloc.overflow->a_record_count;
@@ -1268,8 +1365,8 @@ insert_checking_reuse(htest_t *ht, uint64_t n, uint64_t b)
 	record_ix_t min = 0;
 
 	for (uint64_t i = 0; i < count; i++) {
-		if (min == 0 || heap->buckets[i] < min)
-			min = heap->buckets[i];
+		if (min == 0 || heap->values[i] < min)
+			min = heap->values[i];
 	}
 	VERIFY3S(ht_op(ht, LH_INSERT, n), ==, LH_INSERTED);
 	VERIFY3U(lh->lh_occupancy.top_entries, ==, top_entries);
@@ -1287,7 +1384,7 @@ insert_checking_reuse(htest_t *ht, uint64_t n, uint64_t b)
 		VERIFY3U(heap->count, ==, count - 1);
 		VERIFY3U(lh->lh_alloc.overflow->a_record_count, ==, fresh);
 		for (uint64_t i = 0; i < heap->count; i++)
-			VERIFY3U(heap->buckets[i], !=, new_tail);
+			VERIFY3U(heap->values[i], !=, new_tail);
 	} else {
 		VERIFY3U(new_tail, ==, fresh);
 		VERIFY3U(lh->lh_alloc.overflow->a_record_count, ==, fresh + 1);
@@ -1324,10 +1421,12 @@ heap_in_table(void)
 	const uint64_t nfree = 40;
 	htest_t *ht = ht_init(&cfg, 2000);
 	linear_hash_t *lh = ht->ht_lh;
-	minheap_t *heap = &lh->lh_freeheap;
+	heap_t *heap = &lh->lh_freeheap;
 	uint64_t n = 0;
 
+	VERIFY3U(heap->order, ==, HEAP_MIN);
 	VERIFY3U(heap->size, ==, FREEHEAP_INITIAL_SIZE);
+	VERIFY0(heap->max_size);
 	VERIFY0(heap->count);
 
 	for (; n < (nfree + 1) * ENTRIES_PER_BUCKET; n++) {
@@ -1378,15 +1477,21 @@ heap_in_table(void)
 }
 
 /*
- * The free heap of overflow buckets, on its own (from initial sizes of 1,
- * which doubles through every power of two, and of FREEHEAP_INITIAL_SIZE)
- * and through the table
+ * Heaps on their own, in both orders: from an initial size of 1 with no
+ * limit, which doubles through every power of two; from
+ * FREEHEAP_INITIAL_SIZE with a limit of exactly the most that
+ * heap_alone() ever holds, which its duplicate pass reaches; and with
+ * small limits. Then the free heap of overflow buckets through the table.
  */
 static void
 hash_free_heap(void)
 {
-	heap_alone(1, 310);
-	heap_alone(FREEHEAP_INITIAL_SIZE, 311);
+	heap_alone(HEAP_MIN, 1, 0, 310);
+	heap_alone(HEAP_MIN, FREEHEAP_INITIAL_SIZE, 2 * HEAP_RANGE, 311);
+	heap_limited(HEAP_MIN, 312);
+	heap_alone(HEAP_MAX, 1, 0, 313);
+	heap_alone(HEAP_MAX, FREEHEAP_INITIAL_SIZE, 2 * HEAP_RANGE, 314);
+	heap_limited(HEAP_MAX, 315);
 	heap_in_table();
 }
 
@@ -1761,12 +1866,52 @@ child_bad_op(void *arg)
 	(void) lh_record(lh, LH_NUM_OPS, buf);
 }
 
+typedef struct {
+	heap_order_t	ha_order;
+	uint64_t	ha_initial_size;
+	uint64_t	ha_max_size;
+} heap_args_t;
+
 static void
-child_heap_push_zero(void *arg)
+child_heap_init(void *arg)
 {
+	heap_args_t *ha = arg;
+	(void) heap_init(ha->ha_order, ha->ha_initial_size, ha->ha_max_size);
+}
+
+/*
+ * Fill a heap exactly to its limit, then push one more
+ */
+static void
+child_heap_overflow(void *arg)
+{
+	heap_args_t *ha = arg;
+	heap_t heap = heap_init(ha->ha_order, ha->ha_initial_size,
+	    ha->ha_max_size);
+
+	for (uint64_t i = 0; i < ha->ha_max_size; i++)
+		heap_push(&heap, i);
+	VERIFY3U(heap.size, ==, ha->ha_max_size);
+	heap_push(&heap, 0);
+}
+
+/*
+ * An unlimited heap whose next doubling would be too big to address. The
+ * heap is built by hand, so nothing that size is ever allocated.
+ */
+static void
+child_heap_unaddressable(void *arg)
+{
+	uint64_t values[1] = { 0 };
+	heap_t heap = {
+		.order = HEAP_MIN,
+		.size = SIZE_MAX / sizeof (uint64_t) / 2 + 1,
+		.values = values,
+	};
+
 	(void) arg;
-	minheap_t heap = minheap_init(1);
-	minheap_push(&heap, 0);
+	heap.count = heap.size;
+	heap_push(&heap, 0);
 }
 
 /*
@@ -1850,8 +1995,39 @@ hash_fatal(void)
 
 	selftest_expect_exit("invalid opcode", child_bad_op, NULL,
 	    "LH_NUM_OPS");
-	selftest_expect_exit("free bucket 0", child_heap_push_zero, NULL,
-	    "VERIFY3U(bucket, !=, 0)");
+
+	heap_args_t ha = {
+		.ha_order = HEAP_MIN,
+		.ha_initial_size = 0,
+		.ha_max_size = 0,
+	};
+	selftest_expect_exit("empty heap", child_heap_init, &ha,
+	    "VERIFY3U(initial_size, >, 0)");
+	ha.ha_initial_size = SIZE_MAX / sizeof (uint64_t) + 1;
+	selftest_expect_exit("unaddressable heap", child_heap_init, &ha,
+	    "VERIFY3U(initial_size, <=, SIZE_MAX / sizeof (uint64_t))");
+	ha.ha_initial_size = 8;
+	ha.ha_max_size = 7;
+	selftest_expect_exit("heap limit below initial size", child_heap_init,
+	    &ha, "max_size == 0 || max_size >= initial_size");
+	ha.ha_order = HEAP_MAX + 1;
+	ha.ha_max_size = 8;
+	selftest_expect_exit("bad heap order", child_heap_init, &ha,
+	    "order == HEAP_MIN || order == HEAP_MAX");
+	ha.ha_order = HEAP_MIN;
+	ha.ha_initial_size = 3;
+	ha.ha_max_size = 20;
+	selftest_expect_exit("min-heap overflow", child_heap_overflow, &ha,
+	    "heap size limit of 20 entries exceeded");
+	ha.ha_order = HEAP_MAX;
+	ha.ha_initial_size = 4;
+	ha.ha_max_size = 16;
+	selftest_expect_exit("max-heap overflow", child_heap_overflow, &ha,
+	    "heap size limit of 16 entries exceeded");
+	selftest_expect_exit("unaddressable heap growth",
+	    child_heap_unaddressable, NULL,
+	    "VERIFY3U(size, <=, SIZE_MAX / sizeof (uint64_t))");
+
 	boolean_t minimal = B_FALSE;
 	selftest_expect_exit("memory-only overflow",
 	    child_memory_only_overflow, &minimal, "memory limit exceeded");
