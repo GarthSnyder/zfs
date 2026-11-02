@@ -32,7 +32,7 @@ extern "C" {
 
 #include "zstream_alloc.h"
 #include "zstream_hash.h"
-#include "zstream_minheap.h"
+#include "zstream_heap.h"
 
 #define	ENTRIES_PER_BUCKET		6
 #define	FREEHEAP_INITIAL_SIZE		64  /* Small -> better test coverage */
@@ -104,7 +104,7 @@ struct linear_hash {
 	unsigned int	lh_hash_suffix_length;	  /* The short mask length */
 	record_ix_t	lh_split_pointer;	  /* Next bucket to split */
 	lh_occupancy_t	lh_occupancy;		  /* Occupancy */
-	minheap_t	lh_freeheap;		  /* Available overflow bkts */
+	heap_t		lh_freeheap;		  /* Available overflow bkts */
 };
 
 /*

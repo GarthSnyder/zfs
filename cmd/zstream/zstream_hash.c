@@ -162,7 +162,7 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 		    .top_buckets = top_buckets,
 		    .max_top_entries = MAX_TOP_ENTRIES(top_buckets),
 		},
-		.lh_freeheap = minheap_init(FREEHEAP_INITIAL_SIZE)
+		.lh_freeheap = heap_init(HEAP_MIN, FREEHEAP_INITIAL_SIZE, 0)
 	};
 	/* The index 0 is a sentinel value for these allocators */
 	allocator_skip(lh->lh_alloc.data);
@@ -178,8 +178,8 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 static inline record_ix_t
 find_overflow_bucket(linear_hash_t *lh)
 {
-	record_ix_t ix = minheap_pop(&lh->lh_freeheap);
-	if (ix != 0)
+	record_ix_t ix;
+	if (heap_pop(&lh->lh_freeheap, &ix))
 		return (ix);
 	return (allocator_skip(lh->lh_alloc.overflow));
 }
@@ -192,7 +192,7 @@ free_overflow_chain(linear_hash_t *lh, record_ix_t ix)
 {
 	bucket_t buff;
 	while (ix != 0) {
-		minheap_push(&lh->lh_freeheap, ix);
+		heap_push(&lh->lh_freeheap, ix);
 		allocator_retrieve(lh->lh_alloc.overflow, ix, &buff);
 		ix = buff.b_overflow;
 	}
@@ -476,7 +476,7 @@ lh_get_stats(linear_hash_t *lh)
 		.ls_memory_use = data.as_memory_used +
 		    overflow.as_memory_used +
 		    top.as_memory_used +
-		    lh->lh_freeheap.size * sizeof (record_ix_t),
+		    lh->lh_freeheap.size * sizeof (uint64_t),
 		/* Don't count the index-0 sentinel */
 		.ls_total_records = data.as_num_records - 1
 	};
@@ -489,6 +489,6 @@ lh_fini(linear_hash_t *lh)
 	VERIFY(lh != NULL);
 	if (lh->lh_alloc.data != NULL)
 		allocator_group_fini(lh->lh_alloc.data);
-	minheap_fini(&lh->lh_freeheap);
+	heap_fini(&lh->lh_freeheap);
 	free(lh);
 }

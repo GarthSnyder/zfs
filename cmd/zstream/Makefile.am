@@ -25,10 +25,10 @@ zstream_SOURCES = \
 	%D%/zstream_hash.c \
 	%D%/zstream_hash.h \
 	%D%/zstream_hash_impl.h \
+	%D%/zstream_heap.c \
+	%D%/zstream_heap.h \
 	%D%/zstream_io.c \
 	%D%/zstream_io.h \
-	%D%/zstream_minheap.c \
-	%D%/zstream_minheap.h \
 	%D%/zstream_modules.h \
 	%D%/zstream_queue.c \
 	%D%/zstream_queue.h \
