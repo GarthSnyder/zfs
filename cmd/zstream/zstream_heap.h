@@ -24,6 +24,8 @@ extern "C" {
 #include <stdint.h>
 #include <sys/stdtypes.h>
 
+#define	heap_count(heap)	((heap)->count)
+
 /*
  * This API implements a simple binary heap of uint64_t's, ordered either
  * smallest first (a min-heap) or largest first (a max-heap). Any value can
@@ -72,6 +74,9 @@ heap_push(heap_t *heap, uint64_t value);
  */
 boolean_t
 heap_pop(heap_t *heap, uint64_t *value);
+
+boolean_t
+heap_peek(heap_t *heap, uint64_t *value);
 
 void
 heap_fini(heap_t *heap);

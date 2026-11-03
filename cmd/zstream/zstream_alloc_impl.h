@@ -34,12 +34,15 @@ extern "C" {
 #include <sys/types.h>
 
 #include "zstream_alloc.h"
+#include "zstream_heap.h"
 
 /*
  * Evictions write at most this many clusters per pwritev() call. It's here
  * only so that selftests can evict across batch boundaries.
  */
 #define	IOVEC_BUFFSIZE	256
+
+#define	clusters_owned(alloc)	(heap_count(&(alloc)->a_cluster_heap))
 
 /*
  * All allocators are members of an allocator group, which can be a group of
@@ -67,12 +70,13 @@ typedef struct {
 	unsigned int	ag_num_allocators;	/* # of allocators in group */
 	allocator_t	**ag_allocators;	/* Pointers to allocator_t's */
 	uint8_t		*ag_base_addr;		/* Start of address space */
+	heap_t		ag_free_clusters;	/* Available, inited clusters */
 } allocator_group_t;
 
 /*
  * Invariants:
  *
- *   a_cluster_count <= a_first_disk_cluster <= a_group->ag_clusters_max
+ *   clusters_owned(alloc) <= a_first_disk_cluster <= a_group->ag_clusters_max
  *   a_group->ag_clusters_current <= a_group->ag_clusters_max
  *   a_group->ag_clusters_current = sum_over_group(a_cluster_count)
  *   a_first_disk_cluster decreases monotonically (if at all)
@@ -97,8 +101,8 @@ struct allocator {
 	uint64_t	   a_records_per_cluster; /* Constant (minimize divs) */
 	uint64_t	   a_first_disk_cluster;  /* Memory/disk split point */
 	uint64_t	   a_record_count;	  /* See comments above */
-	uint64_t	   a_cluster_count;	  /* Page clusters in use */
 	uint8_t		   **a_clusters;	  /* Array of cluster ptrs */
+	heap_t		   a_cluster_heap;	  /* Heap of alloced clusters */
 	allocator_group_t  *a_group;		  /* Back-pointer to group */
 };
 
