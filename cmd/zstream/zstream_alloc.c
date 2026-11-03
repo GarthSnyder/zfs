@@ -32,6 +32,7 @@
 
 #include "zstream_alloc.h"
 #include "zstream_alloc_impl.h"
+#include "zstream_heap.h"
 #include "zstream_util.h"
 
 #define	INITIAL_HEAP_SIZE	64
@@ -39,32 +40,32 @@
 /*
  * This implementation exploits two features common to most UNIX-like systems.
  *
- * - Filesystem write holes: For a dual-backed allocator, the
- *   memory-resident portion of the data is treated as an overlay of the
- *   first part of the backing file. Memory and disk share the same
+ * - Filesystem write holes: on an allocator that uses both memory and disk
+ *   storage, the memory-resident portion of the data is treated as an overlay
+ *   of the first part of the backing file. Memory and disk share the same
  *   addressing scheme for records: record 100 is always at the same offset
  *   whether it's in memory or on disk.
  *
  *   The first part of the disk file hides underneath the memory overlay and
- *   is never written to. Ergo, it occupies no storage space on filesystems
- *   that support holes. Since memory and disk have common addressing,
- *   clusters can be moved from memory to disk by writing them to their same
- *   offsets in the file.
+ *   is never written to unless the allocator is forced to yield memory.
+ *   Ergo, it occupies no storage space on filesystems that support holes.
+ *   Since memory and disk have common addressing, clusters can be moved from
+ *   memory to disk by writing them to their same offsets in the file.
  *
  *   If the backing file's filesystem does not support holes (unlikely but
  *   possible), the code is still correct. However, actual disk space
  *   consumption will be higher.
  *
  * - PROT_NONE virtual pages: These pages do not consume physical memory,
- *   TLB entries, or swap space, so they are essentially free. Because of
- *   that, allocator groups can request a monolithic VM allocation up front.
+ *   TLB entries, or swap space, so they are essentially free. Allocator
+ *   groups request a monolithic allocation of address space up front.
  *   (The pages do still count as address space, so the whole budget must
  *   fit within RLIMIT_AS.)
  *
  *   The group makes clusters writable one at a time, in address order, by
  *   changing their protection from PROT_NONE to PROT_READ | PROT_WRITE.
  *   Clusters never revert to PROT_NONE. Once the whole region is writable,
- *   memory moves between allocators only by transfer.
+ *   memory moves between allocators only through transfers.
  */
 
 typedef struct {
@@ -153,9 +154,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		.ag_num_allocators = num_allocators,
 		.ag_allocators =
 		    safe_malloc(num_allocators * sizeof (allocator_t *)),
-		.ag_base_addr = base_address,
-		.ag_free_clusters = heap_init(HEAP_MIN, INITIAL_HEAP_SIZE,
-			group->ag_clusters_max)
+		.ag_base_addr = base_address
 	};
 
 	for (int i = 0; i < num_allocators; i++) {
@@ -195,13 +194,14 @@ retry:	loc = locate_record(alloc, record);
 			    loc.offset, alloc->a_group->ag_dir);
 	} else {
 		if (alloc->a_clusters[loc.cluster] == NULL &&
-		    try_make_writable(alloc, loc.cluster) == B_FALSE)
+		    try_make_writable(alloc, loc.cluster) == B_FALSE) {
 			/*
-			 * Retry as a disk operation. try_make_writable()
-			 * already moved the split point, so locate_record()
-			 * will now return an on-disk location.
+			 * try_make_writable() moves the split point on
+			 * failure, so locate_record() will now return an
+			 * on-disk location.
 			 */
 			goto retry;
+		}
 		memcpy(alloc->a_clusters[loc.cluster] + loc.offset_in_cluster,
 		    buff, alloc->a_record_size);
 	}
@@ -215,17 +215,14 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 	record_location_t loc = locate_record(alloc, record);
 
 	if (loc.on_disk && alloc->a_fd < 0) {
-		/*
-		 * Fine for reading but will fail if attempted as a write.
-		 */
-		memset(buff, 0, alloc->a_record_size);
-	} else if (loc.on_disk) {
-		safe_pread_zero(alloc->a_fd, buff, alloc->a_record_size,
-		    loc.offset);
+		if (alloc->a_fd >= 0)
+			safe_pread_zero(alloc->a_fd, buff,
+			    alloc->a_record_size, loc.offset);
+		else
+			/* Fine as a read, would fail as a write */
+			memset(buff, 0, alloc->a_record_size);
 	} else if (alloc->a_clusters[loc.cluster] == NULL) {
-		/*
-		 * Never written, so we can safely "read" back as zeros.
-		 */
+		/* Never written, so we can safely "read" back as zeros */
 		memset(buff, 0, alloc->a_record_size);
 	} else {
 		memcpy(buff, alloc->a_clusters[loc.cluster] +
@@ -236,6 +233,7 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 record_ix_t
 allocator_append(allocator_t *alloc, const void *data)
 {
+	VERIFY(alloc != NULL);
 	record_ix_t loc = alloc->a_record_count;
 	allocator_store(alloc, loc, data);
 	return (loc);
@@ -269,27 +267,33 @@ evict_last_cluster(allocator_t *alloc)
 	off_t offset = last_cluster * group->ag_cluster_size;
 	uint8_t *buff = alloc->a_clusters[last_cluster];
 	safe_pwrite(alloc->a_fd, buff, group->ag_cluster_size, offset,
-		group->ag_dir);
+	    group->ag_dir);
 	alloc->a_clusters[last_cluster] = NULL;
 	alloc->a_first_disk_cluster = last_cluster;
+	memset(buff, 0, group->ag_cluster_size);
 	return (buff);
 }
 
 /*
- * Try to poach one page cluster from an allocator of lower priority,
- * setting up the named cluster to use that memory.
+ * Try to poach a page cluster from an allocator of lower priority, or from
+ * the allocator itself if there's a higher-numbered page cluster available.
+ *
+ * Self-poaching is allowed because we want to keep as much data in memory
+ * as possible. Recycling a page cluster forces the memory/disk boundary to
+ * that cluster, so we want to do that on the highest numbered cluster.
  */
 static boolean_t
 poach_cluster(allocator_t *alloc, uint64_t cluster)
 {
 	VERIFY(alloc != NULL && alloc->a_clusters[cluster] == NULL);
 	allocator_t **allocators = alloc->a_group->ag_allocators;
-	unsigned int num_allocators = alloc->a_group->ag_num_allocators;
+	unsigned int i = 0;
 
-	for (int i = 0; i < num_allocators; i++) {
-		if (allocators[i] == alloc)
-			return (B_FALSE);
+	do {
 		if (allocators[i]->a_fd < 0 || !clusters_owned(allocators[i]))
+			continue;
+		if (allocators[i] == alloc && heap_compare_root(
+		    &allocators[i]->a_cluster_heap, cluster) != 1)
 			continue;
 		uint8_t *buff = evict_last_cluster(allocators[i]);
 		if (buff == NULL)
@@ -297,14 +301,13 @@ poach_cluster(allocator_t *alloc, uint64_t cluster)
 		alloc->a_clusters[cluster] = buff;
 		heap_push(&alloc->a_cluster_heap, cluster);
 		return (B_TRUE);
-	}
+	} while (allocators[i++] != alloc);
 	return (B_FALSE);
 }
 
 /*
- * Attempt to obtain a page cluster from the allocator group. There are two
- * possible sources: the group's free list, and freshly mprotect'ed portions
- * of the group's address space. Returns B_TRUE if successful.
+ * Attempt to obtain a newly-allocated page cluster from the allocator
+ * group. Returns B_TRUE if successful.
  */
 static boolean_t
 allocate_cluster(allocator_t *alloc, uint64_t cluster)
@@ -312,30 +315,25 @@ allocate_cluster(allocator_t *alloc, uint64_t cluster)
 	VERIFY(cluster < alloc->a_first_disk_cluster);
 	VERIFY(alloc->a_clusters[cluster] == NULL);
 
-	uint64_t free_cluster;
 	allocator_group_t *group = alloc->a_group;
-
-	if (heap_pop(&group->ag_free_clusters, &free_cluster)) {
-		alloc->a_clusters[cluster] = group->ag_base_addr +
-		    free_cluster * group->ag_cluster_size;
-		memset(alloc->a_clusters[cluster], 0, group->ag_cluster_size);
-	} else if (group->ag_clusters_current >= group->ag_clusters_max) {
+	if (group->ag_clusters_current >= group->ag_clusters_max) {
 		return (B_FALSE);
-	} else {
-		uint8_t *buff = group->ag_base_addr +
-		    group->ag_clusters_current * group->ag_cluster_size;
-		int rc = mprotect(buff, group->ag_cluster_size,
-		    PROT_READ | PROT_WRITE);
-		if (rc != 0 && errno == ENOMEM && alloc->a_fd >= 0) {
-			warnx("out of memory: spilling to %s...",
-			    (group->ag_dir != NULL) ? group->ag_dir : "disk");
-			return (B_FALSE);
-		} else if (rc != 0) {
-			err(1, "mprotect() failed");
-		}
-		group->ag_clusters_current++;
-		alloc->a_clusters[cluster] = buff;
 	}
+
+	uint8_t *buff = group->ag_base_addr +
+	    group->ag_clusters_current * group->ag_cluster_size;
+	int rc = mprotect(buff, group->ag_cluster_size,
+	    PROT_READ | PROT_WRITE);
+	if (rc != 0 && errno == ENOMEM && alloc->a_fd >= 0) {
+		warnx("out of memory: spilling to %s...",
+		    (group->ag_dir != NULL) ? group->ag_dir : "disk");
+		return (B_FALSE);
+	} else if (rc != 0) {
+		err(1, "mprotect() failed");
+	}
+
+	group->ag_clusters_current++;
+	alloc->a_clusters[cluster] = buff;
 	heap_push(&alloc->a_cluster_heap, cluster);
 	return (B_TRUE);
 }
@@ -344,7 +342,8 @@ allocate_cluster(allocator_t *alloc, uint64_t cluster)
  * Attempt to convert one of an allocator's page cluster slots into writable
  * memory. If the allocator group has sufficient unused memory, this can be
  * done directly. If not, we call poach_cluster() to try and recover memory
- * from a lower priority allocator.
+ * from a lower priority allocator (or from a higher-numbered cluster of the
+ * same allocator.)
  *
  * If the attempt to obtain memory from another allocator fails, we lower
  * the allocator's a_first_disk_cluster and return B_FALSE. Retrying the
@@ -355,22 +354,8 @@ try_make_writable(allocator_t *alloc, uint64_t cluster)
 {
 	VERIFY(cluster < alloc->a_first_disk_cluster);
 	VERIFY(alloc->a_clusters[cluster] == NULL);
-
 	if (allocate_cluster(alloc, cluster) || poach_cluster(alloc, cluster))
 		return (B_TRUE);
-
-	/* Failed allocation; move the memory/disk split point */
-	while (B_TRUE) {
-		uint64_t last_cluster;
-		if (!heap_peek(&alloc->a_cluster_heap, &last_cluster))
-			break;
-		if (last_cluster < cluster)
-			break;
-		if (evict_last_cluster(alloc) == NULL)
-			/* Shouldn't be possible */
-			errx(1, "evict_last_cluster() failed");
-		heap_push(&alloc->a_group->ag_free_clusters, last_cluster);
-	}
 	alloc->a_first_disk_cluster = cluster;
 	return (B_FALSE);
 }
@@ -411,7 +396,6 @@ allocator_group_fini(allocator_t *alloc)
 		allocator_fini(group->ag_allocators[i]);
 	if (group->ag_dir != NULL)
 		free(group->ag_dir);
-	heap_fini(&group->ag_free_clusters);
 	free(group->ag_allocators);
 	if (group->ag_base_addr != NULL) {
 		int rc = munmap(group->ag_base_addr,

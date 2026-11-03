@@ -75,8 +75,15 @@ heap_push(heap_t *heap, uint64_t value);
 boolean_t
 heap_pop(heap_t *heap, uint64_t *value);
 
-boolean_t
-heap_peek(heap_t *heap, uint64_t *value);
+/*
+ * Peek at the root node and return:
+ *
+ *   -1 if the supplied value is greater
+ *    0 if the root is equal or the heap is empty
+ *    1 if the supplied value is smaller
+ */
+int
+heap_compare_root(heap_t *heap, uint64_t value);
 
 void
 heap_fini(heap_t *heap);
