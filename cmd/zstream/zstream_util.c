@@ -112,51 +112,6 @@ safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
 	}
 }
 
-/*
- * Handle possible short writes for pwritev(). Also allows for iovec arrays
- * larger than IOV_MAX. May overwrite the iovec array. Aborts on error.
- */
-void
-safe_pwritev(int fd, struct iovec *iov, uint64_t iovcnt, off_t off,
-    const char *where)
-{
-	while (B_TRUE) {
-		while (iovcnt > 0 && iov->iov_len == 0) {
-			iov++;
-			iovcnt--;
-		}
-		if (iovcnt == 0)
-			return;
-		int batch_count = (iovcnt > IOV_MAX) ? IOV_MAX : iovcnt;
-		ssize_t n = safe_pwritev_call(fd, iov, batch_count, off);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			else if ((errno == ENOSPC || errno == EDQUOT) &&
-			    where != NULL)
-				errx(1, "pwritev() failed, out of space in %s, "
-				    "aborting...", where);
-			goto bail;
-		}
-		/* Shouldn't happen; don't spin */
-		if (n == 0) {
-			errno = EIO;
-			goto bail;
-		}
-		off += n;
-		while ((size_t)n >= iov->iov_len) {
-			n -= iov->iov_len;
-			iov++;
-			iovcnt--;
-			if (iovcnt == 0)
-				return;
-		}
-		iov->iov_base = (uint8_t *)iov->iov_base + n;
-		iov->iov_len -= n;
-	}
-bail:	err(1, "pwritev() failed");
-}
-
 void
 safe_pread_zero(int fd, void *buf, size_t count, off_t offset)
 {

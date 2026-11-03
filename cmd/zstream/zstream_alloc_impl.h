@@ -36,6 +36,8 @@ extern "C" {
 #include "zstream_alloc.h"
 #include "zstream_heap.h"
 
+#define	INITIAL_HEAP_SIZE	64
+
 #define	clusters_owned(alloc)	(heap_count(&(alloc)->a_cluster_heap))
 
 /*
