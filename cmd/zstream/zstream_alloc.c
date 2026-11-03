@@ -35,8 +35,6 @@
 #include "zstream_heap.h"
 #include "zstream_util.h"
 
-#define	INITIAL_HEAP_SIZE	64
-
 /*
  * This implementation exploits two features common to most UNIX-like systems.
  *
