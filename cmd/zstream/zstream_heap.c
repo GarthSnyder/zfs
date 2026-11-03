@@ -102,6 +102,15 @@ heap_pop(heap_t *heap, uint64_t *value)
 	return (B_TRUE);
 }
 
+boolean_t
+heap_peek(heap_t *heap, uint64_t *value)
+{
+	if (heap->count == 0)
+		return (B_FALSE);
+	*value = heap->values[0];
+	return (B_TRUE);
+}
+
 void
 heap_fini(heap_t *heap)
 {

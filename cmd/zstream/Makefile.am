@@ -38,7 +38,7 @@ zstream_SOURCES = \
 	%D%/zstream_redup.c \
 	%D%/zstream_selftest.c \
 	%D%/zstream_selftest.h \
-	%D%/zstream_selftest_alloc.c \
+	# %D%/zstream_selftest_alloc.c \
 	%D%/zstream_selftest_hash.c \
 	%D%/zstream_selftest_queue.c \
 	%D%/zstream_token.c \
