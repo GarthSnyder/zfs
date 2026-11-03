@@ -38,8 +38,6 @@ zstream_SOURCES = \
 	%D%/zstream_redup.c \
 	%D%/zstream_selftest.c \
 	%D%/zstream_selftest.h \
-	# %D%/zstream_selftest_alloc.c \
-	%D%/zstream_selftest_hash.c \
 	%D%/zstream_selftest_queue.c \
 	%D%/zstream_token.c \
 	%D%/zstream_util.c \
@@ -47,6 +45,8 @@ zstream_SOURCES = \
 	%D%/zstream_validate.c \
 	%D%/zstream_validate.h
 
+# %D%/zstream_selftest_alloc.c \
+#%D%/zstream_selftest_hash.c \
 # -lm supplies sqrt() for MONITOR_QUEUES
 zstream_LDADD = \
 	libzfs.la \

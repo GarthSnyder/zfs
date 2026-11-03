@@ -36,31 +36,55 @@ extern "C" {
 #include "zstream_alloc.h"
 #include "zstream_heap.h"
 
-/*
- * Evictions write at most this many clusters per pwritev() call. It's here
- * only so that selftests can evict across batch boundaries.
- */
-#define	IOVEC_BUFFSIZE	256
-
 #define	clusters_owned(alloc)	(heap_count(&(alloc)->a_cluster_heap))
 
 /*
- * All allocators are members of an allocator group, which can be a group of
- * 1. Group members share memory accounting.
+ * Here's the memory model for this system:
  *
- * The group's page cluster size is the granularity of memory management for
- * all the group's allocators. It is a whole number of pages: by default,
- * 1MB if the system page size is not larger. An allocator's memory-to-disk
- * transition always falls at a page cluster boundary.
+ * A group's page cluster size is the granularity of memory management. It's
+ * a whole number of pages: by default, 1MB worth if the system page size is
+ * not larger. An allocator's memory to disk transition always falls at a
+ * page cluster boundary.
  *
- * The ag_base_addr is a pointer to an mmapped region of size
- * (ag_clusters_max * ag_cluster_size), or NULL for a disk-only group. It's
- * initially PROT_NONE and is converted to usable memory page cluster by
- * page cluster as storage increases. ag_clusters_current is therefore also
- * the writable frontier: the region's first ag_clusters_current clusters
- * are writable, and each is held by exactly one member. The frontier never
- * retreats; after it reaches ag_clusters_max, clusters only move between
- * members.
+ * The group's ag_base_addr is a pointer to an mmapped region of address
+ * space of size ag_clusters_max * ag_cluster_size (or NULL for a disk-only
+ * group). This memory is initially PROT_NONE. It's converted to usable
+ * memory page cluster by page cluster as storage needs increase.
+ *
+ * Each allocator within the group has an a_clusters array of pointers to
+ * memory clusters. Those arrays are all sized to accommodate the group's
+ * total memory limit. The pointers are all initially NULL and no allocator
+ * owns any memory.
+ *
+ * When a write targets a page cluster that's within the memory region but
+ * for which the allocator doesn't yet have backing, it needs to find a
+ * cluster to insert into its a_clusters table. Clusters can come from two
+ * sources: a new allocation from the group's PROT_NONE address space, or
+ * stolen from a lower-priority allocator via poaching. Once a usable source
+ * is found, it's entered into the allocator's memory map.
+ *
+ * If API clients request scattered writes, an allocator's a_clusters array
+ * may be only sparsely populated. That's fine; additional memory can be
+ * attached anywhere within the range.
+ *
+ * When an allocator receives a write request for an as-yet-unallocated
+ * cluster but finds that no memory is available, it converts that request
+ * to a disk operation by lowering a_first_disk_cluster. Unlike memory, disk
+ * storage is monolithic and continuous, and a_first_disk_cluster is its
+ * lower bound. If an allocator's memory is progressively preempted by
+ * higher priority allocators, a_first_disk_cluster will gradually lower all
+ * the way to 0, at which point that allocator will no longer be using any
+ * memory.
+ *
+ * To keep a_first_disk_cluster as high as possible, allocators will poach
+ * from their own supply of page clusters. For example, if a write request
+ * for unallocated cluster 100 is received, but the allocator's
+ * highest-numbered page cluster is 200, cluster 200 will be written to
+ * disk, zeroed, and then reassigned to alloc->a_clusters[100].
+ * a_first_disk_cluster then becomes 200.
+ *
+ * Once allocated, memory is never freed until the allocator group is
+ * dissolved. All page clusters remain in active use.
  */
 typedef struct {
 	uint64_t	ag_clusters_max;	/* Total allowed for group */
@@ -70,7 +94,6 @@ typedef struct {
 	unsigned int	ag_num_allocators;	/* # of allocators in group */
 	allocator_t	**ag_allocators;	/* Pointers to allocator_t's */
 	uint8_t		*ag_base_addr;		/* Start of address space */
-	heap_t		ag_free_clusters;	/* Available, inited clusters */
 } allocator_group_t;
 
 /*
@@ -78,7 +101,7 @@ typedef struct {
  *
  *   clusters_owned(alloc) <= a_first_disk_cluster <= a_group->ag_clusters_max
  *   a_group->ag_clusters_current <= a_group->ag_clusters_max
- *   a_group->ag_clusters_current = sum_over_group(a_cluster_count)
+ *   a_group->ag_clusters_current = sum_over_group(clusters_owned())
  *   a_first_disk_cluster decreases monotonically (if at all)
  *   a_group->ag_clusters_current increases monotonically (if at all)
  *
@@ -88,12 +111,14 @@ typedef struct {
  * "the next index." Functionally, it's 1 plus the highest index that was
  * ever written to or returned to the client. Reads don't affect it.
  *
- * a_clusters is an array of pointers to page-cluster-sized blocks of memory
- * within the group's region. Since clusters move between members, they
- * needn't be contiguous or in address order. The maximum memory budget is
- * fixed at init time, so we know exactly how large to make that array:
- * ag_clusters_max entries, or no array at all for a disk-only group. Only
- * the first a_cluster_count entries are valid.
+ * a_cluster_heap tracks the indexes in a_clusters that point to actual
+ * memory. When converting memory clusters to disk, we always want to
+ * purge the cluster at the highest possible index. That guarantees three
+ * properties:
+ *
+ *   1) a_first_disk_cluster is moved only minimally.
+ *   2) We only need to flush a single cluster to disk.
+ *   3) The on-disk region remains monolithic.
  */
 struct allocator {
 	int		   a_fd;		  /* On-disk file descriptor */
@@ -102,7 +127,7 @@ struct allocator {
 	uint64_t	   a_first_disk_cluster;  /* Memory/disk split point */
 	uint64_t	   a_record_count;	  /* See comments above */
 	uint8_t		   **a_clusters;	  /* Array of cluster ptrs */
-	heap_t		   a_cluster_heap;	  /* Heap of alloced clusters */
+	heap_t		   a_cluster_heap;	  /* Heap of memory clusters */
 	allocator_group_t  *a_group;		  /* Back-pointer to group */
 };
 

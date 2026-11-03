@@ -102,13 +102,12 @@ heap_pop(heap_t *heap, uint64_t *value)
 	return (B_TRUE);
 }
 
-boolean_t
-heap_peek(heap_t *heap, uint64_t *value)
+int
+heap_compare_root(heap_t *heap, uint64_t value)
 {
-	if (heap->count == 0)
-		return (B_FALSE);
-	*value = heap->values[0];
-	return (B_TRUE);
+	if (heap->count == 0 || heap->values[0] == value)
+		return (0);
+	return ((heap->values[0] < value) ? -1 : 1);
 }
 
 void
