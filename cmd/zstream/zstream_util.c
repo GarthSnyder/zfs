@@ -47,8 +47,8 @@
 #include <sys/zio_compress.h>
 #include <unistd.h>
 
-#include "zstream_util.h"
 #include "zstream_hash.h"
+#include "zstream_util.h"
 
 libzfs_handle_t		*libzfs_handle = NULL;
 static linear_hash_t	*record_specifiers = NULL;

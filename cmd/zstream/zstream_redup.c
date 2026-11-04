@@ -65,7 +65,11 @@ hash_insert(linear_hash_t *lh, struct drr_write *drrw, uint64_t stream_offset)
 		.rhe_stream_offset = stream_offset
 	};
 	if (lh_upsert(lh, &rhe) == LH_UPDATED)
-		warnx("duplicate redup hash table entry, overwriting...");
+		warnx("duplicate redup hash table entry (toguid = %llu, "
+		    "object = %llu, offset = %llu), overwriting...",
+		    (u_longlong_t)drrw->drr_toguid,
+		    (u_longlong_t)drrw->drr_object,
+		    (u_longlong_t)drrw->drr_offset);
 }
 
 static inline uint64_t

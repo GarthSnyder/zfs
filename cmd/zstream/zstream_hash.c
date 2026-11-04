@@ -487,8 +487,7 @@ void
 lh_fini(linear_hash_t *lh)
 {
 	VERIFY(lh != NULL);
-	if (lh->lh_alloc.data != NULL)
-		allocator_group_fini(lh->lh_alloc.data);
+	allocator_group_fini(lh->lh_alloc.data);
 	heap_fini(&lh->lh_freeheap);
 	free(lh);
 }
