@@ -109,7 +109,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 	if (num_allocators == 0)
 		errx(1, "invalid number of allocators: %u", num_allocators);
 	size_t max_record_size = 0;
-	for (int i = 0; i < num_allocators; i++) {
+	for (unsigned i = 0; i < num_allocators; i++) {
 		if (record_sizes[i] == 0 || record_sizes[i] > MAX_RECORD_SIZE)
 			errx(1, "requested allocator_t record size is invalid "
 			    "(%llu bytes)", (u_longlong_t)record_sizes[i]);
@@ -157,7 +157,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 	/* heap_init() needs 0 < initial size <= limit (0 = none) */
 	uint64_t heap_size = MAX(1, MIN(INITIAL_HEAP_SIZE,
 	    group->ag_clusters_max));
-	for (int i = 0; i < num_allocators; i++) {
+	for (unsigned i = 0; i < num_allocators; i++) {
 		uint8_t **cluster_pointers = NULL;
 		if (group->ag_clusters_max > 0)
 			cluster_pointers = safe_calloc(sizeof (uint8_t *) *
@@ -395,7 +395,7 @@ allocator_group_fini(allocator_t *alloc)
 {
 	VERIFY(alloc != NULL);
 	allocator_group_t *group = alloc->a_group;
-	for (int i = 0; i < group->ag_num_allocators; i++)
+	for (unsigned i = 0; i < group->ag_num_allocators; i++)
 		allocator_fini(group->ag_allocators[i]);
 	if (group->ag_dir != NULL)
 		free(group->ag_dir);

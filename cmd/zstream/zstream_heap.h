@@ -39,6 +39,9 @@ extern "C" {
  * because lower-numbered buckets are more likely to be stored in memory
  * rather than on disk. When recycling, it always wants the lowest available
  * bucket.
+ *
+ * allocator_t uses a max-heap to record the page clusters stored in memory.
+ * When yielding memory, the highest-numbered cluster is sacrificed.
  */
 
 typedef enum {
