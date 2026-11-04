@@ -153,9 +153,9 @@ lh_init(size_t record_size, size_t key_size, size_t max_memory,
 		.lh_key_size = key_size,
 		.lh_hash_func = hash_function,
 		.lh_alloc = {
-		    .data = allocators[0],
-		    .overflow = allocators[1],
-		    .bucket = allocators[2],
+		    .data	= allocators[0],
+		    .overflow	= allocators[1],
+		    .bucket	= allocators[2],
 		},
 		.lh_hash_suffix_length = INITIAL_HASH_SUFFIX_LENGTH,
 		.lh_occupancy = {
