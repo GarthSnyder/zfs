@@ -69,7 +69,6 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
-#include <sys/uio.h>
 
 #include "zstream_alloc.h"
 #include "zstream_alloc_impl.h"
@@ -99,6 +98,8 @@ typedef struct {
 	uint64_t	sh_count;	/* Highest index written, plus one */
 	uint64_t	*sh_tags;
 	uint8_t		*sh_state;
+	uint8_t		*sh_owned;	/* Clusters held, by cluster index */
+	uint64_t	sh_fdc;		/* Memory/disk split, in clusters */
 } shadow_member_t;
 
 typedef struct {
@@ -107,6 +108,8 @@ typedef struct {
 	boolean_t	   sg_disk;	/* Has backing files */
 	size_t		   sg_limit;	/* Memory limit as requested */
 	size_t		   sg_cluster;	/* Cluster size, as predicted */
+	uint64_t	   sg_max;	/* Limit in clusters, as predicted */
+	uint64_t	   sg_current;	/* Clusters made writable */
 	uint64_t	   sg_next_tag;
 	uint8_t		   *sg_buf;	/* Scratch: retrieved record */
 	uint8_t		   *sg_expect;	/* Scratch: expected record */
@@ -114,14 +117,33 @@ typedef struct {
 	shadow_member_t	   sg_members[TEST_MAX_MEMBERS];
 } shadow_group_t;
 
+#define	NO_CLUSTER	UINT64_MAX
+
 typedef struct {
 	uint64_t	ss_clusters[TEST_MAX_MEMBERS];
 	uint64_t	ss_fdc[TEST_MAX_MEMBERS];
+	uint64_t	ss_top[TEST_MAX_MEMBERS];	/* Or NO_CLUSTER */
+	uint64_t	ss_current;
 } group_snapshot_t;
 
+/*
+ * How many stores of each kind check_transition() has seen: a fresh
+ * cluster, one from a lower-priority victim, one from the writer itself,
+ * and a writer pinned with nothing to give
+ */
+typedef struct {
+	uint64_t	tr_fresh;
+	uint64_t	tr_poach;
+	uint64_t	tr_self;
+	uint64_t	tr_pin;
+} transition_counts_t;
+
+static transition_counts_t transitions;
+
 #define	MEMBER(sg, m)	((sg)->sg_group->ag_allocators[m])
-#define	CLUSTERS(sg, m)	(MEMBER(sg, m)->a_cluster_count)
+#define	CLUSTERS(sg, m)	(clusters_owned(MEMBER(sg, m)))
 #define	FDC(sg, m)	(MEMBER(sg, m)->a_first_disk_cluster)
+#define	OWNS(sg, m, c)	(holds_cluster(MEMBER(sg, m), c))
 
 static boolean_t
 all_zero(const uint8_t *buf, size_t len)
@@ -224,13 +246,26 @@ test_record_cluster(size_t cluster, size_t record_size, uint64_t ix)
 }
 
 /*
- * The group's memory limit in clusters, as the model predicts it
+ * Whether an allocator has memory for cluster c
+ */
+static boolean_t
+holds_cluster(const allocator_t *a, uint64_t c)
+{
+	return (c < a->a_group->ag_clusters_max && a->a_clusters[c] != NULL);
+}
+
+/*
+ * An allocator's highest-numbered memory cluster, found by scanning its
+ * cluster table rather than by asking its heap
  */
 static uint64_t
-limit_clusters(const shadow_group_t *sg)
+highest_cluster(const allocator_t *a)
 {
-	return (expected_limit(sg->sg_limit, sg->sg_n, sg->sg_cluster) /
-	    sg->sg_cluster);
+	for (uint64_t c = a->a_group->ag_clusters_max; c > 0; c--) {
+		if (a->a_clusters[c - 1] != NULL)
+			return (c - 1);
+	}
+	return (NO_CLUSTER);
 }
 
 static void
@@ -239,14 +274,17 @@ take_snapshot(shadow_group_t *sg, group_snapshot_t *ss)
 	for (unsigned m = 0; m < sg->sg_n; m++) {
 		ss->ss_clusters[m] = CLUSTERS(sg, m);
 		ss->ss_fdc[m] = FDC(sg, m);
+		ss->ss_top[m] = highest_cluster(MEMBER(sg, m));
 	}
+	ss->ss_current = sg->sg_group->ag_clusters_current;
 }
 
 /*
  * The group invariants that are cheap enough to check after every
- * operation: exact accounting, splits within bounds, backing consistent
- * with the group's configuration, and allocator_get_stats() consistent with
- * all of it.
+ * operation: exact accounting, splits within bounds, every cluster below
+ * its member's split, each member's heap rooted at its highest cluster,
+ * backing consistent with the group's configuration, and
+ * allocator_get_stats() consistent with all of it.
  */
 static void
 audit_accounting(allocator_group_t *g, allocator_t *member)
@@ -266,6 +304,8 @@ audit_accounting(allocator_group_t *g, allocator_t *member)
 	for (unsigned m = 0; m < g->ag_num_allocators; m++) {
 		allocator_t *a = g->ag_allocators[m];
 		allocator_stats_t st = allocator_get_stats(a);
+		uint64_t held = 0;
+		uint64_t top = NO_CLUSTER;
 
 		if (a == member)
 			found = B_TRUE;
@@ -276,12 +316,22 @@ audit_accounting(allocator_group_t *g, allocator_t *member)
 		VERIFY3S(g->ag_dir != NULL, ==, a->a_fd >= 0);
 		/* There is a cluster table exactly when there is a limit */
 		VERIFY3S(g->ag_clusters_max > 0, ==, a->a_clusters != NULL);
-		VERIFY3U(a->a_cluster_count, <=, a->a_first_disk_cluster);
 		VERIFY3U(a->a_first_disk_cluster, <=, g->ag_clusters_max);
-		VERIFY3U(st.as_memory_used, ==, a->a_cluster_count * cluster);
+		for (uint64_t c = 0; c < g->ag_clusters_max; c++) {
+			if (a->a_clusters[c] == NULL)
+				continue;
+			/* No memory at or above the split */
+			VERIFY3U(c, <, a->a_first_disk_cluster);
+			held++;
+			top = c;
+		}
+		VERIFY3U(clusters_owned(a), ==, held);
+		if (held > 0)
+			VERIFY3U(a->a_cluster_heap.values[0], ==, top);
+		VERIFY3U(st.as_memory_used, ==, held * cluster);
 		VERIFY3U(st.as_num_records, ==, a->a_record_count);
 		VERIFY3U(st.as_record_size, ==, a->a_record_size);
-		total += a->a_cluster_count;
+		total += held;
 	}
 	VERIFY(found);
 	VERIFY3U(g->ag_clusters_current, ==, total);
@@ -300,24 +350,44 @@ compare_addresses(const void *x, const void *y)
  * The clusters that members hold are exactly the writable front of the
  * group's region: each one starts on a cluster boundary below the
  * frontier, and no two clusters in the group overlap, whether they belong
- * to the same member or to different ones. This sorts every cluster in the
- * group, so it runs at sweeps rather than after every operation.
+ * to the same member or to different ones. Each member's heap is a valid
+ * max-heap that holds each of the member's clusters exactly once. This
+ * sorts every cluster in the group, so it runs at sweeps rather than after
+ * every operation.
  */
 static void
 audit_cluster_table(allocator_group_t *g)
 {
+	uint64_t max = g->ag_clusters_max;
 	uint64_t n = g->ag_clusters_current;
 	uint64_t k = 0;
 
-	if (n == 0)
+	if (max == 0)
 		return;
 	uintptr_t base = (uintptr_t)g->ag_base_addr;
 	VERIFY3U(base, !=, 0);
 	VERIFY0(base % page_size());
-	uint8_t **all = safe_malloc(n * sizeof (uint8_t *));
+	uint8_t **all = safe_malloc(MAX(n, 1) * sizeof (uint8_t *));
+	uint8_t *seen = safe_malloc(max);
 	for (unsigned m = 0; m < g->ag_num_allocators; m++) {
 		allocator_t *a = g->ag_allocators[m];
-		for (uint64_t c = 0; c < a->a_cluster_count; c++) {
+		const heap_t *h = &a->a_cluster_heap;
+
+		VERIFY3U(h->count, <=, h->size);
+		(void) memset(seen, 0, max);
+		for (uint64_t i = 0; i < h->count; i++) {
+			uint64_t c = h->values[i];
+			VERIFY3U(c, <, max);
+			VERIFY3P(a->a_clusters[c], !=, NULL);
+			VERIFY0(seen[c]);
+			seen[c] = 1;
+			if (i > 0)
+				VERIFY3U(c, <, h->values[(i - 1) / 2]);
+		}
+		for (uint64_t c = 0; c < max; c++) {
+			if (a->a_clusters[c] == NULL)
+				continue;
+			VERIFY(seen[c]);
 			uintptr_t p = (uintptr_t)a->a_clusters[c];
 			VERIFY3U(p, >=, base);
 			VERIFY0((p - base) % g->ag_cluster_size);
@@ -332,6 +402,7 @@ audit_cluster_table(allocator_group_t *g)
 		VERIFY3U((uintptr_t)all[i] - (uintptr_t)all[i - 1], >=,
 		    g->ag_cluster_size);
 	}
+	free(seen);
 	free(all);
 }
 
@@ -348,6 +419,50 @@ selftest_audit_group(allocator_t *member)
 }
 
 /*
+ * The model's highest cluster for a member, or NO_CLUSTER
+ */
+static uint64_t
+model_top(const shadow_group_t *sg, const shadow_member_t *sh)
+{
+	for (uint64_t c = sg->sg_max; c > 0; c--) {
+		if (sh->sh_owned[c - 1])
+			return (c - 1);
+	}
+	return (NO_CLUSTER);
+}
+
+/*
+ * Every member's clusters and split, and the group's frontier, must be
+ * exactly what the model says.
+ */
+static void
+model_check(shadow_group_t *sg)
+{
+	allocator_group_t *g = sg->sg_group;
+
+	if (g->ag_clusters_current != sg->sg_current) {
+		errx(1, "group has %llu clusters writable, not %llu",
+		    (u_longlong_t)g->ag_clusters_current,
+		    (u_longlong_t)sg->sg_current);
+	}
+	for (unsigned m = 0; m < sg->sg_n; m++) {
+		shadow_member_t *sh = &sg->sg_members[m];
+		if (FDC(sg, m) != sh->sh_fdc) {
+			errx(1, "member %u split is %llu, not %llu", m,
+			    (u_longlong_t)FDC(sg, m),
+			    (u_longlong_t)sh->sh_fdc);
+		}
+		for (uint64_t c = 0; c < sg->sg_max; c++) {
+			if (OWNS(sg, m, c) != sh->sh_owned[c]) {
+				errx(1, "member %u %s cluster %llu", m,
+				    sh->sh_owned[c] ? "lacks" : "holds",
+				    (u_longlong_t)c);
+			}
+		}
+	}
+}
+
+/*
  * audit_accounting(), plus agreement with the shadow model
  */
 static void
@@ -358,7 +473,7 @@ group_audit(shadow_group_t *sg)
 	audit_accounting(g, MEMBER(sg, 0));
 	VERIFY3U(g->ag_num_allocators, ==, sg->sg_n);
 	VERIFY3U(g->ag_cluster_size, ==, sg->sg_cluster);
-	VERIFY3U(g->ag_clusters_max, ==, limit_clusters(sg));
+	VERIFY3U(g->ag_clusters_max, ==, sg->sg_max);
 	VERIFY3S(sg->sg_disk, ==, g->ag_dir != NULL);
 	if (sg->sg_disk) {
 		/* The group keeps its own copy of the directory name */
@@ -371,121 +486,156 @@ group_audit(shadow_group_t *sg)
 		VERIFY3U(MEMBER(sg, m)->a_record_count, ==,
 		    sg->sg_members[m].sh_count);
 	}
+	model_check(sg);
 }
 
 /*
- * Check how one operation changed the group. The writer is the member that
- * was stored to, or -1 for an operation that must change nothing (a read or
- * a skip).
+ * Check how one operation changed the group, by rules that don't depend
+ * on the model. The writer is the member that was stored to, in cluster c,
+ * or -1 for an operation that must change nothing (a read or a skip).
+ *
+ * - No split ever moves up, and the frontier moves up by at most one.
+ *
+ * - A store moves at most one cluster. A victim gives up exactly its
+ *   highest cluster, and its split drops to that cluster. Victims have
+ *   lower priority than the writer, are taken lowest first, and are taken
+ *   only from a full group.
+ *
+ * - The writer either gains the record's cluster, gives up its own highest
+ *   cluster (dropping its split to it) to gain a lower one, has its split
+ *   pinned at the record's cluster, or changes not at all.
  */
 static void
 check_transition(shadow_group_t *sg, const group_snapshot_t *before,
-    int writer)
+    int writer, uint64_t c)
 {
-	allocator_group_t *g = sg->sg_group;
-	int highest_victim = -1;
+	group_snapshot_t after;
+	int victim = -1;
 
 	group_audit(sg);
+	take_snapshot(sg, &after);
+	VERIFY3U(after.ss_current, >=, before->ss_current);
+	VERIFY3U(after.ss_current, <=, before->ss_current + 1);
 	for (int m = 0; m < (int)sg->sg_n; m++) {
-		uint64_t clusters = CLUSTERS(sg, m);
-		uint64_t fdc = FDC(sg, m);
-
-		/* The memory/disk split never moves up */
-		VERIFY3U(fdc, <=, before->ss_fdc[m]);
-		if (m == writer) {
-			VERIFY3U(clusters, >=, before->ss_clusters[m]);
+		VERIFY3U(after.ss_fdc[m], <=, before->ss_fdc[m]);
+		if (m == writer)
+			continue;
+		if (after.ss_clusters[m] == before->ss_clusters[m]) {
+			VERIFY3U(after.ss_fdc[m], ==, before->ss_fdc[m]);
+			VERIFY3U(after.ss_top[m], ==, before->ss_top[m]);
 			continue;
 		}
-		/* Only the writer can gain memory... */
-		VERIFY3U(clusters, <=, before->ss_clusters[m]);
-		if (clusters == before->ss_clusters[m]) {
-			/* ...and only victims move their split */
-			VERIFY3U(fdc, ==, before->ss_fdc[m]);
-			continue;
-		}
-		/* Victims have lower priority and lose memory for good */
+		VERIFY3S(victim, ==, -1);
 		VERIFY3S(m, <, writer);
-		VERIFY3U(fdc, ==, clusters);
-		highest_victim = m;
+		VERIFY3U(after.ss_clusters[m] + 1, ==, before->ss_clusters[m]);
+		VERIFY3U(after.ss_fdc[m], ==, before->ss_top[m]);
+		victim = m;
+	}
+	if (victim >= 0) {
+		for (int m = 0; m < victim; m++)
+			VERIFY0(before->ss_clusters[m]);
+		VERIFY3U(before->ss_current, ==, sg->sg_max);
+	}
+	if (writer < 0) {
+		VERIFY3U(after.ss_current, ==, before->ss_current);
+		return;
 	}
 
-	/* Victims are drained in priority order */
-	for (int m = 0; m < highest_victim; m++)
-		VERIFY0(CLUSTERS(sg, m));
-
-	if (writer < 0)
+	uint64_t was = before->ss_clusters[writer];
+	uint64_t now = after.ss_clusters[writer];
+	uint64_t fdc = after.ss_fdc[writer];
+	VERIFY3U(now, >=, was);
+	VERIFY3U(now, <=, was + 1);
+	if (now == was + 1) {
+		/* From the frontier, or from a victim, but not both */
+		VERIFY(OWNS(sg, writer, c));
+		VERIFY3U(fdc, ==, before->ss_fdc[writer]);
+		VERIFY3U(after.ss_current - before->ss_current, ==,
+		    (victim < 0) ? 1 : 0);
+		if (victim < 0)
+			transitions.tr_fresh++;
+		else
+			transitions.tr_poach++;
 		return;
-	uint64_t clusters = CLUSTERS(sg, writer);
-	uint64_t fdc = FDC(sg, writer);
-	if (fdc < before->ss_fdc[writer]) {
-		/* Pinned: it gained nothing, and nobody gave anything up */
-		VERIFY3U(clusters, ==, before->ss_clusters[writer]);
-		VERIFY3U(fdc, ==, clusters);
-		VERIFY3S(highest_victim, ==, -1);
-	} else if (highest_victim >= 0) {
-		/* An eviction takes exactly the shortfall */
-		VERIFY3U(g->ag_clusters_current, ==, g->ag_clusters_max);
+	}
+	VERIFY3S(victim, ==, -1);
+	VERIFY3U(after.ss_current, ==, before->ss_current);
+	if (fdc == before->ss_fdc[writer]) {
+		/* Already in memory, or on disk */
+		VERIFY3U(after.ss_top[writer], ==, before->ss_top[writer]);
+		VERIFY(c >= fdc || OWNS(sg, writer, c));
+		return;
+	}
+	/* Nobody of lower priority had anything to give */
+	for (int m = 0; m < writer; m++)
+		VERIFY0(before->ss_clusters[m]);
+	VERIFY3U(before->ss_current, ==, sg->sg_max);
+	if (fdc == c) {
+		/* Pinned: it had nothing above the record's cluster */
+		VERIFY3U(after.ss_top[writer], ==, before->ss_top[writer]);
+		VERIFY(before->ss_top[writer] == NO_CLUSTER ||
+		    before->ss_top[writer] < c);
+		VERIFY(!OWNS(sg, writer, c));
+		transitions.tr_pin++;
+	} else {
+		/* Its own highest cluster moved down to the record's */
+		VERIFY3U(fdc, ==, before->ss_top[writer]);
+		VERIFY3U(fdc, >, c);
+		VERIFY(OWNS(sg, writer, c));
+		transitions.tr_self++;
 	}
 }
 
 /*
- * Predict, from the state before a store, exactly how the store moves
- * every member's clusters and split. This restates the allocator's policy:
+ * Update the model for a store to record ix of member w, before the store
+ * is made. This restates the allocator's policy:
  *
- * - A store into a member's clusters or above its split changes nothing.
+ * - A store above the member's split, or into a cluster it holds, changes
+ *   nothing.
  *
- * - A store between the two maps every cluster from the member's last one
- *   up to the record's, using free clusters first. Lower-priority members
- *   give up the rest, lowest first, with each victim's split dropping to
- *   its remaining clusters, but only if together they hold enough.
+ * - Otherwise the member needs that one cluster, and takes the next fresh
+ *   one if the group has any.
  *
- * - Otherwise nobody gives anything up, and the writer's split drops to
- *   its clusters, so the record goes to disk.
+ * - If not, and the group has files, the lowest-priority member with any
+ *   clusters gives up its highest one, and its split drops to it. The
+ *   writer itself counts, last, but only if its highest cluster is above
+ *   the one it needs.
  *
- * Members of a memory-only group can never give anything up.
+ * - If nobody can give anything up, the writer's split drops to the
+ *   record's cluster, so the record goes to disk.
  */
-static void
-predict_store(const shadow_group_t *sg, const group_snapshot_t *before,
-    unsigned writer, uint64_t ix, group_snapshot_t *after)
+static uint64_t
+predict_store(shadow_group_t *sg, unsigned w, uint64_t ix)
 {
-	uint64_t c = test_record_cluster(sg->sg_cluster,
-	    sg->sg_members[writer].sh_record_size, ix);
-	uint64_t used = 0;
-	uint64_t poachable = 0;
+	shadow_member_t *sh = &sg->sg_members[w];
+	uint64_t c = test_record_cluster(sg->sg_cluster, sh->sh_record_size,
+	    ix);
 
-	*after = *before;
-	if (c < before->ss_clusters[writer] || c >= before->ss_fdc[writer])
-		return;
-	for (unsigned m = 0; m < sg->sg_n; m++) {
-		used += before->ss_clusters[m];
-		if (m < writer && sg->sg_disk)
-			poachable += before->ss_clusters[m];
+	if (c >= sh->sh_fdc || sh->sh_owned[c])
+		return (c);
+	if (sg->sg_current < sg->sg_max) {
+		sh->sh_owned[c] = 1;
+		sg->sg_current++;
+		return (c);
 	}
-	uint64_t needed = c + 1 - before->ss_clusters[writer];
-	uint64_t avail = limit_clusters(sg) - used;
-	if (needed > avail) {
-		uint64_t deficit = needed - avail;
-		if (poachable < deficit) {
-			after->ss_fdc[writer] = before->ss_clusters[writer];
-			return;
-		}
-		for (unsigned m = 0; deficit > 0; m++) {
-			VERIFY3U(m, <, writer);
-			uint64_t take = MIN(deficit, after->ss_clusters[m]);
-			if (take == 0)
-				continue;
-			after->ss_clusters[m] -= take;
-			after->ss_fdc[m] = after->ss_clusters[m];
-			deficit -= take;
-		}
+	for (unsigned m = 0; m <= w && sg->sg_disk; m++) {
+		shadow_member_t *v = &sg->sg_members[m];
+		uint64_t top = model_top(sg, v);
+		if (top == NO_CLUSTER || (m == w && top < c))
+			continue;
+		v->sh_owned[top] = 0;
+		v->sh_fdc = top;
+		sh->sh_owned[c] = 1;
+		return (c);
 	}
-	after->ss_clusters[writer] = c + 1;
+	sh->sh_fdc = c;
+	return (c);
 }
 
 /*
  * Check that a record's bytes are where the restated layout says they
- * should be: in one of the member's clusters below its split, in its file
- * above it.
+ * should be: in its member's cluster below its split, in its file above
+ * it.
  */
 static void
 check_placement(shadow_group_t *sg, unsigned m, uint64_t ix,
@@ -497,7 +647,7 @@ check_placement(shadow_group_t *sg, unsigned m, uint64_t ix,
 	uint64_t c = test_record_cluster(sg->sg_cluster, rsize, ix);
 
 	if (c < a->a_first_disk_cluster) {
-		VERIFY3U(c, <, a->a_cluster_count);
+		VERIFY(holds_cluster(a, c));
 		VERIFY0(memcmp(a->a_clusters[c] + off % sg->sg_cluster,
 		    expect, rsize));
 	} else {
@@ -521,6 +671,8 @@ shadow_group_init(const size_t *sizes, unsigned n, size_t cluster,
 	sg->sg_disk = disk;
 	sg->sg_limit = limit;
 	sg->sg_cluster = expected_cluster(cluster, sizes, n);
+	sg->sg_max = expected_limit(limit, n, sg->sg_cluster) /
+	    sg->sg_cluster;
 	sg->sg_next_tag = 1;
 	sg->sg_buf = safe_malloc(MAX_RECORD_SIZE);
 	sg->sg_expect = safe_malloc(MAX_RECORD_SIZE);
@@ -531,14 +683,12 @@ shadow_group_init(const size_t *sizes, unsigned n, size_t cluster,
 		sh->sh_capacity = capacities[m];
 		sh->sh_tags = safe_calloc(capacities[m] * sizeof (uint64_t));
 		sh->sh_state = safe_calloc(capacities[m]);
+		sh->sh_owned = safe_calloc(MAX(sg->sg_max, 1));
+		sh->sh_fdc = sg->sg_max;
 	}
 
 	/* A new group starts with no memory and an unmoved split */
 	group_audit(sg);
-	for (unsigned m = 0; m < n; m++) {
-		VERIFY0(CLUSTERS(sg, m));
-		VERIFY3U(FDC(sg, m), ==, sg->sg_group->ag_clusters_max);
-	}
 	return (sg);
 }
 
@@ -562,6 +712,7 @@ shadow_group_fini(shadow_group_t *sg, unsigned via)
 	for (unsigned m = 0; m < sg->sg_n; m++) {
 		free(sg->sg_members[m].sh_tags);
 		free(sg->sg_members[m].sh_state);
+		free(sg->sg_members[m].sh_owned);
 	}
 	free(sg->sg_buf);
 	free(sg->sg_expect);
@@ -574,11 +725,11 @@ store_and_check(shadow_group_t *sg, unsigned m, uint64_t ix,
     boolean_t append)
 {
 	shadow_member_t *sh = &sg->sg_members[m];
-	group_snapshot_t before, predicted, after;
+	group_snapshot_t before;
 
 	VERIFY3U(ix, <, sh->sh_capacity);
 	take_snapshot(sg, &before);
-	predict_store(sg, &before, m, ix, &predicted);
+	uint64_t c = predict_store(sg, m, ix);
 	uint64_t tag = sg->sg_next_tag++;
 	selftest_fill(sg->sg_expect, sh->sh_record_size, tag);
 	if (append) {
@@ -590,21 +741,7 @@ store_and_check(shadow_group_t *sg, unsigned m, uint64_t ix,
 	sh->sh_tags[ix] = tag;
 	sh->sh_state[ix] = REC_KNOWN;
 	sh->sh_count = MAX(sh->sh_count, ix + 1);
-	check_transition(sg, &before, m);
-
-	take_snapshot(sg, &after);
-	for (unsigned i = 0; i < sg->sg_n; i++) {
-		if (after.ss_clusters[i] != predicted.ss_clusters[i] ||
-		    after.ss_fdc[i] != predicted.ss_fdc[i]) {
-			errx(1, "store to member %u record %llu left member %u "
-			    "with %llu clusters and split %llu, not %llu and "
-			    "%llu", m, (u_longlong_t)ix, i,
-			    (u_longlong_t)after.ss_clusters[i],
-			    (u_longlong_t)after.ss_fdc[i],
-			    (u_longlong_t)predicted.ss_clusters[i],
-			    (u_longlong_t)predicted.ss_fdc[i]);
-		}
-	}
+	check_transition(sg, &before, m, c);
 	check_placement(sg, m, ix, sg->sg_expect);
 }
 
@@ -633,6 +770,16 @@ shadow_append_clusters(shadow_group_t *sg, unsigned m, uint64_t n)
 		shadow_append(sg, m);
 }
 
+/*
+ * Store to the first record of a member's cluster c
+ */
+static void
+shadow_store_cluster(shadow_group_t *sg, unsigned m, uint64_t c)
+{
+	shadow_store(sg, m, c * recs_in_cluster(sg->sg_cluster,
+	    sg->sg_members[m].sh_record_size));
+}
+
 static void
 shadow_skip(shadow_group_t *sg, unsigned m)
 {
@@ -644,7 +791,7 @@ shadow_skip(shadow_group_t *sg, unsigned m)
 	VERIFY3U(allocator_skip(MEMBER(sg, m)), ==, sh->sh_count);
 	sh->sh_state[sh->sh_count++] = REC_EMPTY;
 	/* A skip writes nothing, so nothing but the count may change */
-	check_transition(sg, &before, -1);
+	check_transition(sg, &before, -1, 0);
 }
 
 static void
@@ -658,7 +805,7 @@ shadow_verify(shadow_group_t *sg, unsigned m, uint64_t ix)
 	take_snapshot(sg, &before);
 	(void) memset(sg->sg_buf, 0xa5, rsize);
 	allocator_retrieve(MEMBER(sg, m), ix, sg->sg_buf);
-	check_transition(sg, &before, -1);
+	check_transition(sg, &before, -1, 0);
 	if (sh->sh_state[ix] == REC_KNOWN) {
 		selftest_fill(sg->sg_expect, rsize, sh->sh_tags[ix]);
 		if (memcmp(sg->sg_buf, sg->sg_expect, rsize) != 0) {
@@ -692,7 +839,7 @@ verify_unwritten(shadow_group_t *sg, unsigned m, uint64_t ix)
 	take_snapshot(sg, &before);
 	(void) memset(sg->sg_buf, 0xa5, sh->sh_record_size);
 	allocator_retrieve(MEMBER(sg, m), ix, sg->sg_buf);
-	check_transition(sg, &before, -1);
+	check_transition(sg, &before, -1, 0);
 	if (!all_zero(sg->sg_buf, sh->sh_record_size)) {
 		errx(1, "member %u unwritten record %llu is not zero-filled",
 		    m, (u_longlong_t)ix);
@@ -901,9 +1048,11 @@ alloc_cluster_size(void)
 
 	/*
 	 * Member 0 fills three of the four clusters. A sparse store to
-	 * member 1 then needs three clusters at once, and takes the two
-	 * it lacks from member 0. Member 1 then grows past the limit,
-	 * draining member 0 and pinning itself.
+	 * member 1 takes the fourth, fresh. Member 1 then grows to the end
+	 * of its memory side, and sparse stores below its clusters take the
+	 * rest, one cluster of member 0's at a time, highest first. Member
+	 * 0's records are then all on disk at offsets that are multiples of
+	 * three pages.
 	 */
 	static const size_t sizes[] = { 1000, 4096 };
 	const uint64_t rpc0 = recs_in_cluster(c, sizes[0]);
@@ -914,12 +1063,21 @@ alloc_cluster_size(void)
 	shadow_append_clusters(sg, 0, 3);
 	VERIFY3U(CLUSTERS(sg, 0), ==, 3);
 	shadow_store(sg, 1, 2 * rpc1 + 1);
-	VERIFY3U(CLUSTERS(sg, 0), ==, 1);
+	VERIFY3U(CLUSTERS(sg, 0), ==, 3);
+	VERIFY3U(CLUSTERS(sg, 1), ==, 1);
+	VERIFY(OWNS(sg, 1, 2));
+	while (sg->sg_members[1].sh_count < 4 * rpc1)
+		shadow_append(sg, 1);
+	VERIFY3U(CLUSTERS(sg, 0), ==, 2);
+	VERIFY3U(FDC(sg, 0), ==, 2);
+	shadow_store(sg, 1, rpc1 + 1);
 	VERIFY3U(FDC(sg, 0), ==, 1);
-	VERIFY3U(CLUSTERS(sg, 1), ==, 3);
+	shadow_store(sg, 1, 1);
+	VERIFY0(CLUSTERS(sg, 0));
+	VERIFY0(FDC(sg, 0));
+	/* Clusters past the limit are on disk */
 	while (sg->sg_members[1].sh_count < pair_caps[1])
 		shadow_append(sg, 1);
-	VERIFY0(CLUSTERS(sg, 0));
 	VERIFY3U(CLUSTERS(sg, 1), ==, 4);
 	VERIFY3U(FDC(sg, 1), ==, 4);
 	shadow_verify_all(sg);
@@ -1030,19 +1188,19 @@ alloc_record_sizes(void)
 }
 
 /*
- * Moving memory among members.
+ * Moving memory among members, one cluster at a time.
  *
- * - First, a sparse store that needs several clusters at once and gets
- *   them all from one victim.
+ * - First, sparse stores by member 1 into a group that member 0 fills.
+ *   Each store takes only the record's own cluster, and takes it from the
+ *   top of member 0's.
  *
  * - Second, a randomized eviction of a member whose records keep changing
  *   as the split passes through them.
  *
- * - Third, a request that the lower-priority members can just cover, which
- *   drains them all, and one that is a cluster more than they can cover.
- *   That one takes nothing from anyone: the requester's split is pinned,
- *   and the lower-priority members keep their memory until a
- *   higher-priority member takes it in the usual order.
+ * - Third, victims in priority order and a writer that is its own victim:
+ *   once no lower-priority member has anything left, a store below the
+ *   writer's highest cluster takes that cluster, pushing it to disk.
+ *   Higher-priority members then take the writer's clusters from the top.
  */
 static void
 alloc_reassignment(void)
@@ -1053,15 +1211,19 @@ alloc_reassignment(void)
 		size_t sizes[] = { 1000, 1000 };
 		uint64_t rpc = recs_per_cluster(1000);
 		uint64_t caps[] = { 8 * rpc, 8 * rpc };
+		const uint64_t targets[] = { 5, 3, 6, 0, 7 };
 		shadow_group_t *sg = shadow_group_init(sizes, 2, 0, 8 * cluster,
 		    B_TRUE, caps);
 		shadow_append_clusters(sg, 0, 8);
-		shadow_store(sg, 1, 5 * rpc);
-		VERIFY3U(CLUSTERS(sg, 1), ==, 6);
-		VERIFY3U(CLUSTERS(sg, 0), ==, 2);
-		VERIFY3U(FDC(sg, 0), ==, 2);
+		for (int i = 0; i < ARRAY_SIZE(targets); i++) {
+			shadow_store_cluster(sg, 1, targets[i]);
+			VERIFY3U(CLUSTERS(sg, 1), ==, i + 1);
+			VERIFY3U(CLUSTERS(sg, 0), ==, 7 - i);
+			VERIFY3U(FDC(sg, 0), ==, 7 - i);
+			VERIFY3U(FDC(sg, 1), ==, 8);
+		}
 		shadow_verify_all(sg);
-		shadow_verify_around(sg, 1, 3 * rpc);
+		shadow_verify_around(sg, 1, 4 * rpc);
 		shadow_group_fini(sg, 0);
 	}
 
@@ -1096,95 +1258,106 @@ alloc_reassignment(void)
 		shadow_group_fini(sg, 1);
 	}
 
-	for (uint64_t extra = 0; extra < 2; extra++) {
+	{
 		size_t sizes[] = { 4096, 4096, 4096, 4096 };
 		uint64_t rpc = recs_per_cluster(4096);
-		uint64_t caps[] = { rpc, 2 * rpc, 7 * rpc + 1, 5 * rpc };
+		uint64_t caps[] = { rpc, 2 * rpc, 8 * rpc, 8 * rpc + 1 };
 		shadow_group_t *sg = shadow_group_init(sizes, 4, 0, 8 * cluster,
 		    B_TRUE, caps);
 		shadow_append_clusters(sg, 0, 1);
 		shadow_append_clusters(sg, 1, 2);
 		shadow_append_clusters(sg, 2, 4);
 		shadow_append_clusters(sg, 3, 1);
-
-		/* Needs 3 + extra clusters; members 0 and 1 hold 3 */
-		shadow_store(sg, 2, (6 + extra) * rpc);
 		VERIFY3U(sg->sg_group->ag_clusters_current, ==, 8);
-		if (extra == 0) {
-			VERIFY0(CLUSTERS(sg, 0));
-			VERIFY0(CLUSTERS(sg, 1));
-			VERIFY3U(CLUSTERS(sg, 2), ==, 7);
-			VERIFY3U(FDC(sg, 2), ==, 8);
 
-			/* Member 3 can now grow only at member 2's expense */
-			shadow_append_clusters(sg, 3, 1);
-			VERIFY3U(CLUSTERS(sg, 2), ==, 6);
-			shadow_verify_all(sg);
-			shadow_group_fini(sg, 3);
-			continue;
-		}
-		VERIFY3U(CLUSTERS(sg, 0), ==, 1);
-		VERIFY3U(CLUSTERS(sg, 1), ==, 2);
-		VERIFY3U(FDC(sg, 0), ==, 8);
-		VERIFY3U(FDC(sg, 1), ==, 8);
-		VERIFY3U(CLUSTERS(sg, 2), ==, 4);
-		VERIFY3U(FDC(sg, 2), ==, 4);
-
-		/* Member 3 drains members 0 and 1, then turns to member 2 */
-		shadow_append_clusters(sg, 3, 1);
+		/* Member 2 drains member 0, then member 1 */
+		shadow_store_cluster(sg, 2, 6);
 		VERIFY0(CLUSTERS(sg, 0));
+		VERIFY0(FDC(sg, 0));
 		VERIFY3U(CLUSTERS(sg, 1), ==, 2);
-		shadow_append_clusters(sg, 3, 2);
+		shadow_store_cluster(sg, 2, 7);
+		VERIFY3U(CLUSTERS(sg, 1), ==, 1);
+		VERIFY3U(FDC(sg, 1), ==, 1);
+		shadow_store_cluster(sg, 2, 5);
 		VERIFY0(CLUSTERS(sg, 1));
-		VERIFY3U(CLUSTERS(sg, 2), ==, 4);
+		VERIFY0(FDC(sg, 1));
+		VERIFY3U(CLUSTERS(sg, 2), ==, 7);
+		VERIFY3U(FDC(sg, 2), ==, 8);
+
+		/* Nobody else can give, so member 2 gives up cluster 7 */
+		shadow_store_cluster(sg, 2, 4);
+		VERIFY3U(CLUSTERS(sg, 2), ==, 7);
+		VERIFY3U(FDC(sg, 2), ==, 7);
+		VERIFY(!OWNS(sg, 2, 7));
+		VERIFY(OWNS(sg, 2, 4));
+		shadow_verify_around(sg, 2, 7 * rpc);
+		shadow_store(sg, 2, 7 * rpc + 1);
+		VERIFY3U(CLUSTERS(sg, 2), ==, 7);
+
+		/* Member 3 takes member 2's clusters from the top */
 		shadow_append_clusters(sg, 3, 1);
-		VERIFY3U(CLUSTERS(sg, 2), ==, 3);
-		VERIFY3U(CLUSTERS(sg, 3), ==, 5);
+		VERIFY3U(FDC(sg, 2), ==, 6);
+		shadow_store_cluster(sg, 3, 7);
+		VERIFY3U(FDC(sg, 2), ==, 5);
+		shadow_store_cluster(sg, 3, 4);
+		VERIFY3U(FDC(sg, 2), ==, 4);
+		VERIFY3U(CLUSTERS(sg, 2), ==, 4);
+		VERIFY3U(CLUSTERS(sg, 3), ==, 4);
+		/* Past the limit, and past member 2's split, are on disk */
+		shadow_store_cluster(sg, 3, 8);
+		shadow_store_cluster(sg, 2, 4);
+		VERIFY3U(CLUSTERS(sg, 2), ==, 4);
+		VERIFY3U(CLUSTERS(sg, 3), ==, 4);
 		shadow_verify_all(sg);
 		shadow_group_fini(sg, 3);
 	}
 }
 
 /*
- * Evictions big enough to need several pwritev() calls. With page-sized
- * clusters, member 2's sparse stores take runs of 1, IOVEC_BUFFSIZE - 1,
- * IOVEC_BUFFSIZE, IOVEC_BUFFSIZE + 1 and 2 * IOVEC_BUFFSIZE + 1 clusters
- * from member 1, after a first store that takes all IOVEC_BUFFSIZE + 44 of
- * member 0's clusters and then one of member 1's. Every evicted record must
- * be at its own offset in its member's file.
+ * Random sparse stores, appends and reads by every member of a group with
+ * page-sized clusters, so that members hold scattered clusters, give them
+ * up from the top, and take their own. The model checks every step; this
+ * also requires fresh clusters, victims, and writers that are their own
+ * victims. (Pins depend on the seed; alloc_priority and layout1() make
+ * them on purpose.)
  */
 static void
-alloc_eviction_batches(void)
+alloc_sparse(void)
 {
-	const uint64_t runs[] = { 1, IOVEC_BUFFSIZE - 1, IOVEC_BUFFSIZE,
-	    IOVEC_BUFFSIZE + 1, 2 * IOVEC_BUFFSIZE + 1 };
-	const uint64_t held0 = IOVEC_BUFFSIZE + 44;
-	uint64_t held1 = 0;
-
-	for (int i = 0; i < ARRAY_SIZE(runs); i++)
-		held1 += runs[i];
+	selftest_rng_t rng;
+	selftest_rng_init(&rng, 46);
 	size_t sizes[] = { 1000, 1000, 4096 };
 	size_t cluster = expected_cluster(1, sizes, 3);
-	uint64_t rpc = recs_in_cluster(cluster, 1000);
-	uint64_t rpc2 = recs_in_cluster(cluster, 4096);
-	uint64_t caps[] = { held0 * rpc, held1 * rpc, (held0 + held1) * rpc2 };
-	shadow_group_t *sg = shadow_group_init(sizes, 3, 1,
-	    (held0 + held1) * cluster, B_TRUE, caps);
+	uint64_t caps[3];
+	for (unsigned m = 0; m < 3; m++)
+		caps[m] = 30 * recs_in_cluster(cluster, sizes[m]);
 
-	shadow_append_clusters(sg, 0, held0);
-	shadow_append_clusters(sg, 1, held1);
-	shadow_verify_all(sg);
-	uint64_t want = held0;
-	for (int i = 0; i < ARRAY_SIZE(runs); i++) {
-		want += runs[i];
-		shadow_store(sg, 2, (want - 1) * rpc2);
-		VERIFY0(CLUSTERS(sg, 0));
-		VERIFY3U(CLUSTERS(sg, 1), ==, held0 + held1 - want);
-		VERIFY3U(CLUSTERS(sg, 2), ==, want);
+	(void) memset(&transitions, 0, sizeof (transitions));
+	for (uint64_t limit = 6; limit <= 24; limit += 6) {
+		shadow_group_t *sg = shadow_group_init(sizes, 3, 1,
+		    limit * cluster, B_TRUE, caps);
+		for (int op = 0; op < 3000; op++) {
+			/* Higher priority members are busier */
+			unsigned m = selftest_rng_below(&rng, 6);
+			m = (m == 0) ? 0 : (m < 3) ? 1 : 2;
+			shadow_member_t *sh = &sg->sg_members[m];
+			uint64_t k = selftest_rng_below(&rng, 10);
+			uint64_t ix = selftest_rng_below(&rng, caps[m]);
+			if (k < 5)
+				shadow_store(sg, m, ix);
+			else if (k < 6 && sh->sh_count < caps[m])
+				shadow_append(sg, m);
+			else
+				shadow_verify(sg, m, ix);
+			if (op % 500 == 499)
+				shadow_verify_all(sg);
+		}
 		shadow_verify_all(sg);
+		shadow_group_fini(sg, limit % 3);
 	}
-	VERIFY0(CLUSTERS(sg, 1));
-	shadow_group_fini(sg, 2);
+	VERIFY3U(transitions.tr_fresh, >, 0);
+	VERIFY3U(transitions.tr_poach, >, 0);
+	VERIFY3U(transitions.tr_self, >, 0);
 }
 
 /*
@@ -1300,21 +1473,28 @@ alloc_boundaries(void)
 	}
 
 	/*
-	 * A sparse store on the memory side maps every cluster up to it.
-	 * Records in the gap and above the last cluster read as zeros, and
-	 * reading them maps nothing.
+	 * A sparse store on the memory side maps only the record's cluster.
+	 * Records below it, between clusters and above the last cluster read
+	 * as zeros, and reading them maps nothing.
 	 */
 	for (int disk = 0; disk < 2; disk++) {
 		shadow_group_t *sg = shadow_init1(rsize, 0, 8 * cluster, disk,
 		    8 * rpc);
 		shadow_store(sg, 0, 5 * rpc);
-		VERIFY3U(CLUSTERS(sg, 0), ==, 6);
-		VERIFY3U(sg->sg_group->ag_clusters_current, ==, 6);
+		VERIFY3U(CLUSTERS(sg, 0), ==, 1);
+		VERIFY(OWNS(sg, 0, 5));
+		shadow_store(sg, 0, 2 * rpc + 3);
+		VERIFY3U(CLUSTERS(sg, 0), ==, 2);
+		VERIFY3U(sg->sg_group->ag_clusters_current, ==, 2);
 		shadow_verify_around(sg, 0, 0);
+		shadow_verify_around(sg, 0, 2 * rpc);
 		shadow_verify_around(sg, 0, 3 * rpc);
+		shadow_verify_around(sg, 0, 5 * rpc);
+		shadow_verify_around(sg, 0, 6 * rpc);
 		shadow_verify_around(sg, 0, 7 * rpc);
 		shadow_verify(sg, 0, 8 * rpc - 1);
-		VERIFY3U(CLUSTERS(sg, 0), ==, 6);
+		VERIFY3U(CLUSTERS(sg, 0), ==, 2);
+		VERIFY3U(FDC(sg, 0), ==, 8);
 		shadow_group_fini(sg, 0);
 	}
 
@@ -1667,6 +1847,26 @@ child_memory_only_overflow(void *arg)
 	(void) allocator_append(a[n - 1], buf);
 }
 
+/*
+ * A full memory-only group in which member 1 needs a cluster below one it
+ * holds. Without a file, it can't give up its own higher cluster, so the
+ * store must fail rather than lose that cluster's data.
+ */
+static void
+child_memory_only_self(void *arg)
+{
+	(void) arg;
+	size_t sizes[] = { 1000, 1000 };
+	uint8_t buf[1000] = { 0 };
+	uint64_t rpc = recs_per_cluster(1000);
+	allocator_t **a = allocator_group_init(sizes, 2, 0,
+	    2 * cluster_size(), NULL);
+
+	allocator_store(a[1], rpc, buf);
+	(void) allocator_append(a[0], buf);
+	allocator_store(a[1], 0, buf);
+}
+
 typedef struct {
 	boolean_t	wf_evict;	/* Fail in an eviction, not a store */
 	boolean_t	wf_enospc;	/* Fail with ENOSPC, not EFBIG */
@@ -1678,7 +1878,7 @@ typedef struct {
  *
  * - With wf_enospc clear, writes fail because they cross RLIMIT_FSIZE;
  *   with SIGXFSZ ignored, they return EFBIG. The eviction writes a whole
- *   cluster, so its first pwritev() is partial, and the failure comes on
+ *   cluster, so its first pwrite() is partial, and the failure comes on
  *   the retry.
  *
  * - With wf_enospc set, member 0's backing file is replaced with /dev/full
@@ -1725,132 +1925,71 @@ child_write_failure(void *arg)
 	}
 }
 
-/*
- * An iovec array of n entries over src, which must hold 40 * n bytes. With
- * zeros set, about a third of the entries are empty, and so are the first
- * two, the last two, and the two on each side of every IOV_MAX boundary.
- * Returns the total length.
- */
-static size_t
-build_iovecs(struct iovec *iov, uint64_t n, uint8_t *src, boolean_t zeros,
-    selftest_rng_t *rng)
-{
-	size_t total = 0;
-
-	for (uint64_t i = 0; i < n; i++) {
-		uint64_t pos = i % IOV_MAX;
-		size_t len = 1 + selftest_rng_below(rng, 40);
-		if (zeros && (selftest_rng_below(rng, 3) == 0 || i < 2 ||
-		    i + 2 >= n || pos < 2 || pos + 2 >= IOV_MAX))
-			len = 0;
-		iov[i].iov_base = src + total;
-		iov[i].iov_len = len;
-		total += len;
-	}
-	return (total);
-}
-
-/*
- * Whether byte pos of the data falls between two entries, or at either end,
- * rather than inside an entry
- */
-static boolean_t
-iov_boundary(const struct iovec *iov, uint64_t n, size_t pos)
-{
-	size_t start = 0;
-
-	for (uint64_t i = 0; i < n; i++) {
-		if (pos == start)
-			return (B_TRUE);
-		if (pos < start + iov[i].iov_len)
-			return (B_FALSE);
-		start += iov[i].iov_len;
-	}
-	return (B_TRUE);
-}
-
 typedef struct {
 	int		pw_fd;
-	uint64_t	pw_n;
+	size_t		pw_len;
 	off_t		pw_off;
 	off_t		pw_fsize;	/* RLIMIT_FSIZE, or 0 for none */
-	uint64_t	pw_stream;	/* For build_iovecs() */
+	uint64_t	pw_stream;	/* For selftest_fill() */
 	const char	*pw_where;
-} pwritev_args_t;
+} pwrite_args_t;
 
 static selftest_rng_t shim_rng;
 static uint64_t shim_short_writes;
 
 /*
- * A stand-in for pwritev() that checks what safe_pwritev() passes it, then
- * fails with EINTR one time in four and otherwise writes from 1 to 200
- * bytes, which may end anywhere, including partway through an entry
+ * A stand-in for pwrite() that fails with EINTR one time in four and
+ * otherwise writes from 1 to 200 bytes
  */
 static ssize_t
-short_pwritev(int fd, const struct iovec *iov, int cnt, off_t off)
+short_pwrite(int fd, const void *buf, size_t count, off_t off)
 {
-	struct iovec part[IOV_MAX];
-	size_t budget = 1 + selftest_rng_below(&shim_rng, 200);
-	size_t offered = 0;
-	int n;
-
-	VERIFY3S(cnt, >, 0);
-	VERIFY3S(cnt, <=, IOV_MAX);
-	VERIFY3U(iov[0].iov_len, >, 0);
+	VERIFY3U(count, >, 0);
 	if (selftest_rng_below(&shim_rng, 4) == 0) {
 		errno = EINTR;
 		return (-1);
 	}
-	for (n = 0; n < cnt; n++)
-		offered += iov[n].iov_len;
-	for (n = 0; n < cnt && budget > 0; n++) {
-		part[n] = iov[n];
-		part[n].iov_len = MIN(part[n].iov_len, budget);
-		budget -= part[n].iov_len;
-	}
-	ssize_t written = pwritev(fd, part, n, off);
-	if (written > 0 && (size_t)written < offered)
+	size_t budget = 1 + selftest_rng_below(&shim_rng, 200);
+	size_t n = MIN(count, budget);
+	ssize_t written = pwrite(fd, buf, n, off);
+	if (written > 0 && (size_t)written < count)
 		shim_short_writes++;
 	return (written);
 }
 
 /*
- * A stand-in for pwritev() that never makes progress
+ * A stand-in for pwrite() that never makes progress
  */
 static ssize_t
-stuck_pwritev(int fd, const struct iovec *iov, int cnt, off_t off)
+stuck_pwrite(int fd, const void *buf, size_t count, off_t off)
 {
 	(void) fd;
-	(void) iov;
-	(void) cnt;
+	(void) buf;
+	(void) count;
 	(void) off;
 	return (0);
 }
 
 static void
-child_pwritev(void *arg)
+child_pwrite(void *arg)
 {
-	pwritev_args_t *pw = arg;
-	struct iovec *iov = safe_malloc(pw->pw_n * sizeof (struct iovec));
-	uint8_t *src = safe_malloc(40 * pw->pw_n);
-	selftest_rng_t rng;
+	pwrite_args_t *pw = arg;
+	uint8_t *src = safe_malloc(pw->pw_len);
 
-	selftest_rng_init(&rng, pw->pw_stream);
-	selftest_fill(src, 40 * pw->pw_n, pw->pw_stream);
-	(void) build_iovecs(iov, pw->pw_n, src, B_TRUE, &rng);
+	selftest_fill(src, pw->pw_len, pw->pw_stream);
 	if (pw->pw_fsize != 0) {
 		struct rlimit fsize = { pw->pw_fsize, pw->pw_fsize };
 		(void) signal(SIGXFSZ, SIG_IGN);
 		VERIFY0(setrlimit(RLIMIT_FSIZE, &fsize));
 	}
-	safe_pwritev(pw->pw_fd, iov, pw->pw_n, pw->pw_off, pw->pw_where);
+	safe_pwrite(pw->pw_fd, src, pw->pw_len, pw->pw_off, pw->pw_where);
 }
 
 static void
-child_stuck_pwritev(void *arg)
+child_stuck_pwrite(void *arg)
 {
-	safe_pwritev_call = stuck_pwritev;
-	child_pwritev(arg);
+	safe_pwrite_call = stuck_pwrite;
+	child_pwrite(arg);
 }
 
 /*
@@ -1868,130 +2007,105 @@ check_file_contents(int fd, off_t off, const uint8_t *src, size_t len)
 	safe_pread_zero(fd, buf, off + len, 0);
 	VERIFY(all_zero(buf, (size_t)off));
 	if (memcmp(buf + off, src, len) != 0)
-		errx(1, "pwritev() wrote the wrong data");
+		errx(1, "pwrite() wrote the wrong data");
 	free(buf);
 }
 
 /*
- * Write iovec arrays of many lengths, with and without empty entries, each
- * at its own offset in a new file, and check what lands there
+ * Write buffers of many lengths, each at its own offset in a new file, and
+ * check what lands there
  */
-#define	PWRITEV_MAX_IOVECS	(2 * IOV_MAX + 7)
+#define	PWRITE_MAX_LEN	((1 << 20) + 3)
 
 static void
-pwritev_matrix(struct iovec *iov, uint8_t *src, uint64_t base_stream)
+pwrite_matrix(uint8_t *src, uint64_t base_stream)
 {
-	const uint64_t counts[] = { 1, 2, IOV_MAX - 1, IOV_MAX, IOV_MAX + 1,
-	    PWRITEV_MAX_IOVECS };
-	selftest_rng_t rng;
+	const size_t lens[] = { 1, 2, 199, 200, 201, 4095, 4096, 4097,
+	    3 * 4096 + 100, PWRITE_MAX_LEN };
 
-	for (int zeros = 0; zeros < 2; zeros++) {
-		for (int i = 0; i < ARRAY_SIZE(counts); i++) {
-			uint64_t stream = base_stream + 10 * zeros + i;
-			int fd = safe_create_temp_file(selftest_scratch_dir());
-			off_t off = 4096 + 13 * i;
+	for (int i = 0; i < ARRAY_SIZE(lens); i++) {
+		int fd = safe_create_temp_file(selftest_scratch_dir());
+		off_t off = 4096 + 13 * i;
 
-			selftest_rng_init(&rng, stream);
-			selftest_fill(src, 40 * counts[i], stream);
-			size_t total = build_iovecs(iov, counts[i], src, zeros,
-			    &rng);
-			safe_pwritev(fd, iov, counts[i], off, NULL);
-			check_file_contents(fd, (total == 0) ? 0 : off, src,
-			    total);
-			VERIFY0(close(fd));
-		}
+		selftest_fill(src, lens[i], base_stream + i);
+		safe_pwrite(fd, src, lens[i], off, NULL);
+		check_file_contents(fd, off, src, lens[i]);
+		VERIFY0(close(fd));
 	}
 }
 
 /*
- * safe_pwritev(), through iovec arrays that the allocator never builds:
- * more than IOV_MAX entries, so that one array takes several calls, with
- * and without empty entries, including runs of them that straddle each
- * IOV_MAX boundary. The data must land at the given offset, with nothing
- * written past it, and an array with no bytes in it writes nothing. Then
- * the same again, through a stand-in for pwritev() that makes short writes
- * and fails with EINTR, which the kernel never does for regular files.
+ * safe_pwrite(), which makes every disk-side store and every eviction. The
+ * data must land at the given offset, with nothing written past it, and an
+ * empty write writes nothing. Then the same again, through a stand-in for
+ * pwrite() that makes short writes and fails with EINTR, which the kernel
+ * never does for regular files.
  *
- * Then a write that RLIMIT_FSIZE cuts off partway through an entry of its
- * second call. The call after that one fails with EFBIG, which must be
- * fatal, but only after every byte below the limit has been written in
- * the right place. A call that writes nothing must be fatal rather than
- * spin. Last, a write that fails with ENOSPC (Linux only, on /dev/full) is
- * fatal without naming a directory when it is given none.
+ * Then a write that RLIMIT_FSIZE cuts off partway through. The call after
+ * the partial one fails with EFBIG, which must be fatal, but only after
+ * every byte below the limit has been written in the right place. A call
+ * that writes nothing must be fatal rather than spin. Last, a write that
+ * fails with ENOSPC (Linux only, on /dev/full) is fatal without naming a
+ * directory when it is given none.
  */
 static void
-alloc_pwritev(void)
+alloc_pwrite(void)
 {
-	const uint64_t max = PWRITEV_MAX_IOVECS;
-	struct iovec *iov = safe_malloc(max * sizeof (struct iovec));
-	uint8_t *src = safe_malloc(40 * max);
-	selftest_rng_t rng;
+	uint8_t *src = safe_malloc(PWRITE_MAX_LEN);
 
-	pwritev_matrix(iov, src, 100);
+	pwrite_matrix(src, 100);
 	selftest_rng_init(&shim_rng, 300);
 	shim_short_writes = 0;
-	safe_pwritev_call = short_pwritev;
-	pwritev_matrix(iov, src, 150);
-	safe_pwritev_call = pwritev;
+	safe_pwrite_call = short_pwrite;
+	pwrite_matrix(src, 150);
+	safe_pwrite_call = pwrite;
 	VERIFY3U(shim_short_writes, >, 0);
 
-	/* Nothing at all, or only empty entries */
 	int fd = safe_create_temp_file(selftest_scratch_dir());
-	safe_pwritev(fd, iov, 0, 100, NULL);
-	for (uint64_t i = 0; i < max; i++)
-		iov[i].iov_len = 0;
-	safe_pwritev(fd, iov, max, 100, NULL);
+	safe_pwrite(fd, src, 0, 100, NULL);
 	check_file_contents(fd, 0, src, 0);
 	VERIFY0(close(fd));
 
-	/* Cut off partway through the second call */
-	pwritev_args_t pw = {
+	/* Cut off partway */
+	pwrite_args_t pw = {
 		.pw_fd = safe_create_temp_file(selftest_scratch_dir()),
-		.pw_n = max,
+		.pw_len = 3 * 4096 + 100,
 		.pw_off = 5000,
 		.pw_stream = 200,
 	};
-	selftest_rng_init(&rng, pw.pw_stream);
-	selftest_fill(src, 40 * max, pw.pw_stream);
-	size_t total = build_iovecs(iov, max, src, B_TRUE, &rng);
-	size_t first = 0;
-	for (uint64_t i = 0; i < IOV_MAX; i++)
-		first += iov[i].iov_len;
-	size_t cut = first + (total - first) / 3;
-	while (cut < total && iov_boundary(iov, max, cut))
-		cut++;
+	const size_t cut = 4096 + 7;
+	selftest_fill(src, pw.pw_len, pw.pw_stream);
 	pw.pw_fsize = pw.pw_off + cut;
-	selftest_expect_exit("pwritev() cut short", child_pwritev, &pw,
-	    "pwritev() failed: File too large");
+	selftest_expect_exit("pwrite() cut short", child_pwrite, &pw,
+	    "pwrite() failed: File too large");
 #if defined(__linux__)
-	/* Linux writes up to the limit, so the second call is partial */
+	/* Linux writes up to the limit, so the first call is partial */
 	check_file_contents(pw.pw_fd, pw.pw_off, src, cut);
 #else
 	/* Elsewhere, a write that crosses the limit might write nothing */
 	struct stat st;
 	VERIFY0(fstat(pw.pw_fd, &st));
-	VERIFY3S(st.st_size, >=, pw.pw_off + first);
 	VERIFY3S(st.st_size, <=, pw.pw_off + cut);
-	check_file_contents(pw.pw_fd, pw.pw_off, src,
-	    st.st_size - pw.pw_off);
+	if (st.st_size > 0) {
+		check_file_contents(pw.pw_fd, pw.pw_off, src,
+		    st.st_size - pw.pw_off);
+	}
 #endif
 	VERIFY0(close(pw.pw_fd));
 
 	pw.pw_fd = safe_create_temp_file(selftest_scratch_dir());
 	pw.pw_fsize = 0;
-	selftest_expect_exit("pwritev() stuck", child_stuck_pwritev, &pw,
-	    "pwritev() failed: Input/output error");
+	selftest_expect_exit("pwrite() stuck", child_stuck_pwrite, &pw,
+	    "pwrite of 12388 bytes failed");
 	check_file_contents(pw.pw_fd, 0, src, 0);
 	VERIFY0(close(pw.pw_fd));
 #if defined(__linux__)
 	pw.pw_fd = open("/dev/full", O_WRONLY);
 	VERIFY3S(pw.pw_fd, >=, 0);
-	pw.pw_fsize = 0;
-	selftest_expect_exit("pwritev() out of space", child_pwritev, &pw,
-	    "pwritev() failed: No space left on device");
+	selftest_expect_exit("pwrite() out of space", child_pwrite, &pw,
+	    "pwrite() failed: No space left on device");
 	VERIFY0(close(pw.pw_fd));
 #endif
-	free(iov);
 	free(src);
 }
 
@@ -2044,10 +2158,10 @@ child_data_rlimit(void *arg)
 	}
 
 	/* The split was pinned at the last cluster, short of the budget */
-	VERIFY3U(alloc->a_first_disk_cluster, ==, alloc->a_cluster_count);
-	VERIFY3U(alloc->a_cluster_count, <=, 3);
+	VERIFY3U(alloc->a_first_disk_cluster, ==, clusters_owned(alloc));
+	VERIFY3U(clusters_owned(alloc), <=, 3);
 	VERIFY3U(alloc->a_group->ag_clusters_current, ==,
-	    alloc->a_cluster_count);
+	    clusters_owned(alloc));
 	for (uint64_t i = 0; i < nrecs; i++) {
 		allocator_retrieve(alloc, i, buf);
 		selftest_fill(expect, size, i + 1);
@@ -2077,126 +2191,121 @@ check_record(allocator_t *alloc, uint64_t ix, uint64_t tag)
 }
 
 /*
- * A sparse store needs six clusters at once, and RLIMIT_DATA lets only
- * some of them be made writable. Those stay writable and counted, the
- * writer's split drops to them, and the record goes to disk. Once the limit
- * is lifted, the writer stays pinned, but member 0 can still grow into the
- * clusters that are free.
+ * Copy everything in fd to stderr, and return how many times needle
+ * appears in it
  */
-static void
-child_data_rlimit_sparse(void *arg)
+static uint64_t
+replay_and_count(int fd, const char *needle)
 {
-	(void) arg;
-	const size_t cluster = cluster_size();
-	const uint64_t rpc = recs_per_cluster(4096);
-	size_t sizes[] = { 4096, 4096 };
-	uint8_t buf[4096];
-	allocator_t **a = allocator_group_init(sizes, 2, 0, 8 * cluster,
-	    selftest_scratch_dir());
-	allocator_group_t *g = a[0]->a_group;
-	struct rlimit saved, data;
+	struct stat st;
+	uint64_t count = 0;
 
-	for (uint64_t i = 0; i < 2 * rpc; i++) {
-		selftest_fill(buf, sizeof (buf), i + 1);
-		VERIFY3U(allocator_append(a[0], buf), ==, i);
-	}
-	VERIFY0(getrlimit(RLIMIT_DATA, &saved));
-	data = saved;
-	data.rlim_cur = vm_data_bytes() + 3 * cluster + cluster / 2;
-	VERIFY0(setrlimit(RLIMIT_DATA, &data));
-
-	selftest_fill(buf, sizeof (buf), 1000);
-	allocator_store(a[1], 5 * rpc, buf);
-	uint64_t writable = a[1]->a_cluster_count;
-	VERIFY3U(writable, >, 0);
-	VERIFY3U(writable, <, 6);
-	VERIFY3U(a[1]->a_first_disk_cluster, ==, writable);
-	VERIFY3U(g->ag_clusters_current, ==, 2 + writable);
-	VERIFY3U(a[0]->a_cluster_count, ==, 2);
-	VERIFY3U(a[0]->a_first_disk_cluster, ==, 8);
-	audit_cluster_table(g);
-
-	VERIFY0(setrlimit(RLIMIT_DATA, &saved));
-	selftest_fill(buf, sizeof (buf), 1001);
-	allocator_store(a[1], writable * rpc, buf);
-	VERIFY3U(a[1]->a_cluster_count, ==, writable);
-	for (uint64_t i = 2 * rpc; i < 3 * rpc; i++) {
-		selftest_fill(buf, sizeof (buf), i + 1);
-		VERIFY3U(allocator_append(a[0], buf), ==, i);
-	}
-	VERIFY3U(a[0]->a_cluster_count, ==, 3);
-	VERIFY3U(g->ag_clusters_current, ==, 3 + writable);
-	selftest_audit_group(a[0]);
-
-	for (uint64_t i = 0; i < 3 * rpc; i++)
-		check_record(a[0], i, i + 1);
-	check_record(a[1], 0, 0);
-	check_record(a[1], writable * rpc - 1, 0);
-	check_record(a[1], writable * rpc, 1001);
-	check_record(a[1], writable * rpc + 1, 0);
-	check_record(a[1], 5 * rpc, 1000);
-	allocator_group_fini(a[1]);
+	VERIFY0(fstat(fd, &st));
+	char *text = safe_malloc(st.st_size + 1);
+	safe_pread_zero(fd, text, st.st_size, 0);
+	text[st.st_size] = '\0';
+	(void) fputs(text, stderr);
+	for (char *p = strstr(text, needle); p != NULL;
+	    p = strstr(p + 1, needle))
+		count++;
+	free(text);
+	return (count);
 }
 
 /*
- * A sparse store needs four clusters when the group has two free, so it
- * poaches two from member 0, and then RLIMIT_DATA refuses to make a fresh
- * one writable. The poached clusters stay with member 1, its split drops
- * just above them, and the record goes to disk; member 0's eviction is not
- * undone. (The shadow model's rule that a pinned writer gains nothing
- * covers only pins caused by the budget.) Once the limit is lifted, member
- * 2 takes the free clusters and then poaches one more.
+ * Under RLIMIT_DATA, no fresh cluster can be made writable, so every
+ * store that needs a cluster goes the way a store into a full group does.
+ * Member 1's sparse stores take member 0's three clusters from the top,
+ * then member 1's own highest ones, and then, with nothing above the
+ * record, pin member 1's split. Every record must survive, wherever it
+ * ended up. Each of member 1's stores tries mprotect() and fails, but the
+ * group warns only the first time. Once the limit is lifted, member 2
+ * takes the free clusters and then one of member 1's.
  */
+typedef struct {
+	uint64_t	rs_cluster;	/* Member 1 stores here */
+	uint64_t	rs_fdc0;	/* Then member 0's split is this */
+	uint64_t	rs_fdc1;	/* And member 1's is this */
+	uint64_t	rs_held1;	/* And member 1 holds this many */
+} rlimit_step_t;
+
 static void
 child_data_rlimit_poach(void *arg)
 {
 	(void) arg;
 	const size_t cluster = cluster_size();
 	const uint64_t rpc = recs_per_cluster(4096);
+	const rlimit_step_t steps[] = {
+		{ 4, 2, 8, 1 },		/* Member 0 gives up 2 */
+		{ 1, 1, 8, 2 },		/* ... then 1 */
+		{ 6, 0, 8, 3 },		/* ... then 0 */
+		{ 2, 0, 6, 3 },		/* Member 1 gives up its own 6 */
+		{ 5, 0, 5, 3 },		/* Nothing above 5: pinned */
+		{ 0, 0, 4, 3 },		/* Member 1 gives up its own 4 */
+	};
 	size_t sizes[] = { 4096, 4096, 4096 };
 	uint8_t buf[4096];
 	allocator_t **a = allocator_group_init(sizes, 3, 0, 8 * cluster,
 	    selftest_scratch_dir());
 	allocator_group_t *g = a[0]->a_group;
 	struct rlimit saved, data;
+	int log = safe_create_temp_file(selftest_scratch_dir());
+	int saved_stderr = dup(STDERR_FILENO);
 
-	for (uint64_t i = 0; i < 6 * rpc; i++) {
+	VERIFY3S(saved_stderr, >=, 0);
+	for (uint64_t i = 0; i < 3 * rpc; i++) {
 		selftest_fill(buf, sizeof (buf), i + 1);
 		VERIFY3U(allocator_append(a[0], buf), ==, i);
 	}
+	VERIFY(!g->ag_enomem_warned);
+	VERIFY3S(dup2(log, STDERR_FILENO), ==, STDERR_FILENO);
 	VERIFY0(getrlimit(RLIMIT_DATA, &saved));
 	data = saved;
 	data.rlim_cur = vm_data_bytes() + cluster / 2;
 	VERIFY0(setrlimit(RLIMIT_DATA, &data));
 
-	selftest_fill(buf, sizeof (buf), 1000);
-	allocator_store(a[1], 3 * rpc, buf);
-	VERIFY3U(a[0]->a_cluster_count, ==, 4);
-	VERIFY3U(a[0]->a_first_disk_cluster, ==, 4);
-	VERIFY3U(a[1]->a_cluster_count, ==, 2);
-	VERIFY3U(a[1]->a_first_disk_cluster, ==, 2);
-	VERIFY3U(g->ag_clusters_current, ==, 6);
-	selftest_audit_group(a[0]);
+	for (int i = 0; i < ARRAY_SIZE(steps); i++) {
+		const rlimit_step_t *st = &steps[i];
+		selftest_fill(buf, sizeof (buf), 1000 + st->rs_cluster);
+		allocator_store(a[1], st->rs_cluster * rpc + 7, buf);
+		VERIFY3U(a[0]->a_first_disk_cluster, ==, st->rs_fdc0);
+		VERIFY3U(clusters_owned(a[0]), ==, st->rs_fdc0);
+		VERIFY3U(a[1]->a_first_disk_cluster, ==, st->rs_fdc1);
+		VERIFY3U(clusters_owned(a[1]), ==, st->rs_held1);
+		VERIFY3U(g->ag_clusters_current, ==, 3);
+		selftest_audit_group(a[0]);
+	}
 
 	VERIFY0(setrlimit(RLIMIT_DATA, &saved));
-	for (uint64_t i = 0; i < 3 * rpc; i++) {
+	VERIFY3S(dup2(saved_stderr, STDERR_FILENO), ==, STDERR_FILENO);
+	VERIFY0(close(saved_stderr));
+	uint64_t warnings = replay_and_count(log, "out of memory: spilling to");
+	VERIFY0(close(log));
+	if (warnings != 1) {
+		errx(1, "%llu out-of-memory warnings for %d failed mprotect() "
+		    "calls, not 1", (u_longlong_t)warnings,
+		    (int)ARRAY_SIZE(steps));
+	}
+	VERIFY(g->ag_enomem_warned);
+	for (uint64_t i = 0; i < 6 * rpc; i++) {
 		selftest_fill(buf, sizeof (buf), 2000 + i);
 		VERIFY3U(allocator_append(a[2], buf), ==, i);
 	}
-	VERIFY3U(a[0]->a_cluster_count, ==, 3);
-	VERIFY3U(a[1]->a_cluster_count, ==, 2);
-	VERIFY3U(a[2]->a_cluster_count, ==, 3);
+	VERIFY3U(clusters_owned(a[1]), ==, 2);
+	VERIFY3U(a[1]->a_first_disk_cluster, ==, 2);
+	VERIFY3U(clusters_owned(a[2]), ==, 6);
 	VERIFY3U(g->ag_clusters_current, ==, 8);
 	selftest_audit_group(a[0]);
 
-	for (uint64_t i = 0; i < 6 * rpc; i++)
-		check_record(a[0], i, i + 1);
-	/* The poached clusters read as zeros */
-	check_record(a[1], 0, 0);
-	check_record(a[1], 2 * rpc - 1, 0);
-	check_record(a[1], 2 * rpc, 0);
-	check_record(a[1], 3 * rpc, 1000);
 	for (uint64_t i = 0; i < 3 * rpc; i++)
+		check_record(a[0], i, i + 1);
+	for (int i = 0; i < ARRAY_SIZE(steps); i++) {
+		uint64_t ix = steps[i].rs_cluster * rpc + 7;
+		check_record(a[1], ix - 1, 0);
+		check_record(a[1], ix, 1000 + steps[i].rs_cluster);
+		check_record(a[1], ix + 1, 0);
+	}
+	for (uint64_t i = 0; i < 6 * rpc; i++)
 		check_record(a[2], i, 2000 + i);
 	allocator_group_fini(a[2]);
 }
@@ -2216,7 +2325,7 @@ alloc_resource_limits(void)
 	    &wf, "pwrite() failed");
 	wf.wf_evict = B_TRUE;
 	selftest_expect_exit("eviction write failure", child_write_failure,
-	    &wf, "pwritev() failed");
+	    &wf, "pwrite() failed");
 #if defined(__linux__)
 	char expect[PATH_MAX + 32];
 	(void) snprintf(expect, sizeof (expect), "out of space in %s,",
@@ -2232,10 +2341,7 @@ alloc_resource_limits(void)
 	boolean_t disk = B_TRUE;
 	selftest_expect_success("ENOMEM spill", child_data_rlimit, &disk,
 	    "out of memory: spilling to");
-	selftest_expect_success("ENOMEM sparse spill",
-	    child_data_rlimit_sparse, NULL,
-	    "out of memory: spilling to");
-	selftest_expect_success("ENOMEM after poaching",
+	selftest_expect_success("ENOMEM reassignment",
 	    child_data_rlimit_poach, NULL, "out of memory: spilling to");
 	disk = B_FALSE;
 	selftest_expect_exit("ENOMEM, memory-only", child_data_rlimit, &disk,
@@ -2310,6 +2416,8 @@ alloc_fatal(void)
 	n = 2;
 	selftest_expect_exit("memory-only eviction",
 	    child_memory_only_overflow, &n, "memory limit exceeded");
+	selftest_expect_exit("memory-only self-eviction",
+	    child_memory_only_self, NULL, "memory limit exceeded");
 }
 
 const test_case_t selftest_alloc_cases[] = {
@@ -2318,13 +2426,13 @@ const test_case_t selftest_alloc_cases[] = {
 	{ "alloc_basic",		alloc_basic },
 	{ "alloc_record_sizes",		alloc_record_sizes },
 	{ "alloc_reassignment",		alloc_reassignment },
-	{ "alloc_eviction_batches",	alloc_eviction_batches },
+	{ "alloc_sparse",		alloc_sparse },
 	{ "alloc_priority",		alloc_priority },
 	{ "alloc_boundaries",		alloc_boundaries },
 	{ "alloc_lifecycle",		alloc_lifecycle },
 	{ "alloc_rss_bounded",		alloc_rss_bounded },
 	{ "alloc_stress",		alloc_stress },
-	{ "alloc_pwritev",		alloc_pwritev },
+	{ "alloc_pwrite",		alloc_pwrite },
 	{ "alloc_resource_limits",	alloc_resource_limits },
 	{ "alloc_fatal",		alloc_fatal },
 	{ NULL,				NULL },

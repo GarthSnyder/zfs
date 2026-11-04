@@ -1638,9 +1638,9 @@ hash_memory_pressure(void)
 	 */
 	linear_hash_t *lh = ht->ht_lh;
 	allocator_t *bucket = lh->lh_alloc.bucket;
-	VERIFY0(lh->lh_alloc.data->a_cluster_count);
-	VERIFY0(lh->lh_alloc.overflow->a_cluster_count);
-	VERIFY3U(bucket->a_cluster_count, ==, g->ag_clusters_max);
+	VERIFY0(clusters_owned(lh->lh_alloc.data));
+	VERIFY0(clusters_owned(lh->lh_alloc.overflow));
+	VERIFY3U(clusters_owned(bucket), ==, g->ag_clusters_max);
 	VERIFY3U(g->ag_clusters_current, ==, g->ag_clusters_max);
 	VERIFY3U(lh->lh_occupancy.top_buckets, >,
 	    bucket->a_first_disk_cluster * bucket->a_records_per_cluster);
@@ -1675,12 +1675,12 @@ hash_pressure_priority(void)
 	VERIFY3U(g->ag_clusters_current, ==, g->ag_clusters_max);
 	VERIFY3U(lh->lh_alloc.data->a_first_disk_cluster, <,
 	    g->ag_clusters_max);
-	VERIFY3U(lh->lh_alloc.data->a_cluster_count, >, 0);
+	VERIFY3U(clusters_owned(lh->lh_alloc.data), >, 0);
 	VERIFY3U(lh->lh_alloc.overflow->a_first_disk_cluster, ==,
 	    g->ag_clusters_max);
 	VERIFY3U(lh->lh_alloc.bucket->a_first_disk_cluster, ==,
 	    g->ag_clusters_max);
-	VERIFY3U(lh->lh_alloc.bucket->a_cluster_count, >, 0);
+	VERIFY3U(clusters_owned(lh->lh_alloc.bucket), >, 0);
 
 	ht_rewrite_random(ht, 10000);
 	ht_verify_all(ht);

@@ -96,6 +96,7 @@ typedef struct {
 	unsigned int	ag_num_allocators;	/* # of allocators in group */
 	allocator_t	**ag_allocators;	/* Pointers to allocator_t's */
 	uint8_t		*ag_base_addr;		/* Start of address space */
+	boolean_t	ag_enomem_warned;	/* Suppress subsequent warns */
 } allocator_group_t;
 
 /*

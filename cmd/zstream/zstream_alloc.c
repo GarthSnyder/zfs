@@ -28,7 +28,6 @@
 #include <sys/stdtypes.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
-#include <sys/uio.h>
 
 #include "zstream_alloc.h"
 #include "zstream_alloc_impl.h"
@@ -155,6 +154,9 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 		.ag_base_addr = base_address
 	};
 
+	/* heap_init() needs 0 < initial size <= limit (0 = none) */
+	uint64_t heap_size = MAX(1, MIN(INITIAL_HEAP_SIZE,
+	    group->ag_clusters_max));
 	for (int i = 0; i < num_allocators; i++) {
 		uint8_t **cluster_pointers = NULL;
 		if (group->ag_clusters_max > 0)
@@ -168,7 +170,7 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 			.a_records_per_cluster = cluster_size / record_sizes[i],
 			.a_first_disk_cluster = group->ag_clusters_max,
 			.a_clusters = cluster_pointers,
-			.a_cluster_heap = heap_init(HEAP_MAX, INITIAL_HEAP_SIZE,
+			.a_cluster_heap = heap_init(HEAP_MAX, heap_size,
 			    group->ag_clusters_max),
 			.a_group = group
 		};
@@ -212,7 +214,7 @@ allocator_retrieve(allocator_t *alloc, record_ix_t record, void *buff)
 	VERIFY(alloc != NULL && buff != NULL);
 	record_location_t loc = locate_record(alloc, record);
 
-	if (loc.on_disk && alloc->a_fd < 0) {
+	if (loc.on_disk) {
 		if (alloc->a_fd >= 0)
 			safe_pread_zero(alloc->a_fd, buff,
 			    alloc->a_record_size, loc.offset);
@@ -252,7 +254,7 @@ allocator_skip(allocator_t *alloc)
 static uint8_t *
 evict_last_cluster(allocator_t *alloc)
 {
-	VERIFY(alloc != NULL && clusters_owned(alloc) > 0);
+	VERIFY(alloc != NULL);
 	VERIFY(alloc->a_fd >= 0);
 
 	uint64_t last_cluster;
@@ -323,8 +325,11 @@ allocate_cluster(allocator_t *alloc, uint64_t cluster)
 	int rc = mprotect(buff, group->ag_cluster_size,
 	    PROT_READ | PROT_WRITE);
 	if (rc != 0 && errno == ENOMEM && alloc->a_fd >= 0) {
-		warnx("out of memory: spilling to %s...",
-		    (group->ag_dir != NULL) ? group->ag_dir : "disk");
+		if (!group->ag_enomem_warned) {
+			warnx("out of memory: spilling to %s...",
+			    (group->ag_dir != NULL) ? group->ag_dir : "disk");
+			group->ag_enomem_warned = B_TRUE;
+		}
 		return (B_FALSE);
 	} else if (rc != 0) {
 		err(1, "mprotect() failed");

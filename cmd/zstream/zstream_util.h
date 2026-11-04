@@ -31,7 +31,6 @@ extern "C" {
 #include <sys/stdtypes.h>
 #include <sys/spa_checksum.h>
 #include <sys/types.h>
-#include <sys/uio.h>
 #include <sys/zfs_ioctl.h>
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
@@ -92,10 +91,10 @@ safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
     const char *where);
 
 /*
- * safe_pwritev() makes its system calls through this pointer, which is
- * pwritev() except while a selftest substitutes short or failed writes.
+ * safe_pwrite() makes its system calls through this pointer, which is
+ * pwrite() except while a selftest substitutes short or failed writes.
  */
-extern ssize_t (*safe_pwritev_call)(int, const struct iovec *, int, off_t);
+extern ssize_t (*safe_pwrite_call)(int, const void *, size_t, off_t);
 
 /*
  * Like a safe version of pread(), except that reading past end-of-file is
