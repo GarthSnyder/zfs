@@ -63,6 +63,7 @@ typedef struct {
 } selftest_module_t;
 
 static const selftest_module_t modules[] = {
+	{ "heap",	selftest_heap_cases },
 	{ "queue",	selftest_queue_cases },
 };
 

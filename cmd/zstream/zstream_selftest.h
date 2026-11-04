@@ -46,6 +46,7 @@ typedef struct {
 /*
  * Modules with test cases to offer. Each array ends with a NULL tc_name.
  */
+extern const test_case_t selftest_heap_cases[];
 extern const test_case_t selftest_queue_cases[];
 extern const test_case_t selftest_alloc_cases[];
 extern const test_case_t selftest_hash_cases[];
