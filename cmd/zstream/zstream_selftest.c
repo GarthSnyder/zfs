@@ -66,6 +66,7 @@ static const selftest_module_t modules[] = {
 	{ "queue",	selftest_queue_cases },
 	{ "heap",	selftest_heap_cases },
 	{ "alloc",	selftest_alloc_cases },
+	{ "hash",	selftest_hash_cases },
 };
 
 uint64_t selftest_seed;
