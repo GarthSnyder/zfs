@@ -70,9 +70,6 @@
 
 #define	TRANSFORM_MAGIC	0xf00dfeedbeefcafeULL
 
-extern boolean_t zq_test_suppress_dispatch;
-void zstream_queue_test_state(uint64_t *, int *, int *);
-
 /* process() calls in progress, and the most seen at once */
 static uint32_t in_flight;
 static uint32_t peak_in_flight;

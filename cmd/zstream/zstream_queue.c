@@ -232,11 +232,17 @@ sleep_nsec(uint64_t nsec)
 static void
 thread_pool_init(void)
 {
+	pthread_condattr_t attr;
+
 	pthread_mutex_init(&pool.tp_pool_mutex, NULL);
 	pthread_cond_init(&pool.tp_wake_worker, NULL);
 
+	/* Wall-clock steps must not stall the backup timer */
+	VERIFY0(pthread_condattr_init(&attr));
+	VERIFY0(pthread_condattr_setclock(&attr, CLOCK_MONOTONIC));
 	pthread_mutex_init(&pool.tp_dispatch_mutex, NULL);
-	pthread_cond_init(&pool.tp_request_dispatch, NULL);
+	VERIFY0(pthread_cond_init(&pool.tp_request_dispatch, &attr));
+	VERIFY0(pthread_condattr_destroy(&attr));
 
 	safe_create_thread(dispatch_worker, NULL, "dispatch", B_TRUE);
 }
@@ -666,17 +672,15 @@ maybe_wake_worker(void)
 	}
 }
 
+/* tp_request_dispatch uses CLOCK_MONOTONIC; see thread_pool_init() */
 static inline struct timespec
 timeout_deadline(void)
 {
-	struct timespec expire;
-	struct timeval tv;
-
-	if (gettimeofday(&tv, NULL) != 0)
-		err(1, "couldn't gettimeofday()");
-	uint64_t nsec = tv.tv_usec * 1000 + DISPATCH_BACKUP_NSEC;
-	expire.tv_sec = tv.tv_sec + nsec / NANOSEC;
-	expire.tv_nsec = nsec % NANOSEC;
+	uint64_t nsec = time_now_ns() + DISPATCH_BACKUP_NSEC;
+	struct timespec expire = {
+		.tv_sec = nsec / NANOSEC,
+		.tv_nsec = nsec % NANOSEC
+	};
 	return (expire);
 }
 

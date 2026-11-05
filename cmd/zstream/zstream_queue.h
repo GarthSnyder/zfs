@@ -138,6 +138,13 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item);
 void
 zstream_queue_fini(zstream_queue_t *queue);
 
+/* Selftest hooks */
+extern boolean_t zq_test_suppress_dispatch;
+
+void
+zstream_queue_test_state(uint64_t *unclaimed, int *num_queues,
+    int *num_threads);
+
 #ifdef	__cplusplus
 }
 #endif
