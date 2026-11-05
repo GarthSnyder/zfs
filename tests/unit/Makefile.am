@@ -25,7 +25,8 @@ UNIT_TESTS = \
 	%D%/test_backtrace \
 	%D%/test_timer \
 	%D%/test_zfs_file \
-	%D%/test_indirect_mapping
+	%D%/test_indirect_mapping \
+	%D%/test_zstream
 noinst_PROGRAMS = $(UNIT_TESTS)
 
 
@@ -181,6 +182,35 @@ nodist_%C%_test_indirect_mapping_SOURCES = \
 %C%_test_indirect_mapping_LDADD = \
 	libspl.la \
 	libunit.la
+
+
+# Runs the cases that "zstream selftest" runs; see test_zstream.c
+%C%_test_zstream_CFLAGS = $(AM_CFLAGS)
+%C%_test_zstream_CPPFLAGS = $(AM_CPPFLAGS) $(LIBZPOOL_CPPFLAGS) \
+	-I$(top_srcdir)/cmd/zstream
+
+nodist_%C%_test_zstream_SOURCES = \
+	cmd/zstream/zstream_alloc.c \
+	cmd/zstream/zstream_hash.c \
+	cmd/zstream/zstream_heap.c \
+	cmd/zstream/zstream_queue.c
+
+%C%_test_zstream_SOURCES = \
+	cmd/zstream/zstream_backtrace.c \
+	cmd/zstream/zstream_safe.c \
+	cmd/zstream/zstream_selftest.c \
+	cmd/zstream/zstream_selftest_alloc.c \
+	cmd/zstream/zstream_selftest_hash.c \
+	cmd/zstream/zstream_selftest_heap.c \
+	cmd/zstream/zstream_selftest_queue.c \
+	module/zcommon/cityhash.c \
+	%D%/test_zstream.c
+
+# -lm supplies sqrt() for MONITOR_QUEUES
+%C%_test_zstream_LDADD = \
+	libspl.la \
+	libunit.la \
+	-lm
 
 
 # test run and coverage targets below
