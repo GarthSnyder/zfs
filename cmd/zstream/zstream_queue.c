@@ -209,6 +209,7 @@ static void print_batch_size_histogram(zstream_queue_t *);
 #endif
 
 static thread_pool_t	pool = {0};
+boolean_t zq_test_suppress_dispatch;	/* Selftests only */
 static pthread_once_t	once_control = PTHREAD_ONCE_INIT;
 
 /*
@@ -754,6 +755,8 @@ zstream_enqueue(zstream_queue_t *queue, queue_item_t *item)
 #endif
 
 	pthread_mutex_unlock(&queue->zq_mutex);
+	if (zq_test_suppress_dispatch)
+		return;
 
 	pthread_mutex_lock(&pool.tp_dispatch_mutex);
 	pool.tp_dispatch_requested = B_TRUE;
@@ -850,6 +853,17 @@ zstream_dequeue(zstream_queue_t *queue, queue_item_t *item)
 		pthread_mutex_unlock(&queue->zq_mutex);
 		return (B_TRUE);
 	}
+}
+
+void
+zstream_queue_test_state(uint64_t *unclaimed, int *num_queues,
+    int *num_threads)
+{
+	pthread_mutex_lock(&pool.tp_pool_mutex);
+	*unclaimed = atomic_load_64(&pool.tp_unclaimed);
+	*num_queues = pool.tp_num_queues;
+	*num_threads = pool.tp_num_threads;
+	pthread_mutex_unlock(&pool.tp_pool_mutex);
 }
 
 #ifdef SHOW_BATCH_HISTOGRAMS
