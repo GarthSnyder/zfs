@@ -119,6 +119,10 @@ allocator_group_init(const size_t *record_sizes, unsigned num_allocators,
 	long pagesize = sysconf(_SC_PAGESIZE);
 	if (pagesize <= 0)
 		errx(1, "unable to get system page size");
+	/* Headroom so that roundup() and the memory check can't overflow */
+	if (cluster_size > SIZE_MAX / 4 / num_allocators)
+		errx(1, "requested allocator cluster size %llu is too large",
+		    (u_longlong_t)cluster_size);
 	if (cluster_size == 0)
 		cluster_size = MAX(DEFAULT_CLUSTER_SIZE, pagesize);
 	else
