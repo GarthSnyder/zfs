@@ -70,6 +70,13 @@
 
 #define	TRANSFORM_MAGIC	0xf00dfeedbeefcafeULL
 
+extern boolean_t zq_test_suppress_dispatch;
+void zstream_queue_test_state(uint64_t *, int *, int *);
+
+/* process() calls in progress, and the most seen at once */
+static uint32_t in_flight;
+static uint32_t peak_in_flight;
+
 /*
  * Number of times per 1000 processing function invocations to use an
  * extra-long "outlier" processing delay to force overtly out-of-order
@@ -161,6 +168,11 @@ qtest_process(void *item_in, void *context)
 
 	/* Cost-0 items should never reach the process function */
 	VERIFY3U(item->qi_cost, >, 0);
+	VERIFY0((uintptr_t)item_in % sizeof (uint64_t));
+	uint32_t now = atomic_inc_32_nv(&in_flight);
+	for (uint32_t peak = peak_in_flight; now > peak;
+	    peak = peak_in_flight)
+		(void) atomic_cas_32(&peak_in_flight, peak, now);
 	VERIFY3U(item->qi_check, ==,
 	    item_check_value(item->qi_producer, item->qi_seq));
 	verify_pattern(item->qi_pattern, run->qr_cfg->qc_pattern_len,
@@ -172,6 +184,7 @@ qtest_process(void *item_in, void *context)
 
 	item->qi_check ^= TRANSFORM_MAGIC;
 	atomic_add_64(&run->qr_processed, 1);
+	atomic_dec_32(&in_flight);
 }
 
 /*
@@ -356,6 +369,23 @@ run_queue_workloads(const qtest_config_t *cfgs, int ncfg)
 
 	for (int i = 0; i < ncfg; i++)
 		VERIFY3U(runs[i].qr_processed, ==, runs[i].qr_expect_processed);
+
+	/* Every queue is gone, and so is all record of its items */
+	uint64_t unclaimed;
+	int nqueues, nthreads;
+	zstream_queue_test_state(&unclaimed, &nqueues, &nthreads);
+	VERIFY0(unclaimed);
+	VERIFY0(nqueues);
+	VERIFY3U(peak_in_flight, <=, nthreads);
+}
+
+static uint32_t
+num_threads(void)
+{
+	uint64_t unclaimed;
+	int nqueues, nthreads;
+	zstream_queue_test_state(&unclaimed, &nqueues, &nthreads);
+	return (nthreads);
 }
 
 static void
@@ -540,7 +570,11 @@ queue_batch_tuning(void)
 			.qc_rng_stream = 630,
 		}
 	};
+	peak_in_flight = 0;
 	run_queue_workloads(cfgs, sizeof (cfgs) / sizeof (cfgs[0]));
+	/* 400 items of 600us each can't all have run one at a time */
+	if (num_threads() > 1)
+		VERIFY3U(peak_in_flight, >=, 2);
 }
 
 /*
@@ -573,8 +607,8 @@ queue_multi_producer(void)
 static void
 queue_multi_queue(void)
 {
-	qtest_config_t cfgs[12];
-	for (int i = 0; i < 12; i++) {
+	qtest_config_t cfgs[ZQ_MAX_QUEUES];
+	for (int i = 0; i < ZQ_MAX_QUEUES; i++) {
 		uint32_t producers = 1 + i % 3;
 		qtest_config_t cfg = {
 			.qc_producers = producers,
@@ -588,7 +622,30 @@ queue_multi_queue(void)
 		};
 		cfgs[i] = cfg;
 	}
-	run_queue_workloads(cfgs, 12);
+	run_queue_workloads(cfgs, ZQ_MAX_QUEUES);
+}
+
+/*
+ * With enqueues no longer asking for a dispatch, idle workers wake only
+ * through the dispatch thread's backup timer. Items trickle in so that the
+ * pool goes idle between them.
+ */
+static void
+queue_backup_dispatch(void)
+{
+	qtest_config_t cfg = {
+		.qc_producers = 1,
+		.qc_items = 300,
+		.qc_pattern_len = 8,
+		.qc_zero_cost_pct = 10,
+		.qc_max_cost = 8,
+		.qc_producer_stall_pct = 50,
+		.qc_stall_max_us = 2000,
+		.qc_rng_stream = 700,
+	};
+	zq_test_suppress_dispatch = B_TRUE;
+	run_queue_workload(&cfg);
+	zq_test_suppress_dispatch = B_FALSE;
 }
 
 /*
@@ -655,5 +712,6 @@ const test_case_t selftest_queue_cases[] = {
 	{ "queue_multi_producer",	queue_multi_producer },
 	{ "queue_multi_queue",		queue_multi_queue },
 	{ "queue_stress",		queue_stress },
+	{ "queue_backup_dispatch",	queue_backup_dispatch },
 	{ NULL,				NULL },
 };
