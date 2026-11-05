@@ -69,7 +69,8 @@ extern libzfs_handle_t *libzfs_handle;
 
 /*
  * The safe_ versions of the functions below terminate the process if the
- * operation doesn't succeed instead of returning an error.
+ * operation doesn't succeed instead of returning an error. They live in
+ * zstream_safe.c, which unit tests can link without libzfs or libzpool.
  */
 void *
 safe_malloc(size_t size);
