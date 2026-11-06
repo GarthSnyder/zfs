@@ -68,16 +68,16 @@
  *      +----------------------------+ <- power-of-2 boundary
  *
  * When occupancy exceeds a given limit, the contents of the bucket pointed
- * to by the split pointer are rehashed using the longer key length. Since
- * there's only one bit's difference between the two masks, there are only
- * two possible destinations for rehashed entries: the same bucket they're
+ * to by the split pointer are rehashed using the longer mask. Since there's
+ * only one bit's difference between the two masks, there are only two
+ * possible destinations for rehashed entries: the same bucket they're
  * already in, or one that's 2^n slots later, at the very end of the table.
  * On average, half the entries are relocated. The split pointer is then
  * incremented.
  *
- * Eventually, all short-key buckets have been rehashed with the longer
- * mask. At that point, what was previously the long key becomes the short
- * key and a new one-bit-longer mask is introduced. The split pointer is
+ * Eventually, all short-mask buckets have been rehashed with the longer
+ * mask. At that point, what was previously the long mask becomes the short
+ * mask and a new one-bit-longer mask is introduced. The split pointer is
  * reset to the beginning of the hash table.
  *
  * This scheme grows the table linearly and incrementally. It's useful for
@@ -86,14 +86,14 @@
  * to keep in memory, the tail can spill over to disk storage without
  * abandoning or reshuffling the existing in-memory entries.
  *
- * This implementation uses open hashing (overflow buckets). Records can
- * be updated (overwritten) but not deleted.
+ * This implementation uses open hashing (overflow buckets). Records can be
+ * updated (overwritten) but not deleted.
  *
  * Each hash table has three allocator_t's underneath it: one for the data
  * being stored, one for top-level buckets, and one for overflow buckets.
  *
- * Struct definitions are in zstream_hash_impl.h to make them available
- * to selftests.
+ * Struct definitions are in zstream_hash_impl.h to make them available to
+ * selftests.
  */
 
 #define	INITIAL_HASH_SUFFIX_LENGTH	10

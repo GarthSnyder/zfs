@@ -72,8 +72,9 @@ typedef struct {
 
 /*
  * These allocators are listed in inverse memory priority order. The data
- * allocator is first to be asked to yield memory, and so on. (The actual
- * memory management is handled by the allocator group.)
+ * allocator is first to be asked to yield memory, and so on. The actual
+ * priority ordering is determined by the order in which record sizes are
+ * passed to lh_init().
  */
 typedef struct {
 	allocator_t	*data;		/* Data records */

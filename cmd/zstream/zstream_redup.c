@@ -190,7 +190,7 @@ default_hash_memory(void)
 	long pagesize = sysconf(_SC_PAGESIZE);
 	if (pages > 0 && pagesize > 0) {
 		uint64_t physbytes = (uint64_t)pages * (uint64_t)pagesize;
-		return MAX(physbytes * HASH_PHYSMEM_PERCENT / 100, minimum);
+		return (MAX(physbytes * HASH_PHYSMEM_PERCENT / 100, minimum));
 	} else {
 		nicebuff_t b = nicenums(1, minimum);
 		warnx("unable to read system memory size, using %s hash table",

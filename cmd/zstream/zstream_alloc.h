@@ -37,11 +37,11 @@ extern "C" {
  * arbitrarily when memory has been exhausted. With sufficient disk space,
  * it's possible to process streams of arbitrary size.
  *
- *   - Blocks are of uniform fixed size (sizes may vary per allocator).
- *   - Every block lives at a 64-bit record_ix_t address.
+ *   - Records are of uniform fixed size (sizes may vary per allocator).
+ *   - Every recprd lives at a 64-bit record_ix_t address.
  *   - Record indexes are in ordinal units, not bytes.
  *   - Allocators are not thread-safe.
- *   - You may read a block at any valid index, even if never written.
+ *   - You may read a record at any valid index, even if never written.
  *   - Uninitialized records read as zeros.
  *
  * Internal bookkeeping uses signed 64-bit arithmetic, so the largest

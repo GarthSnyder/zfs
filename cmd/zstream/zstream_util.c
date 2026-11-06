@@ -54,11 +54,6 @@
 libzfs_handle_t		*libzfs_handle = NULL;
 static linear_hash_t	*record_specifiers = NULL;
 
-/*
- * Hook for selftests to override pwrite()
- */
-ssize_t (*safe_pwrite_call)(int, const void *, size_t, off_t) = pwrite;
-
 void *
 safe_malloc(size_t size)
 {
@@ -95,7 +90,7 @@ safe_pwrite(int fd, const void *buf, size_t count, off_t offset,
 	size_t done = 0;
 
 	while (done < count) {
-		ssize_t n = safe_pwrite_call(fd, (const uint8_t *)buf + done,
+		ssize_t n = pwrite(fd, (const uint8_t *)buf + done,
 		    count - done, offset + done);
 		if (n < 0) {
 			if (errno == EINTR)

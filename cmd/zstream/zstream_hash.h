@@ -71,8 +71,8 @@ typedef struct {
  * length). Multiple records cannot be stored under the same key, but
  * existing records can be updated.
  *
- * The record_size must be no more than 8K, and the key prefix can be no
- * longer than MAX_KEY_SIZE (32) bytes.
+ * The record_size must be no more than MAX_RECORD_SIZE (8K), and the key
+ * size must be between 1 and MAX_KEY_SIZE (32) bytes.
  *
  * At least one of max_memory and spill_dir must be nonzero/non-NULL.
  *

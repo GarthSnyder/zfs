@@ -79,11 +79,11 @@ extern "C" {
  * memory.
  *
  * To keep a_first_disk_cluster as high as possible, allocators will poach
- * from their own supply of page clusters. For example, if a write request
- * for unallocated cluster 100 is received, but the allocator's
- * highest-numbered page cluster is 200, cluster 200 will be written to
- * disk, zeroed, and then reassigned to alloc->a_clusters[100].
- * a_first_disk_cluster then becomes 200.
+ * from their own supply of page clusters if they cannot poach from a
+ * lower-priority allocator. For example, if a write request for unallocated
+ * cluster 100 is received but the allocator's highest-numbered page cluster
+ * is 200, cluster 200 will be written to disk, zeroed, and then reassigned
+ * to alloc->a_clusters[100]. a_first_disk_cluster then becomes 200.
  *
  * Once allocated, memory is never freed until the allocator group is
  * dissolved. All page clusters remain in active use.
