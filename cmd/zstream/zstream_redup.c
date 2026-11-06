@@ -184,13 +184,20 @@ serial_redup_writes(redup_context_t *context)
 static size_t
 default_hash_memory(void)
 {
-#ifdef _ILP32
-	return ((size_t)SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20);
-#else
-	uint64_t physbytes = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
-	return (MAX((physbytes * HASH_PHYSMEM_PERCENT) / 100,
-	    SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20));
+	size_t minimum = SMALLEST_POSSIBLE_HASH_MEMORY_MB << 20;
+#ifndef _ILP32
+	long pages = sysconf(_SC_PHYS_PAGES);
+	long pagesize = sysconf(_SC_PAGESIZE);
+	if (pages > 0 && pagesize > 0) {
+		uint64_t physbytes = (uint64_t)pages * (uint64_t)pagesize;
+		return MAX(physbytes * HASH_PHYSMEM_PERCENT / 100, minimum);
+	} else {
+		nicebuff_t b = nicenums(1, minimum);
+		warnx("unable to read system memory size, using %s hash table",
+		    b.nice[0]);
+	}
 #endif
+	return (minimum);
 }
 
 static void

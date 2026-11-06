@@ -27,6 +27,7 @@
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libzfs.h>
 #include <libzutil.h>
 #include <limits.h>
@@ -520,5 +521,6 @@ safe_create_temp_file(const char *dir_path)
 		err(1, "unable to create temp file in %s", dir_path);
 	if (unlink(buff) < 0)
 		err(1, "unlink of %s failed", buff);
+	(void) fcntl(fd, F_SETFD, FD_CLOEXEC);
 	return (fd);
 }
